@@ -1,6 +1,6 @@
 [package]
 name = "wincent"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["Hellager"]
 edition = "2021"
 repository = "https://github.com/Hellager/wincent-rs"
@@ -17,3 +17,4 @@ A library for handling windows quick access
 env_logger = "0.11.5"
 log = "0.4.22"
 powershell_script = "1.1.0"
+winreg = "0.52.0"

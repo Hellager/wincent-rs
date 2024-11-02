@@ -1,5 +1,11 @@
 use powershell_script::PsError;
 
+pub enum QuickAccess {
+    FrequentFolders,
+    RecentFiles,
+    All
+}
+
 #[derive(Debug)]
 pub enum WincentError {
     ScriptError(PsError),
@@ -148,6 +154,40 @@ pub fn is_in_quick_access(path: &str) -> Result<bool, WincentError> {
     Ok(false)
 }
 
+fn get_quick_access_reg() -> Result<winreg::RegKey, std::io::Error> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_CURRENT_USER);
+    let cur_ver = hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")?;
+
+    Ok(cur_ver)
+}
+
+pub fn is_visialbe(target: QuickAccess) -> Result<bool, std::io::Error> {
+    let reg_key = get_quick_access_reg()?;
+    let reg_value: &str;
+    match target {
+        QuickAccess::FrequentFolders => reg_value = "ShowFrequent",
+        QuickAccess::RecentFiles => reg_value = "ShowRecent",
+        QuickAccess::All => reg_value = "ShowRecent",
+    }
+    let is_visiable: u32 = reg_key.get_value(reg_value)?;
+    Ok(is_visiable != 0)
+}
+
+pub fn set_visiable(target: QuickAccess, visiable: bool) -> Result<(), std::io::Error> {
+    let reg_key = get_quick_access_reg()?;
+    let reg_value: &str;
+    match target {
+        QuickAccess::FrequentFolders => reg_value = "ShowFrequent",
+        QuickAccess::RecentFiles => reg_value = "ShowRecent",
+        QuickAccess::All => reg_value = "ShowRecent",
+    }
+    reg_key.set_value(reg_value, &u32::from(visiable))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +228,16 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_visiable() {
+        init_logger();
+
+        let iff = is_visialbe(QuickAccess::FrequentFolders).unwrap();
+        let irf = is_visialbe(QuickAccess::RecentFiles).unwrap();
+
+        assert_eq!(iff, true);
+        assert_eq!(irf, true);
     }
 }
