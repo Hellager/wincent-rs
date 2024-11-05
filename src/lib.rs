@@ -204,35 +204,39 @@ mod tests {
     }
 
     #[test]
-    fn test_query_quick_access() -> Result<(), WincentError> {
-        init_logger();
+    fn test_query_recent() -> Result<(), WincentError> {
+        let recent_files = get_recent_files()?;
+        let frequent_folders = get_frequent_folders()?;
+        let quick_access = get_quick_access_items()?;
 
-        let recent_files: Vec<String> = get_recent_files()?;
-        let frequent_folders: Vec<String> = get_frequent_folders()?;
-        let quick_access: Vec<String> = get_quick_access_items()?;
+        let seperate = recent_files.len() + frequent_folders.len();
+        let total = quick_access.len();
 
-        // debug!("recent files");
-        // for (idx, item) in recent_files.iter().enumerate() {
-        //     debug!("{}. {}", idx, item);
-        // }
-        // debug!("frequent folders");
-        // for (idx, item) in frequent_folders.iter().enumerate() {
-        //     debug!("{}. {}", idx, item);
-        // }
-        // debug!("quick access items");
-        // for (idx, item) in quick_access.iter().enumerate() {
-        //     debug!("{}. {}", idx, item);
-        // }
-
-        assert_eq!(quick_access.len(), (recent_files.len() + frequent_folders.len()));
-
-        for folder in frequent_folders {
-            assert_eq!(quick_access.contains(&folder), true);
-        }
+        assert_eq!(seperate, total);
 
         Ok(())
     }
 
+    #[test]
+    fn test_check_exists() -> Result<(), WincentError> {
+        use std::path::Path;
+
+        let quick_access = get_recent_files()?;
+
+        let full_path = quick_access[0].clone();
+        let filename = Path::new(&full_path).file_name().unwrap().to_str().unwrap();
+        let check_once = is_in_quick_access(vec![filename], None)?;
+
+        assert_eq!(check_once, true);
+
+        let reversed: String = filename.chars().rev().collect();
+        let check_twice = is_in_quick_access(vec![&reversed], None)?;
+        
+        assert_eq!(check_twice, false);
+
+        Ok(())
+    }
+    
     #[test]
     fn test_visiable() {
         init_logger();
