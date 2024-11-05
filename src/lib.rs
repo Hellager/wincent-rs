@@ -11,6 +11,38 @@ pub enum WincentError {
     ScriptError(PsError),
 }
 
+fn refresh_explorer_window() -> Result<(), WincentError> {
+    use powershell_script::PsScriptBuilder;
+
+    const SCRIPT: &str = r#"
+        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+        $shellApplication = New-Object -ComObject Shell.Application;
+        $windows = $shellApplication.Windows();
+        $count = $windows.Count();
+
+        foreach( $i in 0..($count-1) ) {
+            $item = $windows.Item( $i )
+            $item.Refresh() 
+        }
+    "#;
+
+    let ps = PsScriptBuilder::new()
+        .no_profile(true)
+        .non_interactive(true)
+        .hidden(false)
+        .print_commands(false)
+        .build();
+
+    match ps.run(SCRIPT) {
+        Ok(_) => {
+            return Ok(());
+        },
+        Err(e) => {
+            return Err(WincentError::ScriptError(e))
+        }
+    }
+}
+
 pub fn get_frequent_folders() -> Result<Vec<String>, WincentError> {
     use powershell_script::{PsScriptBuilder, PsError};
 
@@ -198,6 +230,11 @@ mod tests {
             .filter_level(log::LevelFilter::Trace)
             .is_test(true)
             .try_init();
+    }
+
+    #[test]
+    fn test_refresh() -> Result<(), WincentError> {
+        refresh_explorer_window()
     }
 
     #[test]
