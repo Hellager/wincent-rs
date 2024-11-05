@@ -101,12 +101,32 @@ pub fn get_quick_access_items() -> Result<Vec<String>, WincentError> {
     query_recent(QuickAccess::All)
 }
 
-pub fn is_in_quick_access(path: &str) -> Result<bool, WincentError> {
-    let cur_quick_access = get_quick_access_items()?;
+/************************* Check Existence *************************/
 
-    for item in cur_quick_access {
-        if item.contains(path) {
-            return Ok(true);
+pub fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<QuickAccess>) -> Result<bool, WincentError> {
+    let target_items: Vec<String>;
+
+    if let Some(target) = specific_type {
+        match target {
+            QuickAccess::FrequentFolders => {
+                target_items = get_frequent_folders()?;
+            },
+            QuickAccess::RecentFiles => {
+                target_items = get_recent_files()?;
+            },
+            QuickAccess::All => {
+                target_items = get_quick_access_items()?;
+            }
+        }
+    } else {
+        target_items = get_quick_access_items()?;
+    }
+
+    for item in target_items {
+        for keyword in &keywords {
+            if item.contains(*keyword) {
+                return Ok(true);
+            }
         }
     }
 
