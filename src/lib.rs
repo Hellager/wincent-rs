@@ -45,135 +45,60 @@ fn refresh_explorer_window() -> Result<(), WincentError> {
     }
 }
 
-pub fn get_frequent_folders() -> Result<Vec<String>, WincentError> {
-    use powershell_script::{PsScriptBuilder, PsError};
+/************************* Query Quick Access *************************/
+fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
+    use powershell_script::PsScriptBuilder;
+    let shell_namespace: &str;
+    let mut condition: &str = "";
+    
+    match recent_type {
+        QuickAccess::FrequentFolders => shell_namespace = "3936E9E4-D92C-4EEE-A85A-BC16D5EA0819",
+        QuickAccess::RecentFiles => {
+            shell_namespace = "679f85cb-0220-4080-b29b-5540cc05aab6";
+            condition = "| where {$_.IsFolder -eq $false}";
+        },
+        QuickAccess::All => shell_namespace = "679f85cb-0220-4080-b29b-5540cc05aab6",
+    }
 
-    const SCRIPT: &str = r#"
-        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-        $shell = New-Object -ComObject Shell.Application;
-        $paths = $shell.Namespace("shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}").Items() | ForEach-Object { $_.Path };
-        $paths
-    "#;
+    let script: String = format!(r#"
+            $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+            $shell = New-Object -ComObject Shell.Application;
+            $shell.Namespace('shell:::{{{}}}').Items() {} | ForEach-Object {{ $_.Path }};
+        "#, shell_namespace.to_string(), condition);
 
     let ps = PsScriptBuilder::new()
         .no_profile(true)
         .non_interactive(true)
-        .hidden(true)
+        .hidden(false)
         .print_commands(false)
         .build();
 
-    match ps.run(SCRIPT) {
-        Ok(output) => {
-            if let Some(data) = output.stdout() {
-                let recents = data.split("\r\n");
-                let mut folders: Vec<String> = vec![];
-                for item in recents {
-                    if !item.is_empty() {
-                       folders.push(item.to_owned()); 
-                    }
-                }
+    refresh_explorer_window();
+    let output = ps.run(&script).unwrap();
 
-                return Ok(folders);
-            }
-        },
-        Err(e) => {
-            return Err(WincentError::ScriptError(e))
+    let mut res: Vec<String> = vec![];
+    if let Some(data) = output.stdout() {
+        let recents = data.split("\r\n");
+        for (_idx, item) in recents.enumerate() {
+            if !item.is_empty() {
+                res.push(item.to_string());
+            } 
         }
     }
 
-    Err(WincentError::ScriptError(PsError::PowershellNotFound))
+    Ok(res)
+}
+
+pub fn get_recent_files() -> Result<Vec<String>, WincentError> {
+    query_recent(QuickAccess::RecentFiles)
+}
+
+pub fn get_frequent_folders() -> Result<Vec<String>, WincentError> {
+    query_recent(QuickAccess::FrequentFolders)
 }
 
 pub fn get_quick_access_items() -> Result<Vec<String>, WincentError> {
-    use powershell_script::{PsScriptBuilder, PsError};
-
-    const SCRIPT: &str = r#"
-        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-        $shell = New-Object -ComObject Shell.Application;
-        $paths = $shell.Namespace("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}").Items() | ForEach-Object { $_.Path };
-        $paths
-    "#;
-
-    let ps = PsScriptBuilder::new()
-        .no_profile(true)
-        .non_interactive(true)
-        .hidden(true)
-        .print_commands(false)
-        .build();
-
-    match ps.run(SCRIPT) {
-        Ok(output) => {
-            if let Some(data) = output.stdout() {
-                let recents = data.split("\r\n");
-                let mut quick_access: Vec<String> = vec![];
-                for item in recents {
-                    if !item.is_empty() {
-                        quick_access.push(item.to_owned()); 
-                    }
-                }
-
-                return Ok(quick_access);
-            }
-        },
-        Err(e) => {
-            return Err(WincentError::ScriptError(e))
-        }
-    }
-
-    Err(WincentError::ScriptError(PsError::PowershellNotFound))
-}
-
-// /// If given path is not exists, when call this script, the condition `where {$_.IsFolder -eq $false}` will return false even it used to be a file
-// fn get_recent_files_old() -> Result<Vec<String>, WincentError> {
-//     use powershell_script::PsScriptBuilder;
-
-//     const SCRIPT: &str = r#"
-//         $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-//         $shell = New-Object -ComObject Shell.Application;
-//         $paths = $shell.Namespace("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}").Items() | where {$_.IsFolder -eq $false} | ForEach-Object { $_.Path };
-//         $paths
-//     "#;
-
-//     let ps = PsScriptBuilder::new()
-//         .no_profile(true)
-//         .non_interactive(true)
-//         .hidden(true)
-//         .print_commands(false)
-//         .build();
-
-//     match ps.run(SCRIPT) {
-//         Ok(output) => {
-//             if let Some(data) = output.stdout() {
-//                 let recents = data.split("\r\n");
-//                 let mut files: Vec<String> = vec![];
-//                 for item in recents {
-//                     if !item.is_empty() {
-//                         files.push(item.to_owned()); 
-//                     }
-//                 }
-
-//                 return Ok(files);
-//             }
-//         },
-//         Err(e) => {
-//             return Err(WincentError::ScriptError(e))
-//         }
-//     }
-
-//     Err(WincentError::ScriptError(PsError::PowershellNotFound))
-// }
-
-pub fn get_recent_files() -> Result<Vec<String>, WincentError> {
-    let mut files: Vec<String> = vec![];
-    let quick_access = get_quick_access_items()?;
-    let frequent_folders = get_frequent_folders()?;
-    for item in quick_access {
-        if !frequent_folders.contains(&item) {
-            files.push(item);
-        }
-    }
-
-    Ok(files)
+    query_recent(QuickAccess::All)
 }
 
 pub fn is_in_quick_access(path: &str) -> Result<bool, WincentError> {
