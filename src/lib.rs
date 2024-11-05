@@ -9,6 +9,8 @@ pub enum QuickAccess {
 #[derive(Debug)]
 pub enum WincentError {
     ScriptError(PsError),
+    IoError(std::io::Error),
+    ConvertError(std::array::TryFromSliceError)
 }
 
 fn refresh_explorer_window() -> Result<(), WincentError> {
@@ -186,17 +188,23 @@ pub fn is_in_quick_access(path: &str) -> Result<bool, WincentError> {
     Ok(false)
 }
 
-fn get_quick_access_reg() -> Result<winreg::RegKey, std::io::Error> {
+/************************* Check/Set Visibility  *************************/
+fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
     use winreg::enums::*;
     use winreg::RegKey;
 
     let hklm = RegKey::predef(HKEY_CURRENT_USER);
-    let cur_ver = hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")?;
-
-    Ok(cur_ver)
+    match hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer") {
+        Ok(key) => {
+            return Ok(key);
+        },
+        Err(e) => {
+            return Err(WincentError::IoError(e));
+        }
+    }
 }
 
-pub fn is_visialbe(target: QuickAccess) -> Result<bool, std::io::Error> {
+pub fn is_visialbe(target: QuickAccess) -> Result<bool, WincentError> {
     let reg_key = get_quick_access_reg()?;
     let reg_value: &str;
     match target {
@@ -204,11 +212,21 @@ pub fn is_visialbe(target: QuickAccess) -> Result<bool, std::io::Error> {
         QuickAccess::RecentFiles => reg_value = "ShowRecent",
         QuickAccess::All => reg_value = "ShowRecent",
     }
-    let is_visiable: u32 = reg_key.get_value(reg_value)?;
-    Ok(is_visiable != 0)
+
+    match reg_key.get_raw_value(reg_value) {
+        Ok(val) => { // REG_DWORD 
+            match &val.bytes[0..4].try_into() {
+                Ok(arr) => Ok(u32::from_ne_bytes(*arr) != 0),
+                Err(e) => Err(WincentError::ConvertError(*e)),
+            }
+        },
+        Err(e) => {
+            return Err(WincentError::IoError(e));
+        }
+    }
 }
 
-pub fn set_visiable(target: QuickAccess, visiable: bool) -> Result<(), std::io::Error> {
+pub fn set_visiable(target: QuickAccess, visiable: bool) -> Result<(), WincentError> {
     let reg_key = get_quick_access_reg()?;
     let reg_value: &str;
     match target {
@@ -216,8 +234,11 @@ pub fn set_visiable(target: QuickAccess, visiable: bool) -> Result<(), std::io::
         QuickAccess::RecentFiles => reg_value = "ShowRecent",
         QuickAccess::All => reg_value = "ShowRecent",
     }
-    reg_key.set_value(reg_value, &u32::from(visiable))?;
-    Ok(())
+
+    match reg_key.set_value(reg_value, &u32::from(visiable)) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(WincentError::IoError(e)),
+    }
 }
 
 #[cfg(test)]
