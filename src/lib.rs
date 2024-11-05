@@ -13,6 +13,12 @@ pub enum WincentError {
     ConvertError(std::array::TryFromSliceError)
 }
 
+pub enum SupportedOsVersion {
+    Win10,
+    Win11,
+}
+
+/************************* Utils *************************/
 fn refresh_explorer_window() -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
 
@@ -45,6 +51,29 @@ fn refresh_explorer_window() -> Result<(), WincentError> {
     }
 }
 
+fn check_os_version() -> Result<SupportedOsVersion, WincentError> {
+    use sysinfo::System;
+
+    if let Some(os) = System::name() {
+        if os == "Windows" {
+            match System::os_version() {
+                Some(version) => {
+                    if version.starts_with("10") {
+                        return Ok(SupportedOsVersion::Win10);
+                    } else if version.starts_with("11") {
+                        return Ok(SupportedOsVersion::Win11);
+                    }
+                },
+                None => {
+                    return Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()));
+                },
+            }
+        }
+    }
+
+    Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()))
+}
+
 /************************* Query Quick Access *************************/
 fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
     use powershell_script::PsScriptBuilder;
@@ -73,7 +102,7 @@ fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
         .print_commands(false)
         .build();
 
-    refresh_explorer_window();
+    let _ = refresh_explorer_window();
     let output = ps.run(&script).unwrap();
 
     let mut res: Vec<String> = vec![];
@@ -134,6 +163,26 @@ pub fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<QuickAccess
 }
 
 /************************* Check/Set Visibility  *************************/
+// fn check_os_version() {
+//     use sysinfo::System;
+//     use log::debug;
+
+//     // match System::os_version() {
+//     //     Some(version) => {
+//     //         if version.starts_with('10')
+//     //     },
+//     //     None => {
+//     //         return Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()));
+//     //     },
+//     // }
+
+//     debug!("System name:             {:?}", System::name());
+//     debug!("System kernel version:   {:?}", System::kernel_version());
+//     debug!("System OS version:       {:?}", System::os_version());
+
+
+// }
+
 fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
     use winreg::enums::*;
     use winreg::RegKey;
@@ -204,6 +253,14 @@ mod tests {
     }
 
     #[test]
+    fn test_check_os_version() {
+        if let Err(e) = check_os_version() {
+            panic!("{:?}", e);
+            
+        }
+    }
+
+    #[test]
     fn test_query_recent() -> Result<(), WincentError> {
         let recent_files = get_recent_files()?;
         let frequent_folders = get_frequent_folders()?;
@@ -236,7 +293,7 @@ mod tests {
 
         Ok(())
     }
-    
+
     #[test]
     fn test_visiable() {
         init_logger();

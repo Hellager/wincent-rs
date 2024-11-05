@@ -17,4 +17,5 @@ A library for handling windows quick access
 env_logger = "0.11.5"
 log = "0.4.22"
 powershell_script = "1.1.0"
+sysinfo = "0.32.0"
 winreg = "0.52.0"
