@@ -10,7 +10,9 @@ pub enum QuickAccess {
 pub enum WincentError {
     ScriptError(PsError),
     IoError(std::io::Error),
-    ConvertError(std::array::TryFromSliceError)
+    ConvertError(std::array::TryFromSliceError),
+    ExecuteError(tokio::task::JoinError),
+    TimeoutError(tokio::time::error::Elapsed)
 }
 
 pub enum SupportedOsVersion {
@@ -18,8 +20,10 @@ pub enum SupportedOsVersion {
     Win11,
 }
 
+const SCRIPT_TIMEOUT: u64 = 3;
+
 /************************* Utils *************************/
-fn refresh_explorer_window() -> Result<(), WincentError> {
+async fn refresh_explorer_window() -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
 
     const SCRIPT: &str = r#"
@@ -41,13 +45,31 @@ fn refresh_explorer_window() -> Result<(), WincentError> {
         .print_commands(false)
         .build();
 
-    match ps.run(SCRIPT) {
-        Ok(_) => {
-            return Ok(());
+    let handle = tokio::task::spawn_blocking(move || {
+        match ps.run(SCRIPT) {
+            Ok(_) => {
+                return Ok(());
+            },
+            Err(e) => {
+                return Err(WincentError::ScriptError(e))
+            }
+        }
+    });
+
+    match tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle).await {
+        Ok(res) => {
+            match res {
+                Ok(h_res) => {
+                    return h_res;
+                },
+                Err(e) => {
+                    return Err(WincentError::ExecuteError(e));
+                }
+            }
         },
         Err(e) => {
-            return Err(WincentError::ScriptError(e))
-        }
+            return Err(WincentError::TimeoutError(e))
+        } 
     }
 }
 
@@ -75,7 +97,7 @@ fn check_os_version() -> Result<SupportedOsVersion, WincentError> {
 }
 
 /************************* Query Quick Access *************************/
-fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
+async fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
     use powershell_script::PsScriptBuilder;
     let shell_namespace: &str;
     let mut condition: &str = "";
@@ -103,52 +125,76 @@ fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
         .build();
 
     let _ = refresh_explorer_window();
-    let output = ps.run(&script).unwrap();
-
-    let mut res: Vec<String> = vec![];
-    if let Some(data) = output.stdout() {
-        let recents = data.split("\r\n");
-        for (_idx, item) in recents.enumerate() {
-            if !item.is_empty() {
-                res.push(item.to_string());
-            } 
+    let handle = tokio::task::spawn_blocking(move || {
+        match ps.run(&script) {
+            Ok(output) => {
+                let mut res: Vec<String> = vec![];
+                if let Some(data) = output.stdout() {
+                    let recents = data.split("\r\n");
+                    for (_idx, item) in recents.enumerate() {
+                        // debug!("{:?}. {:?}", idx+1, item);
+                        if !item.is_empty() {
+                            res.push(item.to_string());
+                        } 
+                    }
+                }
+            
+                return Ok(res);
+            },
+            Err(e) => {
+                return Err(WincentError::ScriptError(e))
+            }
         }
+    });
+
+    match tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle).await {
+        Ok(res) => {
+            match res {
+                Ok(h_res) => {
+                    return h_res;
+                },
+                Err(e) => {
+                    return Err(WincentError::ExecuteError(e));
+                }
+            }
+        },
+        Err(e) => {
+            return Err(WincentError::TimeoutError(e))
+        } 
     }
-
-    Ok(res)
 }
 
-pub fn get_recent_files() -> Result<Vec<String>, WincentError> {
-    query_recent(QuickAccess::RecentFiles)
+pub async fn get_recent_files() -> Result<Vec<String>, WincentError> {
+    query_recent(QuickAccess::RecentFiles).await
 }
 
-pub fn get_frequent_folders() -> Result<Vec<String>, WincentError> {
-    query_recent(QuickAccess::FrequentFolders)
+pub async fn get_frequent_folders() -> Result<Vec<String>, WincentError> {
+    query_recent(QuickAccess::FrequentFolders).await
 }
 
-pub fn get_quick_access_items() -> Result<Vec<String>, WincentError> {
-    query_recent(QuickAccess::All)
+pub async fn get_quick_access_items() -> Result<Vec<String>, WincentError> {
+    query_recent(QuickAccess::All).await
 }
 
 /************************* Check Existence *************************/
 
-pub fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<QuickAccess>) -> Result<bool, WincentError> {
+pub async fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<QuickAccess>) -> Result<bool, WincentError> {
     let target_items: Vec<String>;
 
     if let Some(target) = specific_type {
         match target {
             QuickAccess::FrequentFolders => {
-                target_items = get_frequent_folders()?;
+                target_items = get_frequent_folders().await?;
             },
             QuickAccess::RecentFiles => {
-                target_items = get_recent_files()?;
+                target_items = get_recent_files().await?;
             },
             QuickAccess::All => {
-                target_items = get_quick_access_items()?;
+                target_items = get_quick_access_items().await?;
             }
         }
     } else {
-        target_items = get_quick_access_items()?;
+        target_items = get_quick_access_items().await?;
     }
 
     for item in target_items {
@@ -162,26 +208,8 @@ pub fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<QuickAccess
     Ok(false)
 }
 
+
 /************************* Check/Set Visibility  *************************/
-// fn check_os_version() {
-//     use sysinfo::System;
-//     use log::debug;
-
-//     // match System::os_version() {
-//     //     Some(version) => {
-//     //         if version.starts_with('10')
-//     //     },
-//     //     None => {
-//     //         return Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()));
-//     //     },
-//     // }
-
-//     debug!("System name:             {:?}", System::name());
-//     debug!("System kernel version:   {:?}", System::kernel_version());
-//     debug!("System OS version:       {:?}", System::os_version());
-
-
-// }
 
 fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
     use winreg::enums::*;
@@ -247,9 +275,9 @@ mod tests {
             .try_init();
     }
 
-    #[test]
-    fn test_refresh() -> Result<(), WincentError> {
-        refresh_explorer_window()
+    #[tokio::test]
+    async fn test_refresh() -> Result<(), WincentError> {
+        refresh_explorer_window().await
     }
 
     #[test]
@@ -260,11 +288,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_query_recent() -> Result<(), WincentError> {
-        let recent_files = get_recent_files()?;
-        let frequent_folders = get_frequent_folders()?;
-        let quick_access = get_quick_access_items()?;
+    #[tokio::test]
+    async fn test_query_recent() -> Result<(), WincentError> {
+        let recent_files = get_recent_files().await?;
+        let frequent_folders = get_frequent_folders().await?;
+        let quick_access = get_quick_access_items().await?;
 
         let seperate = recent_files.len() + frequent_folders.len();
         let total = quick_access.len();
@@ -274,20 +302,20 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_check_exists() -> Result<(), WincentError> {
+    #[tokio::test]
+    async fn test_check_exists() -> Result<(), WincentError> {
         use std::path::Path;
 
-        let quick_access = get_recent_files()?;
+        let quick_access = get_recent_files().await?;
 
         let full_path = quick_access[0].clone();
         let filename = Path::new(&full_path).file_name().unwrap().to_str().unwrap();
-        let check_once = is_in_quick_access(vec![filename], None)?;
+        let check_once = is_in_quick_access(vec![filename], None).await?;
 
         assert_eq!(check_once, true);
 
         let reversed: String = filename.chars().rev().collect();
-        let check_twice = is_in_quick_access(vec![&reversed], None)?;
+        let check_twice = is_in_quick_access(vec![&reversed], None).await?;
         
         assert_eq!(check_twice, false);
 
