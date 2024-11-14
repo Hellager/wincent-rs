@@ -73,6 +73,7 @@ async fn refresh_explorer_window() -> Result<(), WincentError> {
     }
 }
 
+#[allow(dead_code)]
 fn check_os_version() -> Result<SupportedOsVersion, WincentError> {
     use sysinfo::System;
 
