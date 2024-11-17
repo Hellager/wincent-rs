@@ -38,8 +38,11 @@ jobs:
           filename: 'wincent-rs.zip'
           exclusions: '*.git*'
 
-      - name: Upload Archive
-        uses: ncipollo/release-action@v1.12.0
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
         with:
-          artifacts: 'wincent-rs.zip'
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}  # Use the tag that triggered the workflow
+          files: |
+            wincent-rs.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub token for authentication
