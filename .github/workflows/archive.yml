@@ -11,10 +11,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Build the crate
+        run: cargo build --release
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: "draft" # use unique tag name
+          tag_name: "build_draft" # use unique tag name
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub token for authentication
