@@ -31,8 +31,15 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --token "$CARGO_REGISTRY_TOKEN"
 
-      - name: Create GitHub Release
-        id: create_release
-        uses: softprops/action-gh-release@v2
+      - name: Create Archive
+        uses: thedoctor0/zip-release@0.7.5
         with:
-          draft: true
+          type: 'zip'
+          filename: 'wincent-rs.zip'
+          exclusions: '*.git*'
+
+      - name: Upload Archive
+        uses: ncipollo/release-action@v1.12.0
+        with:
+          artifacts: 'wincent-rs.zip'
+          token: ${{ secrets.GITHUB_TOKEN }}
