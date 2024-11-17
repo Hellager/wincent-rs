@@ -41,7 +41,6 @@ jobs:
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
-          tag: ${{ github.ref }}  # Use the tag that triggered the workflow
           files: |
             wincent-rs.zip
         env:
