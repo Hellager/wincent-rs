@@ -41,6 +41,7 @@ jobs:
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
+          tag: "draft"
           files: |
             wincent-rs.zip
         env:
