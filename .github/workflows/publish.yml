@@ -42,7 +42,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: "draft"
-          files: |
-            wincent-rs.zip
+          draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub token for authentication
