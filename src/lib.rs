@@ -1,4 +1,6 @@
 use powershell_script::PsError;
+use winreg::enums::*;
+use winreg::RegKey;
 
 pub enum QuickAccess {
     FrequentFolders,
@@ -611,9 +613,6 @@ pub async fn remove_from_frequent_folders(path: &str) -> Result<(), WincentError
 /// }
 /// ```
 fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
-    use winreg::enums::*;
-    use winreg::RegKey;
-
     let hklm = RegKey::predef(HKEY_CURRENT_USER);
     hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")
         .map_err(WincentError::IoError)
