@@ -125,6 +125,70 @@ pub async fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<Quick
     Ok(is_found)
 }
 
+/************************* Remove Recent File *************************/
+
+async fn handle_recent_files(path: &str, is_remove: bool) -> Result<(), WincentError> {
+    use powershell_script::PsScriptBuilder;
+
+    if !is_remove {
+        return Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()));
+    }
+
+    let script = format!(r#"
+        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+        $shell = New-Object -ComObject Shell.Application;
+        $files = $shell.Namespace("shell:::{{679f85cb-0220-4080-b29b-5540cc05aab6}}").Items() | where {{$_.IsFolder -eq $false}};
+        $target = $files | where {{$_.Path -match ${}}};
+        $target.InvokeVerb("remove");
+    "#, path);
+
+    let ps = PsScriptBuilder::new()
+        .no_profile(true)
+        .non_interactive(true)
+        .hidden(false)
+        .print_commands(false)
+        .build();
+
+    let handle = tokio::task::spawn_blocking(move || {
+        ps.run(&script).map_err(WincentError::ScriptError)
+    });
+
+    match tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle).await {
+        Ok(res) => {
+            res.map(|_| ())
+            .map_err(WincentError::ExecuteError)
+        },
+        Err(e) => Err(WincentError::TimeoutError(e)),
+    }
+}
+
+pub async fn remove_from_recent_files(path: &str) -> Result<(), WincentError> {
+    use std::fs;
+    use std::path::Path;
+
+    // Check if the file exists
+    if fs::metadata(path).is_err() {
+        return Err(WincentError::IoError(std::io::ErrorKind::NotFound.into()));
+    }
+
+    // Check if the path is a file
+    if !Path::new(path).is_file() {
+        return Err(WincentError::IoError(std::io::ErrorKind::InvalidData.into()));
+    }
+
+    let in_quick_access = match is_in_quick_access(vec![path], Some(QuickAccess::RecentFiles)).await {
+        Ok(result) => result,
+        Err(e) => return Err(e),
+    };
+
+    if !in_quick_access {
+        return Ok(());
+    }
+
+    handle_recent_files(path, true).await?;
+    Ok(())
+}
+
 /************************* Check/Set Visibility  *************************/
 
 fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
