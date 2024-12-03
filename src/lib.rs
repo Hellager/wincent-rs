@@ -189,6 +189,72 @@ pub async fn remove_from_recent_files(path: &str) -> Result<(), WincentError> {
     Ok(())
 }
 
+/************************* Remove/Add Frequent Folders *************************/
+
+async fn handle_frequent_folders(path: &str) -> Result<(), WincentError> {
+    use powershell_script::PsScriptBuilder;
+
+    let script: String = format!(r#"
+            $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+            $shell = New-Object -ComObject Shell.Application;
+            $shell.Namespace("{}").Self.InvokeVerb("pintohome");
+        "#, path);
+
+    let ps = PsScriptBuilder::new()
+        .no_profile(true)
+        .non_interactive(true)
+        .hidden(true)
+        .print_commands(true)
+        .build();
+
+    let handle = tokio::task::spawn_blocking(move || {
+        ps.run(&script).map_err(WincentError::ScriptError)
+    });
+
+    match tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle).await {
+        Ok(res) => {
+            res.map(|_| ())
+            .map_err(WincentError::ExecuteError)
+        },
+        Err(e) => Err(WincentError::TimeoutError(e)),
+    }
+}
+
+pub async fn add_to_frequent_folders(path: &str) -> Result<(), WincentError> {
+    if let Err(e) = std::fs::metadata(path) {
+        return Err(WincentError::IoError(e));
+    }
+
+    if !std::path::Path::new(path).is_dir() {
+        return Err(WincentError::IoError(std::io::ErrorKind::InvalidData.into()));
+    }
+
+    handle_frequent_folders(path).await?;
+
+    Ok(())
+}
+
+pub async fn remove_from_frequent_folders(path: &str) -> Result<(), WincentError> {
+    if let Err(e) = std::fs::metadata(path) {
+        return Err(WincentError::IoError(e));
+    }
+
+    if !std::path::Path::new(path).is_dir() {
+        return Err(WincentError::IoError(std::io::ErrorKind::InvalidData.into()));
+    }
+
+    let is_in_quick_access = match is_in_quick_access(vec![path], Some(QuickAccess::FrequentFolders)).await {
+        Ok(result) => result,
+        Err(e) => return Err(e),
+    };
+
+    if is_in_quick_access {
+        handle_frequent_folders(path).await?;
+    }
+
+    Ok(())
+}
+
 /************************* Check/Set Visibility  *************************/
 
 fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
