@@ -15,27 +15,17 @@ pub enum WincentError {
     TimeoutError(tokio::time::error::Elapsed)
 }
 
-pub enum SupportedOsVersion {
-    Win10,
-    Win11,
-}
-
 const SCRIPT_TIMEOUT: u64 = 3;
 
 /************************* Utils *************************/
-async fn refresh_explorer_window() -> Result<(), WincentError> {
+pub async fn refresh_explorer_window() -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
 
     const SCRIPT: &str = r#"
         $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
         $shellApplication = New-Object -ComObject Shell.Application;
         $windows = $shellApplication.Windows();
-        $count = $windows.Count();
-
-        foreach( $i in 0..($count-1) ) {
-            $item = $windows.Item( $i )
-            $item.Refresh() 
-        }
+        $windows | ForEach-Object { $_.Refresh() }
     "#;
 
     let ps = PsScriptBuilder::new()
@@ -46,77 +36,32 @@ async fn refresh_explorer_window() -> Result<(), WincentError> {
         .build();
 
     let handle = tokio::task::spawn_blocking(move || {
-        match ps.run(SCRIPT) {
-            Ok(_) => {
-                return Ok(());
-            },
-            Err(e) => {
-                return Err(WincentError::ScriptError(e))
-            }
-        }
+        ps.run(SCRIPT)
+            .map(|_| ())
+            .map_err(WincentError::ScriptError)
     });
 
-    match tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle).await {
-        Ok(res) => {
-            match res {
-                Ok(h_res) => {
-                    return h_res;
-                },
-                Err(e) => {
-                    return Err(WincentError::ExecuteError(e));
-                }
-            }
-        },
-        Err(e) => {
-            return Err(WincentError::TimeoutError(e))
-        } 
-    }
-}
-
-#[allow(dead_code)]
-fn check_os_version() -> Result<SupportedOsVersion, WincentError> {
-    use sysinfo::System;
-
-    if let Some(os) = System::name() {
-        if os == "Windows" {
-            match System::os_version() {
-                Some(version) => {
-                    if version.starts_with("10") {
-                        return Ok(SupportedOsVersion::Win10);
-                    } else if version.starts_with("11") {
-                        return Ok(SupportedOsVersion::Win11);
-                    }
-                },
-                None => {
-                    return Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()));
-                },
-            }
-        }
-    }
-
-    Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()))
+    tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle)
+        .await
+        .map_err(WincentError::TimeoutError)?
+        .map_err(WincentError::ExecuteError)?
 }
 
 /************************* Query Quick Access *************************/
 async fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
     use powershell_script::PsScriptBuilder;
-    let shell_namespace: &str;
-    let mut condition: &str = "";
-    
-    match recent_type {
-        QuickAccess::FrequentFolders => shell_namespace = "3936E9E4-D92C-4EEE-A85A-BC16D5EA0819",
-        QuickAccess::RecentFiles => {
-            shell_namespace = "679f85cb-0220-4080-b29b-5540cc05aab6";
-            condition = "| where {$_.IsFolder -eq $false}";
-        },
-        QuickAccess::All => shell_namespace = "679f85cb-0220-4080-b29b-5540cc05aab6",
-    }
 
-    let script: String = format!(r#"
-            $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-            $shell = New-Object -ComObject Shell.Application;
-            $shell.Namespace('shell:::{{{}}}').Items() {} | ForEach-Object {{ $_.Path }};
-        "#, shell_namespace.to_string(), condition);
+    let (shell_namespace, condition) = match recent_type {
+        QuickAccess::FrequentFolders => ("3936E9E4-D92C-4EEE-A85A-BC16D5EA0819", ""),
+        QuickAccess::RecentFiles => ("679f85cb-0220-4080-b29b-5540cc05aab6", "| where {$_.IsFolder -eq $false}"),
+        QuickAccess::All => ("679f85cb-0220-4080-b29b-5540cc05aab6", ""),
+    };
+
+    let script = format!(r#"
+        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+        $shell = New-Object -ComObject Shell.Application;
+        $shell.Namespace('shell:::{{{}}}').Items() {} | ForEach-Object {{ $_.Path }};
+    "#, shell_namespace, condition);
 
     let ps = PsScriptBuilder::new()
         .no_profile(true)
@@ -125,43 +70,29 @@ async fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentEr
         .print_commands(false)
         .build();
 
-    let _ = refresh_explorer_window();
     let handle = tokio::task::spawn_blocking(move || {
-        match ps.run(&script) {
-            Ok(output) => {
-                let mut res: Vec<String> = vec![];
-                if let Some(data) = output.stdout() {
-                    let recents = data.split("\r\n");
-                    for (_idx, item) in recents.enumerate() {
-                        // debug!("{:?}. {:?}", idx+1, item);
-                        if !item.is_empty() {
-                            res.push(item.to_string());
-                        } 
-                    }
-                }
-            
-                return Ok(res);
-            },
-            Err(e) => {
-                return Err(WincentError::ScriptError(e))
-            }
-        }
+        ps.run(&script).map(|output| {
+            output.stdout()
+                .map_or_else(Vec::new, |data| {
+                    data.lines()
+                        .filter_map(|item| {
+                            let trimmed = item.trim();
+                            if !trimmed.is_empty() {
+                                Some(trimmed.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+        }).map_err(WincentError::ScriptError)
     });
 
     match tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle).await {
         Ok(res) => {
-            match res {
-                Ok(h_res) => {
-                    return h_res;
-                },
-                Err(e) => {
-                    return Err(WincentError::ExecuteError(e));
-                }
-            }
+            res.map_err(WincentError::ExecuteError)?
         },
-        Err(e) => {
-            return Err(WincentError::TimeoutError(e))
-        } 
+        Err(e) => Err(WincentError::TimeoutError(e)),
     }
 }
 
@@ -180,35 +111,19 @@ pub async fn get_quick_access_items() -> Result<Vec<String>, WincentError> {
 /************************* Check Existence *************************/
 
 pub async fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<QuickAccess>) -> Result<bool, WincentError> {
-    let target_items: Vec<String>;
+    let target_items = match specific_type {
+        Some(QuickAccess::FrequentFolders) => get_frequent_folders().await?,
+        Some(QuickAccess::RecentFiles) => get_recent_files().await?,
+        Some(QuickAccess::All) => get_quick_access_items().await?,
+        None => get_quick_access_items().await?,
+    };
 
-    if let Some(target) = specific_type {
-        match target {
-            QuickAccess::FrequentFolders => {
-                target_items = get_frequent_folders().await?;
-            },
-            QuickAccess::RecentFiles => {
-                target_items = get_recent_files().await?;
-            },
-            QuickAccess::All => {
-                target_items = get_quick_access_items().await?;
-            }
-        }
-    } else {
-        target_items = get_quick_access_items().await?;
-    }
+    let is_found = target_items.iter().any(|item| {
+        keywords.iter().any(|&keyword| item.contains(keyword))
+    });
 
-    for item in target_items {
-        for keyword in &keywords {
-            if item.contains(*keyword) {
-                return Ok(true);
-            }
-        }
-    }
-
-    Ok(false)
+    Ok(is_found)
 }
-
 
 /************************* Check/Set Visibility  *************************/
 
@@ -217,51 +132,36 @@ fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
     use winreg::RegKey;
 
     let hklm = RegKey::predef(HKEY_CURRENT_USER);
-    match hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer") {
-        Ok(key) => {
-            return Ok(key);
-        },
-        Err(e) => {
-            return Err(WincentError::IoError(e));
-        }
-    }
+    hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")
+        .map_err(WincentError::IoError)
 }
 
 pub fn is_visialbe(target: QuickAccess) -> Result<bool, WincentError> {
     let reg_key = get_quick_access_reg()?;
-    let reg_value: &str;
-    match target {
-        QuickAccess::FrequentFolders => reg_value = "ShowFrequent",
-        QuickAccess::RecentFiles => reg_value = "ShowRecent",
-        QuickAccess::All => reg_value = "ShowRecent",
-    }
+    let reg_value = match target {
+        QuickAccess::FrequentFolders => "ShowFrequent",
+        QuickAccess::RecentFiles => "ShowRecent",
+        QuickAccess::All => "ShowRecent",
+    };
 
-    match reg_key.get_raw_value(reg_value) {
-        Ok(val) => { // REG_DWORD 
-            match &val.bytes[0..4].try_into() {
-                Ok(arr) => Ok(u32::from_ne_bytes(*arr) != 0),
-                Err(e) => Err(WincentError::ConvertError(*e)),
-            }
-        },
-        Err(e) => {
-            return Err(WincentError::IoError(e));
-        }
-    }
+    let val = reg_key.get_raw_value(reg_value).map_err(WincentError::IoError)?;
+
+    let visibility = u32::from_ne_bytes(val.bytes[0..4].try_into().map_err(|e| WincentError::ConvertError(e))?);
+    
+    Ok(visibility != 0)
 }
 
 pub fn set_visiable(target: QuickAccess, visiable: bool) -> Result<(), WincentError> {
     let reg_key = get_quick_access_reg()?;
-    let reg_value: &str;
-    match target {
-        QuickAccess::FrequentFolders => reg_value = "ShowFrequent",
-        QuickAccess::RecentFiles => reg_value = "ShowRecent",
-        QuickAccess::All => reg_value = "ShowRecent",
-    }
+    let reg_value = match target {
+        QuickAccess::FrequentFolders => "ShowFrequent",
+        QuickAccess::RecentFiles => "ShowRecent",
+        QuickAccess::All => "ShowRecent",
+    };
 
-    match reg_key.set_value(reg_value, &u32::from(visiable)) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(WincentError::IoError(e)),
-    }
+    reg_key.set_value(reg_value, &u32::from(visiable)).map_err(WincentError::IoError)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -279,14 +179,6 @@ mod tests {
     #[tokio::test]
     async fn test_refresh() -> Result<(), WincentError> {
         refresh_explorer_window().await
-    }
-
-    #[test]
-    fn test_check_os_version() {
-        if let Err(e) = check_os_version() {
-            panic!("{:?}", e);
-            
-        }
     }
 
     #[tokio::test]
