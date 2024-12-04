@@ -1,6 +1,4 @@
 use powershell_script::PsError;
-use winreg::enums::*;
-use winreg::RegKey;
 
 pub enum QuickAccess {
     FrequentFolders,
@@ -19,7 +17,119 @@ pub enum WincentError {
 
 const SCRIPT_TIMEOUT: u64 = 3;
 
-/************************* Utils *************************/
+/******************************** Utils ********************************/
+
+/// Checks if the PowerShell execution policy for the current user is set to a 
+/// feasible value that allows script execution.
+///
+/// This function runs a PowerShell script to retrieve the current execution policy 
+/// for the user. It considers the following [policies](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-7.4) as feasible for script execution:
+/// - `AllSigned`
+/// - `Bypass`
+/// - `RemoteSigned`
+/// - `Unrestricted`
+///
+/// The function runs asynchronously and returns a `Result<bool, WincentError>`. 
+/// The boolean indicates whether the execution policy is feasible (`true`) or not 
+/// (`false`). In case of an error during script execution or if the operation 
+/// times out, it returns a `WincentError`.
+///
+/// # Errors
+///
+/// This function can return the following errors:
+/// - `WincentError::ScriptError` if there is an error executing the PowerShell script.
+/// - `WincentError::TimeoutError` if the operation exceeds the specified timeout.
+/// - `WincentError::ExecuteError` if there is an error in executing the script handle.
+///
+/// # Example
+///
+/// ```
+/// let is_feasible = check_feasible().await?;
+/// if is_feasible {
+///     println!("The execution policy is feasible for script execution.");
+/// } else {
+///     println!("The execution policy is not feasible.");
+/// }
+/// ```
+pub async fn check_feasible() -> Result<bool, WincentError> {
+    use powershell_script::PsScriptBuilder;
+
+    const SCRIPT: &str = r#"
+        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+        Get-ExecutionPolicy -Scope CurrentUser
+    "#;
+
+    let ps = PsScriptBuilder::new()
+        .no_profile(true)
+        .non_interactive(true)
+        .hidden(false)
+        .print_commands(false)
+        .build();
+
+    let handle = tokio::task::spawn_blocking(move || {
+            ps.run(SCRIPT).map(|output| {
+                output.stdout().map_or(false, |policy| {
+                    matches!(policy.as_str(), "AllSigned" | "Bypass" | "RemoteSigned" | "Unrestricted")
+                })
+            }).map_err(WincentError::ScriptError)
+        });
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle)
+        .await
+        .map_err(WincentError::TimeoutError)?
+        .map_err(WincentError::ExecuteError)?
+}
+
+/// Sets the PowerShell execution policy for the current user to `RemoteSigned`.
+///
+/// This function runs a PowerShell script that modifies the execution policy 
+/// to `RemoteSigned`, which allows the execution of scripts that are signed 
+/// by a trusted publisher and scripts that are created locally without a signature.
+///
+/// The function runs asynchronously and returns a `Result<(), WincentError>`. 
+/// On success, it returns `Ok(())`. In case of an error during script execution 
+/// or if the operation times out, it returns a `WincentError`.
+///
+/// # Errors
+///
+/// This function can return the following errors:
+/// - `WincentError::ScriptError` if there is an error executing the PowerShell script.
+/// - `WincentError::TimeoutError` if the operation exceeds the specified timeout.
+/// - `WincentError::ExecuteError` if there is an error in executing the script handle.
+///
+/// # Example
+///
+/// ```
+/// fix_feasible().await?;
+/// println!("Execution policy has been set to RemoteSigned.");
+/// ```
+pub async fn fix_feasible() -> Result<(), WincentError> {
+    use powershell_script::PsScriptBuilder;
+
+    const SCRIPT: &str = r#"
+        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+    "#;
+
+    let ps = PsScriptBuilder::new()
+        .no_profile(true)
+        .non_interactive(true)
+        .hidden(false)
+        .print_commands(false)
+        .build();
+
+    let handle = tokio::task::spawn_blocking(move || {
+        ps.run(SCRIPT)
+            .map(|_| ())
+            .map_err(WincentError::ScriptError)
+    });
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle)
+        .await
+        .map_err(WincentError::TimeoutError)?
+        .map_err(WincentError::ExecuteError)?
+}
+
 
 /// Refreshes all open Windows Explorer windows asynchronously.
 ///
@@ -613,6 +723,9 @@ pub async fn remove_from_frequent_folders(path: &str) -> Result<(), WincentError
 /// }
 /// ```
 fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
     let hklm = RegKey::predef(HKEY_CURRENT_USER);
     hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")
         .map_err(WincentError::IoError)
@@ -712,6 +825,32 @@ mod tests {
     #[tokio::test]
     async fn test_refresh() -> Result<(), WincentError> {
         refresh_explorer_window().await
+    }
+
+    #[tokio::test]
+    async fn test_feasible() -> Result<(), WincentError> {
+        match check_feasible().await {
+            Ok(is_feasible) => {
+                if !is_feasible {
+                    if let Err(e) = fix_feasible().await {
+                        panic!("Failed to fix feasibility: {:?}", e);
+                    }
+                }
+    
+                match check_feasible().await {
+                    Ok(double_check) if double_check => {
+                        assert!(true);
+                    },
+                    Err(e) => {
+                        panic!("Error during double check: {:?}", e);
+                    },
+                    _ => {}
+                }
+    
+                Ok(())
+            },
+            Err(e) => Err(e),
+        }
     }
 
     #[tokio::test]

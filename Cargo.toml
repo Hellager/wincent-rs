@@ -18,8 +18,16 @@ env_logger = "0.11.5"
 log = "0.4.22"
 powershell_script = "1.1.0"
 sysinfo = "0.32.0"
-tokio = { version = "1.41.0", features = ["time", "rt", "macros", "rt-multi-thread"] }
 winreg = "0.52.0"
+
+[dependencies.tokio]
+version = "1.41.0"
+features = [
+    "time", 
+    "rt", 
+    "macros", 
+    "rt-multi-thread"
+]
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-gnu"
