@@ -19,126 +19,153 @@ const SCRIPT_TIMEOUT: u64 = 3;
 
 /******************************** Utils ********************************/
 
-fn is_admin() -> bool {
-    use windows::Win32::Foundation::BOOL;
-    use windows::Win32::UI::Shell::IsUserAnAdmin;
-
-    unsafe {
-        IsUserAnAdmin() == BOOL(1)
-    } 
-}
-
-/// Checks if the PowerShell execution policy for the current user is set to a 
-/// feasible value that allows script execution.
+/// Retrieves or creates a registry key for the PowerShell execution policy.
 ///
-/// This function runs a PowerShell script to retrieve the current execution policy 
-/// for the user. It considers the following [policies](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-7.4) as feasible for script execution:
-/// - `AllSigned`
-/// - `Bypass`
-/// - `RemoteSigned`
-/// - `Unrestricted`
+/// This function attempts to create or open a registry key located at
+/// `SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell` under the
+/// current user's registry hive (HKEY_CURRENT_USER). The function allows
+/// specifying flags that control the creation of the registry key.
 ///
-/// The function runs asynchronously and returns a `Result<bool, WincentError>`. 
-/// The boolean indicates whether the execution policy is feasible (`true`) or not 
-/// (`false`). In case of an error during script execution or if the operation 
-/// times out, it returns a `WincentError`.
+/// # Parameters
+///
+/// * `flag`: A `u32` value representing the flags to be used when creating
+///   the registry key. These flags can control various aspects of the key's
+///   creation, such as permissions or whether to create the key if it does
+///   not exist.
+///
+/// # Returns
+///
+/// This function returns a `Result` which is either:
+/// - `Ok(RegKey)`: A successful result containing the `RegKey` object that
+///   represents the created or opened registry key.
+/// - `Err(WincentError)`: An error of type `WincentError` if the operation
+///   fails, which may include I/O errors or other issues related to registry
+///   access.
 ///
 /// # Errors
 ///
-/// This function can return the following errors:
-/// - `WincentError::ScriptError` if there is an error executing the PowerShell script.
-/// - `WincentError::TimeoutError` if the operation exceeds the specified timeout.
-/// - `WincentError::ExecuteError` if there is an error in executing the script handle.
+/// The function will return an error if it fails to create or open the
+/// specified registry key. The error is wrapped in the `WincentError` type,
+/// which should be handled by the caller.
 ///
 /// # Example
 ///
-/// ```
-/// let is_feasible = check_feasible().await?;
-/// if is_feasible {
-///     println!("The execution policy is feasible for script execution.");
-/// } else {
-///     println!("The execution policy is not feasible.");
+/// ```rust
+/// let flag = KEY_WRITE; // Example flag
+/// match get_execution_policy_reg(flag) {
+///     Ok(reg_key) => {
+///         // Use the reg_key as needed
+///     },
+///     Err(e) => {
+///         eprintln!("Failed to get registry key: {:?}", e);
+///     }
 /// }
 /// ```
-pub async fn check_feasible() -> Result<bool, WincentError> {
-    use powershell_script::PsScriptBuilder;
+fn get_execution_policy_reg(flag: u32) -> Result<winreg::RegKey, WincentError> {
+    use winreg::enums::*;
+    use winreg::RegKey;
 
-    const SCRIPT: &str = r#"
-        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-        Get-ExecutionPolicy -Scope CurrentUser
-    "#;
+    let key_path = "SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell";
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
 
-    let ps = PsScriptBuilder::new()
-        .no_profile(true)
-        .non_interactive(true)
-        .hidden(false)
-        .print_commands(false)
-        .build();
+    let (reg_key, _) = hkcu.create_subkey_with_flags(key_path, flag)
+        .map_err(WincentError::IoError)?;
 
-    let handle = tokio::task::spawn_blocking(move || {
-            ps.run(SCRIPT).map(|output| {
-                output.stdout().map_or(false, |policy| {
-                    matches!(policy.as_str(), "AllSigned" | "Bypass" | "RemoteSigned" | "Unrestricted")
-                })
-            }).map_err(WincentError::ScriptError)
-        });
-
-    tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle)
-        .await
-        .map_err(WincentError::TimeoutError)?
-        .map_err(WincentError::ExecuteError)?
+    Ok(reg_key)
 }
 
-/// Sets the PowerShell execution policy for the current user to `RemoteSigned`.
+/// Checks if the current PowerShell execution policy is feasible for execution.
 ///
-/// This function runs a PowerShell script that modifies the execution policy 
-/// to `RemoteSigned`, which allows the execution of scripts that are signed 
-/// by a trusted publisher and scripts that are created locally without a signature.
+/// This function retrieves the current PowerShell execution policy from the
+/// Windows registry and checks if it is one of the policies that allow
+/// script execution. The feasible policies are "AllSigned", "Bypass",
+/// "RemoteSigned", and "Unrestricted".
 ///
-/// The function runs asynchronously and returns a `Result<(), WincentError>`. 
-/// On success, it returns `Ok(())`. In case of an error during script execution 
-/// or if the operation times out, it returns a `WincentError`.
+/// # Returns
+///
+/// This function returns a `Result` which is either:
+/// - `Ok(bool)`: A successful result containing a boolean value indicating
+///   whether the current execution policy is feasible for script execution.
+///   Returns `true` if the policy is one of the feasible options, and `false`
+///   otherwise.
+/// - `Err(WincentError)`: An error of type `WincentError` if the operation
+///   fails, which may include issues related to accessing the registry or
+///   retrieving the value.
 ///
 /// # Errors
 ///
-/// This function can return the following errors:
-/// - `WincentError::ScriptError` if there is an error executing the PowerShell script.
-/// - `WincentError::TimeoutError` if the operation exceeds the specified timeout.
-/// - `WincentError::ExecuteError` if there is an error in executing the script handle.
+/// The function will return an error if it fails to retrieve the execution
+/// policy from the registry. The error is wrapped in the `WincentError` type,
+/// which should be handled by the caller.
 ///
 /// # Example
 ///
+/// ```rust
+/// match check_feasible() {
+///     Ok(is_feasible) => {
+///         if is_feasible {
+///             println!("The execution policy is feasible for script execution.");
+///         } else {
+///             println!("The execution policy is not feasible for script execution.");
+///         }
+///     },
+///     Err(e) => {
+///         eprintln!("Failed to check execution policy: {:?}", e);
+///     }
+/// }
 /// ```
-/// fix_feasible().await?;
-/// println!("Execution policy has been set to RemoteSigned.");
-/// ```
-pub async fn fix_feasible() -> Result<(), WincentError> {
-    use powershell_script::PsScriptBuilder;
+pub fn check_feasible() -> Result<bool, WincentError> {
+    let reg_key = get_execution_policy_reg(winreg::enums::KEY_READ)?;
+    let reg_value = "ExecutionPolicy";
 
-    const SCRIPT: &str = r#"
-        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-    "#;
+    let val: String = reg_key.get_value(reg_value).map_err(WincentError::IoError)?;
 
-    let ps = PsScriptBuilder::new()
-        .no_profile(true)
-        .non_interactive(true)
-        .hidden(false)
-        .print_commands(false)
-        .build();
-
-    let handle = tokio::task::spawn_blocking(move || {
-        ps.run(SCRIPT)
-            .map(|_| ())
-            .map_err(WincentError::ScriptError)
-    });
-
-    tokio::time::timeout(tokio::time::Duration::from_secs(SCRIPT_TIMEOUT), handle)
-        .await
-        .map_err(WincentError::TimeoutError)?
-        .map_err(WincentError::ExecuteError)?
+    let is_feasible = matches!(val.as_str(), "AllSigned" | "Bypass" | "RemoteSigned" | "Unrestricted");
+    
+    Ok(is_feasible)
 }
 
+/// Sets the PowerShell execution policy to "RemoteSigned" in the Windows registry.
+///
+/// This function updates the PowerShell execution policy in the Windows
+/// registry to "RemoteSigned", which allows the execution of scripts that
+/// are signed by a trusted publisher and scripts that are created locally.
+///
+/// # Returns
+///
+/// This function returns a `Result` which is either:
+/// - `Ok(())`: A successful result indicating that the execution policy has
+///   been updated successfully.
+/// - `Err(WincentError)`: An error of type `WincentError` if the operation
+///   fails, which may include issues related to accessing the registry or
+///   setting the value.
+///
+/// # Errors
+///
+/// The function will return an error if it fails to set the execution policy
+/// in the registry. The error is wrapped in the `WincentError` type,
+/// which should be handled by the caller.
+///
+/// # Example
+///
+/// ```rust
+/// match fix_feasible() {
+///     Ok(()) => {
+///         println!("Execution policy set to 'RemoteSigned' successfully.");
+///     },
+///     Err(e) => {
+///         eprintln!("Failed to set execution policy: {:?}", e);
+///     }
+/// }
+/// ```
+pub fn fix_feasible() -> Result<(), WincentError> {
+    let reg_key = get_execution_policy_reg(winreg::enums::KEY_WRITE)?;
+    let reg_value = "ExecutionPolicy";
+
+    reg_key.set_value(reg_value, &"RemoteSigned").map_err(WincentError::IoError)?;
+
+    Ok(())
+}
 
 /// Refreshes all open Windows Explorer windows asynchronously.
 ///
@@ -173,7 +200,7 @@ pub async fn refresh_explorer_window() -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
     use std::io::{Error, ErrorKind};
 
-    if !check_feasible().await? {
+    if !check_feasible()? {
         return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
     }
 
@@ -249,7 +276,7 @@ async fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentEr
     use powershell_script::PsScriptBuilder;
     use std::io::{Error, ErrorKind};
 
-    if !check_feasible().await? {
+    if !check_feasible()? {
         return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
     }
 
@@ -465,7 +492,7 @@ async fn handle_recent_files(path: &str, is_remove: bool) -> Result<(), WincentE
     use powershell_script::PsScriptBuilder;
     use std::io::{Error, ErrorKind};
 
-    if !check_feasible().await? {
+    if !check_feasible()? {
         return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
     }
 
@@ -591,7 +618,7 @@ async fn handle_frequent_folders(path: &str) -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
     use std::io::{Error, ErrorKind};
 
-    if !check_feasible().await? {
+    if !check_feasible()? {
         return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
     }
 
@@ -856,17 +883,17 @@ mod tests {
         refresh_explorer_window().await
     }
 
-    #[tokio::test]
-    async fn test_feasible() -> Result<(), WincentError> {
-        match check_feasible().await {
+    #[test]
+    fn test_feasible() -> Result<(), WincentError> {
+        match check_feasible() {
             Ok(is_feasible) => {
                 if !is_feasible {
-                    if let Err(e) = fix_feasible().await {
+                    if let Err(e) = fix_feasible() {
                         panic!("Failed to fix feasibility: {:?}", e);
                     }
                 }
     
-                match check_feasible().await {
+                match check_feasible() {
                     Ok(double_check) if double_check => {
                         assert!(true);
                     },
