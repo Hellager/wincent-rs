@@ -162,6 +162,11 @@ pub async fn fix_feasible() -> Result<(), WincentError> {
 /// is applied to ensure that the operation does not hang indefinitely.
 pub async fn refresh_explorer_window() -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
+    use std::io::{Error, ErrorKind};
+
+    if !check_feasible().await? {
+        return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+    }
 
     const SCRIPT: &str = r#"
         $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
@@ -233,6 +238,11 @@ pub async fn refresh_explorer_window() -> Result<(), WincentError> {
 /// return only valid paths.
 async fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
     use powershell_script::PsScriptBuilder;
+    use std::io::{Error, ErrorKind};
+
+    if !check_feasible().await? {
+        return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+    }
 
     let (shell_namespace, condition) = match recent_type {
         QuickAccess::FrequentFolders => ("3936E9E4-D92C-4EEE-A85A-BC16D5EA0819", ""),
@@ -444,6 +454,11 @@ pub async fn is_in_quick_access(keywords: Vec<&str>, specific_type: Option<Quick
 /// ```
 async fn handle_recent_files(path: &str, is_remove: bool) -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
+    use std::io::{Error, ErrorKind};
+
+    if !check_feasible().await? {
+        return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+    }
 
     if !is_remove {
         return Err(WincentError::IoError(std::io::ErrorKind::Unsupported.into()));
@@ -565,6 +580,11 @@ pub async fn remove_from_recent_files(path: &str) -> Result<(), WincentError> {
 /// ```
 async fn handle_frequent_folders(path: &str) -> Result<(), WincentError> {
     use powershell_script::PsScriptBuilder;
+    use std::io::{Error, ErrorKind};
+
+    if !check_feasible().await? {
+        return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+    }
 
     let script: String = format!(r#"
             $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
