@@ -19,6 +19,15 @@ const SCRIPT_TIMEOUT: u64 = 3;
 
 /******************************** Utils ********************************/
 
+fn is_admin() -> bool {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::UI::Shell::IsUserAnAdmin;
+
+    unsafe {
+        IsUserAnAdmin() == BOOL(1)
+    } 
+}
+
 /// Checks if the PowerShell execution policy for the current user is set to a 
 /// feasible value that allows script execution.
 ///
