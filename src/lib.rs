@@ -866,8 +866,10 @@ pub fn is_visialbe(target: QuickAccess) -> Result<bool, WincentError> {
     };
 
     let val = reg_key.get_raw_value(reg_value).map_err(WincentError::IoError)?;
+    // raw reg value vec will contains '\n' between characters, needs to filter
+    let filtered_vec: Vec<u8> = val.bytes.into_iter().filter(|&x| x != 0).collect();
 
-    let visibility = u32::from_ne_bytes(val.bytes[0..4].try_into().map_err(|e| WincentError::ConvertError(e))?);
+    let visibility = u32::from_ne_bytes(filtered_vec[0..4].try_into().map_err(|e| WincentError::ConvertError(e))?);
     
     Ok(visibility != 0)
 }
