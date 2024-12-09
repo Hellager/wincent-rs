@@ -4,7 +4,7 @@ use std::io::{self, Write, Error, ErrorKind};
 use log::debug;
 use wincent::{
     WincentError, QuickAccess, 
-    check_feasible, fix_feasible, check_fix_feasible,
+    check_feasible, fix_feasible,
     is_in_quick_access, add_to_frequent_folders, remove_from_frequent_folders
 };
 
@@ -29,7 +29,7 @@ async fn main() -> Result<(), WincentError> {
     if !is_feasible{
         fix_feasible()?;
 
-        if check_fix_feasible()? {
+        if check_feasible()? {
             debug!("fix script feasible success!");
         } else {
             debug!("fix acript feasible failed!!!");

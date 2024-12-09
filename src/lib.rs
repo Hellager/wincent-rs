@@ -15,88 +15,122 @@ pub enum WincentError {
     TimeoutError(tokio::time::error::Elapsed)
 }
 
-const SCRIPT_TIMEOUT: u64 = 3;
+const SCRIPT_TIMEOUT: u64 = 5;
 
-/******************************** Utils ********************************/
+/******************************** Check/Set Feasible ********************************/
 
-/// Retrieves or creates a registry key for the PowerShell execution policy.
+/// Checks if the current user has administrative privileges.
 ///
-/// This function attempts to create or open a registry key located at
-/// `SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell` under the
-/// current user's registry hive (HKEY_CURRENT_USER). The function allows
-/// specifying flags that control the creation of the registry key.
+/// This function utilizes the Windows API to determine if the
+/// calling user is an administrator. It calls the `IsUserAnAdmin`
+/// function from the `windows` crate, which returns a boolean
+/// value indicating whether the user has admin rights.
 ///
-/// # Parameters
+/// # Safety
 ///
-/// * `flag`: A `u32` value representing the flags to be used when creating
-///   the registry key. These flags can control various aspects of the key's
-///   creation, such as permissions or whether to create the key if it does
-///   not exist.
+/// This function is marked as `unsafe` because it directly calls
+/// an external function from the Windows API. The caller must ensure
+/// that the environment is appropriate for this call, as improper
+/// usage could lead to undefined behavior.
 ///
 /// # Returns
 ///
-/// This function returns a `Result` which is either:
-/// - `Ok(RegKey)`: A successful result containing the `RegKey` object that
-///   represents the created or opened registry key.
-/// - `Err(WincentError)`: An error of type `WincentError` if the operation
-///   fails, which may include I/O errors or other issues related to registry
-///   access.
-///
-/// # Errors
-///
-/// The function will return an error if it fails to create or open the
-/// specified registry key. The error is wrapped in the `WincentError` type,
-/// which should be handled by the caller.
+/// Returns `true` if the current user is an administrator, and
+/// `false` otherwise.
 ///
 /// # Example
 ///
 /// ```rust
-/// let flag = KEY_WRITE; // Example flag
-/// match get_execution_policy_reg(flag) {
+/// if is_admin() {
+///     println!("User has administrative privileges.");
+/// } else {
+///     println!("User does not have administrative privileges.");
+/// }
+/// ```
+fn is_admin() -> bool {
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::UI::Shell::IsUserAnAdmin;
+
+    unsafe {
+        IsUserAnAdmin() == BOOL(1)
+    }
+}
+
+/// Retrieves the execution policy registry key for PowerShell.
+///
+/// This function attempts to access the PowerShell execution policy
+/// registry key located at `SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell`.
+/// It checks if the current user has administrative privileges to determine
+/// whether to access the key in the `HKEY_LOCAL_MACHINE` (HKLM) hive or
+/// the `HKEY_CURRENT_USER` (HKCU) hive.
+///
+/// If the user is an administrator, it opens the registry key in HKLM with
+/// read and write access. If the user is not an administrator, it creates
+/// the registry key in HKCU with the same access rights.
+///
+/// # Errors
+///
+/// This function returns a `WincentError` if there is an issue opening or
+/// creating the registry key, such as insufficient permissions or other I/O errors.
+///
+/// # Returns
+///
+/// Returns a `Result<winreg::RegKey, WincentError>`, where `Ok` contains
+/// the opened or created registry key, and `Err` contains the error information.
+///
+/// # Example
+///
+/// ```rust
+/// match get_execution_policy_reg() {
 ///     Ok(reg_key) => {
-///         // Use the reg_key as needed
+///         // Use the registry key
 ///     },
 ///     Err(e) => {
-///         eprintln!("Failed to get registry key: {:?}", e);
+///         eprintln!("Failed to get execution policy registry key: {:?}", e);
 ///     }
 /// }
 /// ```
-fn get_execution_policy_reg(flag: u32) -> Result<winreg::RegKey, WincentError> {
+fn get_execution_policy_reg() -> Result<winreg::RegKey, WincentError> {
     use winreg::enums::*;
     use winreg::RegKey;
 
     let key_path = "SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell";
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
-    let (reg_key, _) = hkcu.create_subkey_with_flags(key_path, flag)
-        .map_err(WincentError::IoError)?;
-
-    Ok(reg_key)
+    if is_admin() {
+        let hklm_reg_key = hklm.open_subkey_with_flags(key_path, winreg::enums::KEY_READ | winreg::enums::KEY_WRITE).map_err(WincentError::IoError)?;
+        return Ok(hklm_reg_key);
+    } else {
+        let (hkcu_reg_key, _) = hkcu.create_subkey_with_flags(key_path, winreg::enums::KEY_READ | winreg::enums::KEY_WRITE)
+            .map_err(WincentError::IoError)?;
+        return Ok(hkcu_reg_key);
+    }
 }
 
-/// Checks if the current PowerShell execution policy is feasible for execution.
+/// Checks if the current PowerShell execution policy is feasible.
 ///
-/// This function retrieves the current PowerShell execution policy from the
-/// Windows registry and checks if it is one of the policies that allow
-/// script execution. The feasible policies are "AllSigned", "Bypass",
-/// "RemoteSigned", and "Unrestricted".
+/// This function retrieves the execution policy from the registry and
+/// checks if it matches one of the predefined feasible options:
+/// "AllSigned", "Bypass", "RemoteSigned", or "Unrestricted".
 ///
-/// # Returns
-///
-/// This function returns a `Result` which is either:
-/// - `Ok(bool)`: A successful result containing a boolean value indicating
-///   whether the current execution policy is feasible for script execution.
-///   Returns `true` if the policy is one of the feasible options, and `false`
-///   otherwise.
-/// - `Err(WincentError)`: An error of type `WincentError` if the operation
-///   fails, which may include issues related to accessing the registry or
-///   retrieving the value.
+/// It first calls `get_execution_policy_reg` to obtain the appropriate
+/// registry key. If the registry value for "ExecutionPolicy" is found,
+/// it filters out any null bytes and converts the value to a string.
+/// The function then checks if the resulting execution policy is one of
+/// the feasible options.
 ///
 /// # Errors
 ///
-/// The function will return an error if it fails to retrieve the execution
-/// policy from the registry. The error is wrapped in the `WincentError` type,
-/// which should be handled by the caller.
+/// This function returns a `WincentError` if there is an issue accessing
+/// the registry or if an I/O error occurs. If the registry value is not
+/// found, it returns `Ok(false`.
+///
+/// # Returns
+///
+/// Returns a `Result<bool, WincentError>`, where `Ok(true)` indicates
+/// that the execution policy is feasible, `Ok(false)` indicates that
+/// it is not feasible or not found, and `Err` contains the error information.
 ///
 /// # Example
 ///
@@ -104,68 +138,79 @@ fn get_execution_policy_reg(flag: u32) -> Result<winreg::RegKey, WincentError> {
 /// match check_feasible() {
 ///     Ok(is_feasible) => {
 ///         if is_feasible {
-///             println!("The execution policy is feasible for script execution.");
+///             println!("The execution policy is feasible.");
 ///         } else {
-///             println!("The execution policy is not feasible for script execution.");
+///             println!("The execution policy is not feasible.");
 ///         }
 ///     },
 ///     Err(e) => {
-///         eprintln!("Failed to check execution policy: {:?}", e);
+///         eprintln!("Error checking execution policy: {:?}", e);
 ///     }
 /// }
 /// ```
 pub fn check_feasible() -> Result<bool, WincentError> {
-    let reg_key = get_execution_policy_reg(winreg::enums::KEY_READ)?;
-    let reg_value = "ExecutionPolicy";
+    let reg_value=  "ExecutionPolicy";
+    let reg_key = get_execution_policy_reg()?;
+    let feasible_options = ["AllSigned", "Bypass", "RemoteSigned", "Unrestricted"];
 
-    let val: String = reg_key.get_value(reg_value).map_err(WincentError::IoError)?;
-
-    let is_feasible = matches!(val.as_str(), "AllSigned" | "Bypass" | "RemoteSigned" | "Unrestricted");
-    
-    Ok(is_feasible)
+    match reg_key.get_raw_value(reg_value) {
+        Ok(val) => {
+            // raw reg value vec will contains '\n' between characters, needs to filter
+            let filtered_vec: Vec<u8> = val.bytes.into_iter().filter(|&x| x != 0).collect();
+            let val_in_string = String::from_utf8_lossy(&filtered_vec).to_string();
+            let _res = feasible_options.contains(&val_in_string.as_str());
+            return Ok(feasible_options.contains(&val_in_string.as_str()));
+        },
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Ok(false);
+            } else {
+                return Err(WincentError::IoError(e));
+            }
+        }
+    }
 }
 
-/// Sets the PowerShell execution policy to "RemoteSigned" in the Windows registry.
+/// Sets the PowerShell execution policy to "RemoteSigned".
 ///
-/// This function updates the PowerShell execution policy in the Windows
-/// registry to "RemoteSigned", which allows the execution of scripts that
-/// are signed by a trusted publisher and scripts that are created locally.
-///
-/// # Returns
-///
-/// This function returns a `Result` which is either:
-/// - `Ok(())`: A successful result indicating that the execution policy has
-///   been updated successfully.
-/// - `Err(WincentError)`: An error of type `WincentError` if the operation
-///   fails, which may include issues related to accessing the registry or
-///   setting the value.
+/// This function attempts to update the execution policy in the registry
+/// to "RemoteSigned" for the current user or the local machine, depending
+/// on the user's administrative privileges. It first retrieves the appropriate
+/// registry key by calling `get_execution_policy_reg`. Then, it sets the
+/// value of the "ExecutionPolicy" registry entry to "RemoteSigned".
 ///
 /// # Errors
 ///
-/// The function will return an error if it fails to set the execution policy
-/// in the registry. The error is wrapped in the `WincentError` type,
-/// which should be handled by the caller.
+/// This function returns a `WincentError` if there is an issue accessing
+/// the registry or if an I/O error occurs while setting the registry value.
+///
+/// # Returns
+///
+/// Returns a `Result<(), WincentError>`, where `Ok(())` indicates that the
+/// execution policy was successfully set, and `Err` contains the error information.
 ///
 /// # Example
 ///
 /// ```rust
 /// match fix_feasible() {
 ///     Ok(()) => {
-///         println!("Execution policy set to 'RemoteSigned' successfully.");
+///         println!("Execution policy successfully set to 'RemoteSigned'.");
 ///     },
 ///     Err(e) => {
-///         eprintln!("Failed to set execution policy: {:?}", e);
+///         eprintln!("Error setting execution policy: {:?}", e);
 ///     }
 /// }
 /// ```
 pub fn fix_feasible() -> Result<(), WincentError> {
-    let reg_key = get_execution_policy_reg(winreg::enums::KEY_WRITE)?;
-    let reg_value = "ExecutionPolicy";
+    let reg_value=  "ExecutionPolicy";
+    let reg_key = get_execution_policy_reg()?;
 
-    reg_key.set_value(reg_value, &"RemoteSigned").map_err(WincentError::IoError)?;
+    let _ = reg_key.set_value(reg_value, &"RemoteSigned").map_err(WincentError::IoError)?;
 
     Ok(())
 }
+
+/******************************** Utils ********************************/
 
 /// Refreshes all open Windows Explorer windows asynchronously.
 ///
@@ -295,7 +340,7 @@ async fn query_recent(recent_type: QuickAccess) -> Result<Vec<String>, WincentEr
     let ps = PsScriptBuilder::new()
         .no_profile(true)
         .non_interactive(true)
-        .hidden(false)
+        .hidden(true)
         .print_commands(false)
         .build();
 
