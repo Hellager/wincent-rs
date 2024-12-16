@@ -3,9 +3,9 @@ extern crate wincent;
 use std::io::{self, Write, Error, ErrorKind};
 use log::debug;
 use wincent::{
-    WincentError, QuickAccess, 
+    WincentError, 
     check_feasible, fix_feasible,
-    is_in_quick_access, add_to_frequent_folders, remove_from_frequent_folders
+    is_in_frequent_folders, add_to_frequent_folders, remove_from_frequent_folders
 };
 
 fn ask_user(prompt: String) -> bool {
@@ -40,7 +40,7 @@ async fn main() -> Result<(), WincentError> {
     let current_dir = std::env::current_dir().expect("Failed to get current directory");
     let current_dir_str = current_dir.to_str().expect("Failed to convert path to string");
 
-    if is_in_quick_access(vec![current_dir_str], Some(QuickAccess::FrequentFolders)).await? {
+    if is_in_frequent_folders(current_dir_str).await? {
         if ask_user(format!("Do you want to remove the current folder '{}' from Quick Access? (y/n)", current_dir_str)) {
             remove_from_frequent_folders(current_dir_str).await?;
         }
