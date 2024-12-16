@@ -326,6 +326,19 @@ pub async fn remove_from_frequent_folders(path: &str) -> Result<(), WincentError
                     Ok(result) => result,
                     Err(e) => return Err(e),
                 };
+
+                let is_exist = crate::is_in_frequent_folders(path).await?;
+                if is_exist {
+                    // if target folder already exist in Frequent Folders, there will be two conditions
+                    // 1. the target folder is a pinned folder, then we just need to do it once
+                    // 2. the target folder is not a pinned folder, but a frequent one, then we have to do it twice, sometimes, `removefromhome` not works
+                    crate::handle::handle_frequent_folders_with_ps_script(path).await?;
+
+                    let is_frequent = crate::is_in_frequent_folders(path).await?;
+                    if is_frequent {
+                        crate::handle::handle_frequent_folders_with_ps_script(path).await?;
+                    }
+                }
             
                 if is_in_quick_access {
                     crate::handle::handle_frequent_folders_with_ps_script(path).await?;
