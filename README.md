@@ -56,12 +56,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Toggling Visibility
 
 ```rust
-use wincent::{QuickAccess, set_visiable};
+use wincent::{QuickAccess, set_recent_files_visiable};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // hide Frequent Folders
-    match set_visible(QuickAccess::FrequentFolders, true) {
-        Ok(_) => println!("Successfully set visibility for Frequent Folders."),
+    match set_recent_files_visiable(true) {
+        Ok(_) => println!("Successfully set visibility for Recent Files."),
         Err(e) => eprintln!("Failed to set visibility: {:?}", e),
     }
 
