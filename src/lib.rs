@@ -1,3 +1,56 @@
+//! # wincent
+//! 
+//! `wincent` is a Rust library for managing Windows Quick Access items, including recent files 
+//! and frequent folders. It provides a simple API to interact with Windows Quick Access functionality.
+//!
+//! ## Main Features
+//!
+//! - Query recent files and frequent folders
+//! - Add/Remove items from Quick Access
+//! - Check item existence in Quick Access
+//! - Control Quick Access visibility
+//! - Registry-based feasibility checks
+//!
+//! ## Examples
+//!
+//! ```rust
+//! use wincent::{
+//!     check_feasible, fix_feasible, get_frequent_folders, get_quick_access_items, get_recent_files, WincentError
+//! };
+//! use std::io::{Error, ErrorKind};
+//! 
+//! #[tokio::main]
+//! async fn main() -> Result<(), WincentError> {
+//!     if !check_feasible()?{
+//!         fix_feasible()?;
+//!
+//!         if !check_feasible()? {
+//!             return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+//!         }
+//!     }
+//!
+//!     let recent_files: Vec<String> = get_recent_files().await?;
+//!     let danger_content = "password";
+//! 
+//!     for item in recent_files {
+//!         if item.contains(danger_content) {
+//!             remove_from_recent_files(item).await?;
+//!         }
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Features
+//!
+//! - Async support
+//! - Error handling
+//! - PowerShell script integration
+//! - Registry management
+//! - Cross-version Windows support
+//!
+
 use visible::{is_visialbe_with_registry, set_visiable_with_registry};
 use std::io::{Error, ErrorKind};
 
@@ -6,6 +59,7 @@ mod feasible;
 mod query;
 mod visible;
 mod handle;
+mod empty;
 
 pub(crate) const SCRIPT_TIMEOUT: u64 = 5;
 
@@ -474,7 +528,7 @@ mod tests {
     }
 
     #[ignore]
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_check_handle_quick_access() {
         // see detail in `handle` module
         assert!(true);
