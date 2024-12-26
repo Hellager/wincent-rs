@@ -24,11 +24,23 @@ wincent = "*"
 ### Querying Quick Access Contents
 
 ```rust
-use wincent::get_quick_access_items;
+use wincent::{check_feasible, fix_feasible, get_quick_access_items，WincentError};
+use std::io::{Error, ErrorKind};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {    
+#[tokio::main]
+async fn main() -> Result<(), WincentError> {
+    // check if the quick access is feasible
+    if !check_feasible()?{
+        // if not, fix it
+        fix_feasible()?;
+
+        if !check_feasible()? {
+            return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+        }
+    }
+
     // List all current quick access items
-    let quick_access_items = get_quick_access_items()?;
+    let quick_access_items: Vec<String> = get_quick_access_items().await?;
     for item in quick_access_items {
         println!("Quick Access items: {:?}", item);
     }
@@ -40,13 +52,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Removing a Quick Access Entry
 
 ```rust
-use wincent::remove_from_recent_files;
+use wincent::{check_feasible, fix_feasible, get_recent_files，WincentError};
+use std::io::{Error, ErrorKind};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Remove a specific path from quick access
-    match remove_from_recent_files("C:\\path\\to\\file.txt").await {
-        Ok(()) => println!("File removed from recent files."),
-        Err(e) => eprintln!("Error removing file from recent files: {:?}", e),
+#[tokio::main]
+async fn main() -> Result<(), WincentError> {
+    // check if the quick access is feasible
+    if !check_feasible()?{
+        // if not, fix it
+        fix_feasible()?;
+
+        if !check_feasible()? {
+            return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+        }
+    }
+
+    // List all current quick access items
+    let recent_files: Vec<String> = get_recent_files().await?;
+    let danger_content = "password";
+    for item in recent_files {
+        if item.contains(danger_content) {
+            remove_from_recent_files(item).await?;
+        }
     }
 
     Ok(())
@@ -56,14 +83,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Toggling Visibility
 
 ```rust
-use wincent::{QuickAccess, set_recent_files_visiable};
+use wincent::{is_recent_files_visiable, WincentError};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // hide Frequent Folders
-    match set_recent_files_visiable(true) {
-        Ok(_) => println!("Successfully set visibility for Recent Files."),
-        Err(e) => eprintln!("Failed to set visibility: {:?}", e),
-    }
+fn main() -> Result<(), WincentError> {
+    let is_visiable: bool = is_recent_files_visiable()?;
+    println!("is_visiable: {:?}", is_visiable);
+
+    set_recent_files_visiable(!is_visiable)?;
 
     Ok(())
 }
