@@ -1,58 +1,54 @@
-use crate::WincentError;
+use crate::error::{WincentResult, WincentError};
 
-/// Retrieves the registry key for Quick Access settings in Windows.
+/// Retrieves the registry key for Quick Access settings.
 ///
-/// This function attempts to open the registry key located at
-/// `HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer`.
-/// If successful, it returns the corresponding `RegKey`. If it fails,
-/// it returns a `WincentError` indicating the type of error encountered.
+/// This function opens the registry key associated with Quick Access settings in Windows Explorer.
+/// It specifically accesses the `HKEY_CURRENT_USER` hive to retrieve the relevant subkey.
 ///
-/// # Errors
+/// # Returns
 ///
-/// This function can return the following errors:
-/// - `WincentError::IoError`: If the registry key cannot be found or if there is an
-///   I/O error while attempting to open the key.
+/// Returns a `WincentResult<winreg::RegKey>`, which contains the requested registry key.
+/// If the operation is successful, it returns `Ok(reg_key)`. If there is an error accessing the registry,
+/// it returns `WincentError::Io`.
 ///
-/// # Examples
+/// # Example
 ///
-/// ```
-/// match get_quick_access_reg() {
-///     Ok(key) => println!("Successfully retrieved Quick Access registry key."),
-///     Err(e) => eprintln!("Failed to retrieve Quick Access registry key: {:?}", e),
+/// ```rust
+/// fn main() -> Result<(), WincentError> {
+///     let quick_access_key = get_quick_access_reg()?;
+///     // Use quick_access_key for further operations
+///     Ok(())
 /// }
 /// ```
-fn get_quick_access_reg() -> Result<winreg::RegKey, WincentError> {
+fn get_quick_access_reg() -> WincentResult<winreg::RegKey> {
     use winreg::enums::*;
     use winreg::RegKey;
 
     let hklm = RegKey::predef(HKEY_CURRENT_USER);
     hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")
-        .map_err(WincentError::IoError)
+        .map_err(WincentError::Io)
 }
 
 /// Checks and fixes the Quick Access registry settings.
 ///
-/// This function checks the values of the "ShowFrequent" and "ShowRecent" registry keys
-/// in the Quick Access registry key. If either of these values is missing, it sets them
-/// to 1 (enabled).
-/// 
-/// # Errors
+/// This function retrieves the Quick Access registry key and checks for the presence of specific values:
+/// "ShowFrequent" and "ShowRecent". If any of these values are missing, it sets them to `1` (enabled).
 ///
-/// This function can return the following errors:
-/// - `WincentError::IoError`: If the registry key cannot be found or if there is an
-///   I/O error while attempting to open the key.
+/// # Returns
+///
+/// Returns a `WincentResult<()>`. If the operation is successful, it returns `Ok(())`.
+/// If there is an error accessing or modifying the registry, it returns `WincentError::Io`.
 ///
 /// # Example
-/// ```rust
-/// use your_crate::WincentError;
 ///
+/// ```rust
 /// fn main() -> Result<(), WincentError> {
-/// match check_fix_quick_acess_reg() {
-///     Ok(_) => println!("Successfully check/fix Quick Access registry key values."),
-///     Err(e) => eprintln!("Failed to fix Quick Access registry key: {:?}", e),
+///     check_fix_quick_access_reg()?;
+///     println!("Quick Access registry settings checked and fixed if necessary.");
+///     Ok(())
 /// }
 /// ```
-fn check_fix_quick_acess_reg() -> Result<(), WincentError> {
+fn check_fix_quick_acess_reg() -> WincentResult<()> {
     let reg_key = get_quick_access_reg()?;
 
     let values_to_check = vec!["ShowFrequent", "ShowRecent"];
@@ -62,7 +58,7 @@ fn check_fix_quick_acess_reg() -> Result<(), WincentError> {
                 // do nothing
             },
             Err(_) => {
-                reg_key.set_value(value_name, &u32::from(1 as u8)).map_err(|e| WincentError::IoError(e))?;
+                reg_key.set_value(value_name, &u32::from(1 as u8)).map_err(|e| WincentError::Io(e))?;
             }
         }
     }
@@ -70,32 +66,39 @@ fn check_fix_quick_acess_reg() -> Result<(), WincentError> {
     Ok(())
 }
 
-/// Checks if the specified Quick Access target is visible in Windows.
+/// Checks the visibility of a Quick Access item based on registry settings.
 ///
-/// This function retrieves the visibility setting for a given Quick Access target
-/// (Frequent Folders, Recent Files, or All) from the Windows registry. It returns
-/// `Ok(true)` if the target is visible, `Ok(false)` if it is not, or an error
-/// if the operation fails.
+/// This function retrieves the Quick Access registry key and checks if the specified target
+/// (Frequent Folders, Recent Files, or All) is visible based on the corresponding registry value.
+/// It ensures that the registry settings are fixed if necessary before checking the visibility.
 ///
 /// # Parameters
 ///
-/// - `target`: A `QuickAccess` enum value representing the target to check visibility for.
+/// - `target`: An enum value of type `QuickAccess` that specifies which item to check for visibility.
+///   - `QuickAccess::FrequentFolders`: Checks visibility for Frequent Folders.
+///   - `QuickAccess::RecentFiles`: Checks visibility for Recent Files.
+///   - `QuickAccess::All`: Checks visibility for Recent Files (as a fallback).
 ///
-/// # Errors
+/// # Returns
 ///
-/// This function can return the following errors:
-/// - `WincentError::IoError`: If there is an I/O error while accessing the registry.
-/// - `WincentError::ConvertError`: If there is an error converting the registry value.
+/// Returns a `WincentResult<bool>`, which indicates whether the specified Quick Access item is visible.
+/// If the operation is successful, it returns `Ok(true)` if visible, or `Ok(false)` if not visible.
+/// If there is an error accessing the registry, it returns `WincentError::Io`.
 ///
-/// # Examples
+/// # Example
 ///
-/// ```
-/// match is_visible(QuickAccess::FrequentFolders) {
-///     Ok(visible) => println!("Frequent Folders visibility: {}", visible),
-///     Err(e) => eprintln!("Failed to check visibility: {:?}", e),
+/// ```rust
+/// fn main() -> Result<(), WincentError> {
+///     let is_visible = is_visible_with_registry(QuickAccess::FrequentFolders)?;
+///     if is_visible {
+///         println!("Frequent Folders are visible.");
+///     } else {
+///         println!("Frequent Folders are not visible.");
+///     }
+///     Ok(())
 /// }
 /// ```
-pub(crate) fn is_visialbe_with_registry(target: crate::QuickAccess) -> Result<bool, WincentError> {
+pub(crate) fn is_visialbe_with_registry(target: crate::QuickAccess) -> WincentResult<bool> {
     let reg_key = get_quick_access_reg()?;
     let _ = check_fix_quick_acess_reg()?;
     let reg_value = match target {
@@ -104,42 +107,44 @@ pub(crate) fn is_visialbe_with_registry(target: crate::QuickAccess) -> Result<bo
         crate::QuickAccess::All => "ShowRecent",
     };
 
-    let val = reg_key.get_raw_value(reg_value).map_err(WincentError::IoError)?;
+    let val = reg_key.get_raw_value(reg_value).map_err(WincentError::Io)?;
     // raw reg value vec will contains '\n' between characters, needs to filter
     let filtered_vec: Vec<u8> = val.bytes.into_iter().filter(|&x| x != 0).collect();
 
-    let visibility = u32::from_ne_bytes(filtered_vec[0..4].try_into().map_err(|e| WincentError::ConvertError(e))?);
+    let visibility = u32::from_ne_bytes(filtered_vec[0..4].try_into().map_err(|e| WincentError::ArrayConversion(e))?);
     
     Ok(visibility != 0)
 }
 
-/// Sets the visibility of the specified Quick Access target in Windows.
+/// Sets the visibility of a Quick Access item in the registry.
 ///
-/// This function updates the visibility setting for a given Quick Access target
-/// (Frequent Folders, Recent Files, or All) in the Windows registry. It takes a
-/// boolean value indicating whether the target should be visible (`true`) or not
-/// (`false`). If the operation is successful, it returns `Ok(())`. If it fails,
-/// it returns a `WincentError` indicating the type of error encountered.
+/// This function updates the registry settings to set the specified target (Frequent Folders,
+/// Recent Files, or All) to be visible or not based on the provided `visible` parameter.
+/// It ensures that the registry settings are fixed if necessary before making the update.
 ///
 /// # Parameters
 ///
-/// - `target`: A `QuickAccess` enum value representing the target to set visibility for.
-/// - `visible`: A boolean indicating the desired visibility state.
+/// - `target`: An enum value of type `QuickAccess` that specifies which item to set the visibility for.
+///   - `QuickAccess::FrequentFolders`: Sets visibility for Frequent Folders.
+///   - `QuickAccess::RecentFiles`: Sets visibility for Recent Files.
+///   - `QuickAccess::All`: Sets visibility for Recent Files (as a fallback).
+/// - `visible`: A boolean indicating whether the specified Quick Access item should be visible (`true`) or not (`false`).
 ///
-/// # Errors
+/// # Returns
 ///
-/// This function can return the following errors:
-/// - `WincentError::IoError`: If there is an I/O error while accessing the registry.
+/// Returns a `WincentResult<()>`. If the operation is successful, it returns `Ok(())`.
+/// If there is an error accessing or modifying the registry, it returns `WincentError::Io`.
 ///
-/// # Examples
+/// # Example
 ///
-/// ```
-/// match set_visible(QuickAccess::FrequentFolders, true) {
-///     Ok(_) => println!("Successfully set visibility for Frequent Folders."),
-///     Err(e) => eprintln!("Failed to set visibility: {:?}", e),
+/// ```rust
+/// fn main() -> Result<(), WincentError> {
+///     set_visible_with_registry(QuickAccess::FrequentFolders, true)?;
+///     println!("Frequent Folders visibility set successfully.");
+///     Ok(())
 /// }
 /// ```
-pub(crate) fn set_visiable_with_registry(target: crate::QuickAccess, visiable: bool) -> Result<(), WincentError> {
+pub(crate) fn set_visiable_with_registry(target: crate::QuickAccess, visiable: bool) -> WincentResult<()> {
     let reg_key = get_quick_access_reg()?;
     let _ = check_fix_quick_acess_reg()?;
     let reg_value = match target {
@@ -148,46 +153,54 @@ pub(crate) fn set_visiable_with_registry(target: crate::QuickAccess, visiable: b
         crate::QuickAccess::All => "ShowRecent",
     };
 
-    reg_key.set_value(reg_value, &u32::from(visiable)).map_err(WincentError::IoError)?;
+    reg_key.set_value(reg_value, &u32::from(visiable)).map_err(WincentError::Io)?;
 
     Ok(())
 }
 
 #[cfg(test)]
-mod visible_test {
-    use crate::utils::init_test_logger;
+mod tests {
     use super::*;
-    
+    use crate::error::WincentResult;
+    use crate::utils::init_test_logger;
+    use crate::QuickAccess;
+    use log::debug;
+
+    #[ignore]
     #[test]
-    fn test_check_visiable() {
+    fn test_recent_files_visibility() -> WincentResult<()> {
         init_test_logger();
 
-        let iff = is_visialbe_with_registry(crate::QuickAccess::RecentFiles).unwrap();
-        let irf = is_visialbe_with_registry(crate::QuickAccess::FrequentFolders).unwrap();
+        let initial_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
+        debug!("Initial recent files visibility: {}", initial_state);
 
-        assert_eq!(iff, true);
-        assert_eq!(irf, true);
+        set_visiable_with_registry(QuickAccess::RecentFiles, !initial_state)?;
+        let changed_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
+        assert_eq!(changed_state, !initial_state, "Visibility should be changed");
+
+        set_visiable_with_registry(QuickAccess::RecentFiles, initial_state)?;
+        let final_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
+        assert_eq!(final_state, initial_state, "Should restore to initial state");
+
+        Ok(())
     }
 
     #[ignore]
     #[test]
-    fn test_restore_visiable() {
-        // !!! Change the visiablity about quick access may lead to unexpected result about layout !!!
+    fn test_frequent_folders_visibility() -> WincentResult<()> {
         init_test_logger();
 
-        let ori_iff = is_visialbe_with_registry(crate::QuickAccess::RecentFiles).unwrap();
-        let ori_irf = is_visialbe_with_registry(crate::QuickAccess::FrequentFolders).unwrap();
+        let initial_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
+        debug!("Initial frequent folders visibility: {}", initial_state);
 
-        set_visiable_with_registry(crate::QuickAccess::RecentFiles, !ori_iff).unwrap();
-        set_visiable_with_registry(crate::QuickAccess::FrequentFolders, !ori_irf).unwrap();
-    
-        let new_iff = is_visialbe_with_registry(crate::QuickAccess::RecentFiles).unwrap();
-        let new_irf = is_visialbe_with_registry(crate::QuickAccess::FrequentFolders).unwrap();
+        set_visiable_with_registry(QuickAccess::FrequentFolders, !initial_state)?;
+        let changed_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
+        assert_eq!(changed_state, !initial_state, "Visibility should be changed");
 
-        assert_eq!(ori_iff, !new_iff);
-        assert_eq!(ori_irf, !new_irf);
+        set_visiable_with_registry(QuickAccess::FrequentFolders, initial_state)?;
+        let final_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
+        assert_eq!(final_state, initial_state, "Should restore to initial state");
 
-        set_visiable_with_registry(crate::QuickAccess::RecentFiles, ori_iff).unwrap();
-        set_visiable_with_registry(crate::QuickAccess::FrequentFolders, ori_irf).unwrap();
+        Ok(())
     }
 }

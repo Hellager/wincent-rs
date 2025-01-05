@@ -1,13 +1,12 @@
 extern crate wincent;
 
 use wincent::{
-    check_feasible, fix_feasible, get_frequent_folders, get_quick_access_items, get_recent_files, WincentError
+    check_feasible, fix_feasible, get_frequent_folders, get_quick_access_items, get_recent_files, error::WincentError
 };
 use log::debug;
 use std::io::{Error, ErrorKind};
 
-#[tokio::main]
-async fn main() -> Result<(), WincentError> {
+fn main() -> Result<(), WincentError> {
     let _ = env_logger::builder()
         .target(env_logger::Target::Stdout)
         .filter_level(log::LevelFilter::Trace)
@@ -18,19 +17,15 @@ async fn main() -> Result<(), WincentError> {
     debug!("is feasible: {}", is_feasible);
     if !is_feasible{
         debug!("script not feasible, try fix");
-        fix_feasible()?;
-
-        if check_feasible()? {
-            debug!("fix script feasible success!");
-        } else {
+        if !fix_feasible()? {
             debug!("fix acript feasible failed!!!");
-            return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+            return Err(WincentError::Io(Error::from(ErrorKind::PermissionDenied)));            
         }
     }
 
-    let recent_files: Vec<String> = get_recent_files().await?;
-    let frequent_folders: Vec<String> = get_frequent_folders().await?;
-    let quick_access: Vec<String> = get_quick_access_items().await?;
+    let recent_files: Vec<String> = get_recent_files()?;
+    let frequent_folders: Vec<String> = get_frequent_folders()?;
+    let quick_access: Vec<String> = get_quick_access_items()?;
 
     debug!("recent files");
     for (idx, item) in recent_files.iter().enumerate() {

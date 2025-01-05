@@ -1,106 +1,105 @@
-use crate::{QuickAccess, WincentError};
+use crate::{
+    QuickAccess, 
+    scripts::{Script, execute_ps_script},
+    error::{WincentError, WincentResult}
+};
 
-/// Queries recent items from the Quick Access section of Windows Explorer.
+/// Queries recent items from Quick Access using a PowerShell script.
 ///
-/// This asynchronous function retrieves a list of recent items based on the specified
-/// `recent_type`. It uses a PowerShell script to access the Quick Access feature of
-/// Windows Explorer and returns the paths of the recent items as a vector of strings.
+/// This function executes a PowerShell script to retrieve items from Quick Access based on the specified type.
+/// It can query all items, recent files, or frequent folders.
 ///
 /// # Parameters
 ///
-/// - `recent_type`: An enum of type `QuickAccess` that specifies the type of recent items
-///   to query. It can be one of the following:
-///   - `QuickAccess::FrequentFolders`: Retrieves frequently accessed folders.
-///   - `QuickAccess::RecentFiles`: Retrieves recently accessed files (excluding folders).
-///   - `QuickAccess::All`: Retrieves all recent items (both files and folders).
+/// - `qa_type`: An enum value of type `QuickAccess` that specifies the type of items to query.
+///   - `QuickAccess::All`: Queries all items in Quick Access.
+///   - `QuickAccess::RecentFiles`: Queries recent files.
+///   - `QuickAccess::FrequentFolders`: Queries frequent folders.
 ///
 /// # Returns
 ///
-/// This function returns a `Result<Vec<String>, WincentError>`, which can be:
-/// - `Ok(Vec<String>)`: A vector containing the paths of the recent items if the operation
-///   is successful.
-/// - `Err(WincentError)`: An error of type `WincentError` if the operation fails. Possible
-///   errors include:
-///   - `WincentError::ScriptError`: If there is an error executing the PowerShell script.
-///   - `WincentError::ExecuteError`: If there is an error during the execution of the task.
-///   - `WincentError::TimeoutError`: If the operation times out.
+/// Returns a `WincentResult<Vec<String>>`, which contains a vector of strings representing the queried items.
+/// If the operation is successful, it returns `Ok(data)`. If the script fails, it returns `WincentError::ScriptFailed`
+/// with the error message.
 ///
 /// # Example
 ///
 /// ```rust
-/// match query_recent_with_ps_script(QuickAccess::RecentFiles).await {
-///     Ok(paths) => println!("Recent files: {:?}", paths),
-///     Err(e) => eprintln!("Error querying recent files: {:?}", e),
+/// fn main() -> Result<(), WincentError> {
+///     let recent_files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
+///     for file in recent_files {
+///         println!("{}", file);
+///     }
+///     Ok(())
 /// }
 /// ```
-///
-/// # Notes
-///
-/// The function constructs a PowerShell script that sets the output encoding to UTF-8,
-/// creates a Shell.Application COM object, and retrieves the items from the specified
-/// Quick Access namespace. The results are processed to filter out empty lines and
-/// return only valid paths.
-pub(crate) async fn query_recent_with_ps_script(recent_type: QuickAccess) -> Result<Vec<String>, WincentError> {
-    use powershell_script::PsScriptBuilder;
-
-    let (shell_namespace, condition) = match recent_type {
-        QuickAccess::FrequentFolders => ("3936E9E4-D92C-4EEE-A85A-BC16D5EA0819", ""),
-        QuickAccess::RecentFiles => ("679f85cb-0220-4080-b29b-5540cc05aab6", "| where {$_.IsFolder -eq $false}"),
-        QuickAccess::All => ("679f85cb-0220-4080-b29b-5540cc05aab6", ""),
+pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+    let output = match qa_type {
+        QuickAccess::All => execute_ps_script(Script::QueryQuickAccess, None)?,
+        QuickAccess::RecentFiles => execute_ps_script(Script::QuertRecentFile, None)?,
+        QuickAccess::FrequentFolders => execute_ps_script(Script::QueryFrequentFolder, None)?,
     };
 
-    let script = format!(r#"
-        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-        $shell = New-Object -ComObject Shell.Application;
-        $shell.Namespace('shell:::{{{}}}').Items() {} | ForEach-Object {{ $_.Path }};
-    "#, shell_namespace, condition);
+    if output.status.success() {
+        let stdout_str = String::from_utf8(output.stdout)
+            .map_err(|e| WincentError::Utf8(e))?;
+        
+        let data: Vec<String> = stdout_str
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(String::from)
+            .collect();
 
-    let ps = PsScriptBuilder::new()
-        .no_profile(true)
-        .non_interactive(true)
-        .hidden(true)
-        .print_commands(false)
-        .build();
-
-    let handle = tokio::task::spawn_blocking(move || {
-        ps.run(&script).map(|output| {
-            output.stdout()
-                .map_or_else(Vec::new, |data| {
-                    data.lines()
-                        .filter_map(|item| {
-                            let trimmed = item.trim();
-                            if !trimmed.is_empty() {
-                                Some(trimmed.to_string())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                })
-        }).map_err(WincentError::ScriptError)
-    });
-
-    match tokio::time::timeout(tokio::time::Duration::from_secs(crate::SCRIPT_TIMEOUT), handle).await {
-        Ok(res) => {
-            res.map_err(WincentError::ExecuteError)?
-        },
-        Err(e) => Err(WincentError::TimeoutError(e)),
+        Ok(data)
+    } else {
+        let error = String::from_utf8(output.stderr)?;
+        Err(WincentError::ScriptFailed(error))
     }
 }
 
 #[cfg(test)]
-mod query_test {
+mod tests {
+    use super::*;
+    use crate::error::WincentResult;
     use crate::utils::init_test_logger;
     use log::debug;
-    use super::*;
 
-    #[tokio::test]
-    async fn test_print_out_quick_access() -> Result<(), WincentError> {
+    #[test]
+    fn test_query_recent_files() -> WincentResult<()> {
         init_test_logger();
-        let quick_access = query_recent_with_ps_script(QuickAccess::All).await?;
+        let files = query_recent_with_ps_script(crate::QuickAccess::RecentFiles)?;
+        
+        debug!("{} items in recent files", files.len());
+        for (index, item) in files.iter().enumerate() {
+            debug!("{}. {}", index + 1, item);
+        }
 
-        debug!("{} items in current quick access", quick_access.len());
-        for (index, item) in quick_access.iter().enumerate() {
+        Ok(())
+    }
+
+    #[test]
+    fn test_query_frequent_folders() -> WincentResult<()> {
+        init_test_logger();
+
+        let folders = query_recent_with_ps_script(crate::QuickAccess::FrequentFolders)?;
+        
+        debug!("{} items in frequent folders", folders.len());
+        for (index, item) in folders.iter().enumerate() {
+            debug!("{}. {}", index + 1, item);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_query_quick_access() -> WincentResult<()> {
+        init_test_logger();
+
+        let items = query_recent_with_ps_script(crate::QuickAccess::All)?;
+
+        debug!("{} items in Quick Access", items.len());
+        for (index, item) in items.iter().enumerate() {
             debug!("{}. {}", index + 1, item);
         }
 

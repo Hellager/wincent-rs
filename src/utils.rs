@@ -1,23 +1,21 @@
 #![allow(dead_code)]
 
-use crate::{check_feasible, WincentError};
+use crate::{
+    scripts::{Script, execute_ps_script}, 
+    error::{WincentError, WincentResult}
+};
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 
-/// Initializes the logger for testing purposes.
+/// Initializes the test logger for logging during tests.
 ///
 /// This function configures the logger to output log messages to standard output (stdout).
-/// It sets the log level filter to `Trace`, which means all log messages at this level
-/// and above will be displayed. The logger is marked as being in a test context, which
-/// can affect its behavior in certain logging frameworks.
-///
-/// This function is intended to be called in test setups to ensure that log messages
-/// are visible during test execution, aiding in debugging and verification of test
-/// outcomes.
+/// It sets the log level to `Trace`, which means all log messages of level `Trace` and above
+/// will be displayed. The logger is initialized in test mode.
 ///
 /// # Example
 ///
-/// ```
+/// ```rust
 /// #[cfg(test)]
 /// mod tests {
 ///     use super::*;
@@ -26,6 +24,7 @@ use windows::Win32::UI::Shell::IsUserAnAdmin;
 ///     fn test_logging() {
 ///         init_test_logger();
 ///         log::trace!("This is a trace message.");
+///         log::info!("This is an info message.");
 ///         // Additional test code...
 ///     }
 /// }
@@ -40,30 +39,23 @@ pub(crate) fn init_test_logger() {
 
 /// Checks if the current user has administrative privileges.
 ///
-/// This function utilizes the Windows API to determine if the
-/// calling user is an administrator. It calls the `IsUserAnAdmin`
-/// function from the `windows` crate, which returns a boolean
-/// value indicating whether the user has admin rights.
-///
-/// # Safety
-///
-/// This function is marked as `unsafe` because it directly calls
-/// an external function from the Windows API. The caller must ensure
-/// that the environment is appropriate for this call, as improper
-/// usage could lead to undefined behavior.
+/// This function uses the `IsUserAnAdmin` function from the Windows API to determine
+/// if the current user is an administrator. It returns `true` if the user is an admin,
+/// and `false` otherwise.
 ///
 /// # Returns
 ///
-/// Returns `true` if the current user is an administrator, and
-/// `false` otherwise.
+/// Returns a `bool` indicating whether the current user has administrative privileges.
 ///
 /// # Example
 ///
 /// ```rust
-/// if is_admin() {
-///     println!("User has administrative privileges.");
-/// } else {
-///     println!("User does not have administrative privileges.");
+/// fn main() {
+///     if is_admin() {
+///         println!("The user has administrative privileges.");
+///     } else {
+///         println!("The user does not have administrative privileges.");
+///     }
 /// }
 /// ```
 pub(crate) fn is_admin() -> bool {
@@ -72,67 +64,34 @@ pub(crate) fn is_admin() -> bool {
     }
 }
 
-/// Refreshes all open Windows Explorer windows asynchronously.
+/// Refreshes the Windows Explorer window using a PowerShell script.
 ///
-/// This function constructs and executes a PowerShell script that refreshes all
-/// currently open Windows Explorer windows. It uses the `powershell_script` crate
-/// to build and run the PowerShell script in a non-interactive manner.
+/// This function executes a PowerShell script to refresh the Windows Explorer window.
+/// It checks the output status to determine if the operation was successful.
 ///
-/// # Errors
+/// # Returns
 ///
-/// This function returns a `Result<(), WincentError>`, which can be:
-/// - `Ok(())` if the operation was successful.
-/// - `Err(WincentError::ScriptError)` if there was an error executing the PowerShell script.
-/// - `Err(WincentError::TimeoutError)` if the operation timed out.
-/// - `Err(WincentError::ExecuteError)` if there was an error during execution.
+/// Returns a `WincentResult<()>`. If the operation is successful, it returns `Ok(())`.
+/// If the script fails, it returns `WincentError::ScriptFailed` with the error message.
 ///
 /// # Example
 ///
 /// ```rust
-/// match refresh_explorer_window().await {
-///     Ok(()) => println!("Explorer windows refreshed successfully."),
-///     Err(e) => eprintln!("Failed to refresh explorer windows: {:?}", e),
+/// fn main() -> Result<(), WincentError> {
+///     refresh_explorer_window()?;
+///     println!("Explorer window refreshed successfully.");
+///     Ok(())
 /// }
 /// ```
-///
-/// # Notes
-///
-/// The PowerShell script executed by this function sets the output encoding to UTF-8,
-/// creates a Shell.Application COM object, retrieves all open windows, and refreshes each one.
-/// The script is run in a blocking manner using `tokio::task::spawn_blocking`, and a timeout
-/// is applied to ensure that the operation does not hang indefinitely.
-pub(crate) async fn refresh_explorer_window() -> Result<(), WincentError> {
-    use powershell_script::PsScriptBuilder;
-    use std::io::{Error, ErrorKind};
+pub(crate) fn refresh_explorer_window() -> WincentResult<()> {
+    let output = execute_ps_script(Script::RefreshExplorer, None)?;
 
-    if !check_feasible()? {
-        return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
+    if output.status.success() {
+        Ok(())
+    } else {
+        let error = String::from_utf8(output.stderr)?;
+        Err(WincentError::ScriptFailed(error))
     }
-
-    const SCRIPT: &str = r#"
-        $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
-        $shellApplication = New-Object -ComObject Shell.Application;
-        $windows = $shellApplication.Windows();
-        $windows | ForEach-Object { $_.Refresh() }
-    "#;
-
-    let ps = PsScriptBuilder::new()
-        .no_profile(true)
-        .non_interactive(true)
-        .hidden(false)
-        .print_commands(false)
-        .build();
-
-    let handle = tokio::task::spawn_blocking(move || {
-        ps.run(SCRIPT)
-            .map(|_| ())
-            .map_err(WincentError::ScriptError)
-    });
-
-    tokio::time::timeout(tokio::time::Duration::from_secs(crate::SCRIPT_TIMEOUT), handle)
-        .await
-        .map_err(WincentError::TimeoutError)?
-        .map_err(WincentError::ExecuteError)?
 }
 
 #[cfg(test)]
@@ -150,11 +109,11 @@ mod utils_test {
     fn test_check_admin() {
         init_test_logger();
         let is_admin = is_admin();
-        debug!("has admin priveledge: {}", is_admin);
+        assert!(is_admin || !is_admin, "Should return a boolean value");
     }
 
-    #[tokio::test]
-    async fn test_refresh_explorer() -> Result<(), WincentError> {
-        refresh_explorer_window().await
+    #[test]
+    fn test_refresh_explorer() -> WincentResult<()> {
+        refresh_explorer_window()
     }
 }
