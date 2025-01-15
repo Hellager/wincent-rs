@@ -157,7 +157,7 @@ pub(crate) fn execute_ps_script(method: Script, para: Option<&str>) -> WincentRe
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            temp_script_file.path().to_str().ok_or_else(|| 
+            temp_script_file.into_temp_path().to_str().ok_or_else(|| 
                 WincentError::InvalidPath("Failed to convert temp file path".to_string())
             )?,
         ])
