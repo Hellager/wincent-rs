@@ -63,25 +63,31 @@ mod tests {
     use super::*;
     use crate::error::WincentResult;
 
-    #[test_log::test]
+    #[test]
     fn test_query_recent_files() -> WincentResult<()> {
-        let files = query_recent_with_ps_script(crate::QuickAccess::RecentFiles)?;
+        let files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
         
-        println!("{} items in recent files", files.len());
-        for (index, item) in files.iter().enumerate() {
-            println!("{}. {}", index + 1, item);
+        if !files.is_empty() {
+            assert!(files.iter().all(|path| !path.is_empty()), "Paths should not be empty");
+            
+            for path in &files {
+                assert!(path.contains(":\\"), "Path should be a valid Windows path format: {}", path);
+            }
         }
 
         Ok(())
     }
 
-    #[test_log::test]
+    #[test]
     fn test_query_frequent_folders() -> WincentResult<()> {
-        let folders = query_recent_with_ps_script(crate::QuickAccess::FrequentFolders)?;
+        let folders = query_recent_with_ps_script(QuickAccess::FrequentFolders)?;
         
-        println!("{} items in frequent folders", folders.len());
-        for (index, item) in folders.iter().enumerate() {
-            println!("{}. {}", index + 1, item);
+        if !folders.is_empty() {
+            assert!(folders.iter().all(|path| !path.is_empty()), "Paths should not be empty");
+            
+            for path in &folders {
+                assert!(path.contains(":\\"), "Path should be a valid Windows path format: {}", path);
+            }
         }
 
         Ok(())
@@ -89,11 +95,14 @@ mod tests {
 
     #[test_log::test]
     fn test_query_quick_access() -> WincentResult<()> {
-        let items = query_recent_with_ps_script(crate::QuickAccess::All)?;
+        let items = query_recent_with_ps_script(QuickAccess::All)?;
 
-        println!("{} items in Quick Access", items.len());
-        for (index, item) in items.iter().enumerate() {
-            println!("{}. {}", index + 1, item);
+        if !items.is_empty() {
+            assert!(items.iter().all(|path| !path.is_empty()), "Paths should not be empty");
+            
+            for path in &items {
+                assert!(path.contains(":\\"), "Path should be a valid Windows path format: {}", path);
+            }
         }
 
         Ok(())
