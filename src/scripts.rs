@@ -23,19 +23,19 @@ static REFRESH_EXPLORER: &str = r#"
 static QUERY_RECENT_FILE: &str = r#"
     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
     $shell = New-Object -ComObject Shell.Application;
-    $shell.Namespace('shell:::{{679f85cb-0220-4080-b29b-5540cc05aab6}}').Items() | where {$_.IsFolder -eq $false} | ForEach-Object {{ $_.Path }};
+    $shell.Namespace('shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}').Items() | where { $_.IsFolder -eq $false } | ForEach-Object { $_.Path };
 "#;
 
 static QUERY_FREQUENT_FOLDER: &str = r#"
     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
     $shell = New-Object -ComObject Shell.Application;
-    $shell.Namespace('shell:::{{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}}').Items() | ForEach-Object {{ $_.Path }};
+    $shell.Namespace('shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}').Items() | ForEach-Object { $_.Path };
 "#;
 
 static QUERY_QUICK_ACCESS: &str = r#"
     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
     $shell = New-Object -ComObject Shell.Application;
-    $shell.Namespace('shell:::{{679f85cb-0220-4080-b29b-5540cc05aab6}}').Items() | ForEach-Object {{ $_.Path }};
+    $shell.Namespace('shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}').Items() | ForEach-Object { $_.Path };
 "#;
 
 /// Generates PowerShell script content based on the specified method and optional parameters.
