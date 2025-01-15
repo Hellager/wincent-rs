@@ -33,7 +33,10 @@ pub enum WincentError {
     UnknownScriptMethod(u32),
 
     #[error("Missing function parameter")]
-    MissingParemeter
+    MissingParemeter,
+
+    #[error("Windows API error: {0}")]
+    WindowsApi(i32),
 }
 
 pub type WincentResult<T> = Result<T, WincentError>; 
