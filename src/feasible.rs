@@ -1,4 +1,8 @@
-use crate::{utils, error::{WincentError, WincentResult}};
+use crate::{
+    utils, 
+    scripts::{Script, execute_ps_script},
+    error::{WincentError, WincentResult}
+};
 use std::path::Path;
 
 /// Retrieves the registry key for the PowerShell execution policy.
@@ -114,6 +118,58 @@ pub(crate) fn fix_script_feasible_with_registry() -> WincentResult<()> {
     Ok(())
 }
 
+/// Checks if PowerShell query commands are available and executable.
+///
+/// # Returns
+///
+/// Returns a `WincentResult<bool>`, which is `true` if query commands are available,
+/// `false` otherwise, and an error if the script execution fails.
+///
+/// # Example
+///
+/// ```rust
+/// fn main() -> Result<(), WincentError> {
+///     let can_query = check_query_feasible_with_script()?;
+///     if can_query {
+///         println!("Query commands are available.");
+///     } else {
+///         println!("Query commands are not available.");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub(crate) fn check_query_feasible_with_script() -> WincentResult<bool> {
+    let output = execute_ps_script(Script::CheckQueryFeasible, None)?;
+
+    Ok(output.status.success())
+}
+
+/// Checks if PowerShell pin/unpin commands are available and executable.
+///
+/// # Returns
+///
+/// Returns a `WincentResult<bool>`, which is `true` if pin/unpin commands are available,
+/// `false` otherwise, and an error if the script execution fails.
+///
+/// # Example
+///
+/// ```rust
+/// fn main() -> Result<(), WincentError> {
+///     let can_pin = check_pinunpin_feasible_with_script()?;
+///     if can_pin {
+///         println!("Pin/unpin commands are available.");
+///     } else {
+///         println!("Pin/unpin commands are not available.");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub(crate) fn check_pinunpin_feasible_with_script() -> WincentResult<bool> {
+    let output = execute_ps_script(Script::CheckPinUnpinFeasible, None)?;
+
+    Ok(output.status.success())
+}
+
 /// Checks if a registry path exists.
 ///
 /// # Parameters
@@ -175,36 +231,105 @@ mod tests {
     #[test]
     fn test_check_script_feasible() -> WincentResult<()> {
         let result = check_script_feasible_with_registry()?;
-        assert!(result || !result, "Should return a boolean value");
+        
+        assert!(result || !result);
+        
+        if !result {
+            fix_script_feasible_with_registry()?;
+            let fixed_result = check_script_feasible_with_registry()?;
+            assert!(fixed_result, "Script should be feasible after fix");
+        }
+        
         Ok(())
     }
 
     #[test]
     fn test_fix_script_feasible() -> WincentResult<()> {
-        let _ = check_script_feasible_with_registry()?;
-        let _ = fix_script_feasible_with_registry()?;
+        let initial_policy = get_execution_policy()?;
         
-        let final_state = check_script_feasible_with_registry()?;
-        assert!(final_state, "Should be feasible after fix");
+        fix_script_feasible_with_registry()?;
+        
+        let final_policy = get_execution_policy()?;
+        assert_eq!(final_policy, "RemoteSigned", "Execution policy should be set to RemoteSigned");
+        
+        let is_feasible = check_script_feasible_with_registry()?;
+        assert!(is_feasible, "Should be feasible after fix");
+        
+        if initial_policy != "RemoteSigned" {
+            let reg_key = get_execution_policy_reg()?;
+            let _ = reg_key.set_value("ExecutionPolicy", &initial_policy);
+        }
         
         Ok(())
     }
 
     #[test]
     fn test_registry_path_exists() {
-        let path = Path::new("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell");
-        assert!(registry_path_exists(path));
+        let valid_path = Path::new("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell");
+        assert!(registry_path_exists(valid_path), "Valid PowerShell registry path should exist");
+
+        let invalid_paths = [
+            Path::new("INVALID_KEY\\Path"),
+            Path::new("HKEY_LOCAL_MACHINE"),
+            Path::new("HKEY_CURRENT_USER\\NonExistentPath"),
+        ];
+
+        for path in &invalid_paths {
+            assert!(!registry_path_exists(path), "Invalid path should return false: {:?}", path);
+        }
     }
 
     #[test]
     fn test_get_execution_policy() -> WincentResult<()> {
         let policy = get_execution_policy()?;
+        
         assert!(!policy.is_empty(), "Execution policy should not be empty");
+        
+        let valid_policies = [
+            "Restricted",
+            "AllSigned", 
+            "RemoteSigned",
+            "Unrestricted",
+            "Bypass"
+        ];
+        
         assert!(
-            ["Restricted", "AllSigned", "RemoteSigned", "Unrestricted", "Bypass"]
-                .contains(&policy.as_str()),
-            "Should return a valid execution policy"
+            valid_policies.contains(&policy.as_str()),
+            "Invalid execution policy: {}. Expected one of: {:?}",
+            policy,
+            valid_policies
         );
+        
+        Ok(())
+    }
+
+    #[test_log::test]
+    fn test_check_query_feasible_with_script() -> WincentResult<()> {
+        let result = check_query_feasible_with_script()?;
+        
+        println!("Query feasibility check result: {}", result);
+        
+        if !result {
+            fix_script_feasible_with_registry()?;
+            let fixed_result = check_query_feasible_with_script()?;
+            println!("Query feasibility check after fix: {}", fixed_result);
+        }
+        
+        Ok(())
+    }
+
+    #[test_log::test]
+    fn test_check_pinunpin_feasible_with_script() -> WincentResult<()> {
+        let result = check_pinunpin_feasible_with_script()?;
+        
+        println!("Pin/Unpin feasibility check result: {}", result);
+        
+        if !result {
+            fix_script_feasible_with_registry()?;
+            let fixed_result = check_pinunpin_feasible_with_script()?;
+            println!("Pin/Unpin feasibility check after fix: {}", fixed_result);
+        }
+        
         Ok(())
     }
 }

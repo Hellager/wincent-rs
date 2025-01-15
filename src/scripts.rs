@@ -11,6 +11,8 @@ pub(crate) enum Script {
     RemoveRecentFile,
     PinToFrequentFolder,
     UnpinFromFrequentFolder,
+    CheckQueryFeasible,
+    CheckPinUnpinFeasible,
 }
 
 static REFRESH_EXPLORER: &str = r#"
@@ -36,6 +38,64 @@ static QUERY_QUICK_ACCESS: &str = r#"
     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
     $shell = New-Object -ComObject Shell.Application;
     $shell.Namespace('shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}').Items() | ForEach-Object { $_.Path };
+"#;
+
+static CHECK_QUERY_FEASIBLE: &str = r#"
+    $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+
+    $timeout = 5
+
+    $scriptBlock = {
+        $shell = New-Object -ComObject Shell.Application
+        $shell.Namespace('shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}').Items() | ForEach-Object { $_.Path };
+    }.ToString()
+
+    $arguments = "-Command & {$scriptBlock}"
+    $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
+
+    if (-not $process.WaitForExit($timeout * 1000)) {
+        try {
+            $process.Kill()
+            Write-Error "Process execution timed out (${timeout}s), forcefully terminated"
+            exit 1
+        }
+        catch {
+            Write-Error "Error occurred while terminating process: $_"
+            exit 1
+        }
+    }
+"#;
+
+static CHECK_PIN_UNPIN_FEASIBLE: &str = r#"
+    $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+
+    $currentPath = $PSScriptRoot
+
+    $scriptBlock = {
+        param($scriptPath)
+        $shell = New-Object -ComObject Shell.Application
+        $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
+
+        $folders = $shell.Namespace('shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}').Items();
+        $target = $folders | Where-Object {$_.Path -match ${$scriptPath}};
+        $target.InvokeVerb('unpinfromhome');
+    }.ToString()
+
+    $arguments = "-Command & {$scriptBlock} -scriptPath '$currentPath'"
+    $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
+
+    $timeout = 5
+    if (-not $process.WaitForExit($timeout * 1000)) {
+        try {
+            $process.Kill()
+            Write-Error "Process execution timed out (${timeout}s), forcefully terminated"
+            exit 1
+        }
+        catch {
+            Write-Error "Error occurred while terminating process: $_"
+            exit 1
+        }
+    }
 "#;
 
 /// Generates PowerShell script content based on the specified method and optional parameters.
@@ -109,6 +169,8 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
                 return Err(WincentError::MissingParemeter);
             }
         },
+        Script::CheckQueryFeasible => Ok(CHECK_QUERY_FEASIBLE.to_string()),
+        Script::CheckPinUnpinFeasible => Ok(CHECK_PIN_UNPIN_FEASIBLE.to_string()),
     }
 }
 
