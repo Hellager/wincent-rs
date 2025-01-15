@@ -7,36 +7,6 @@ use crate::{
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 
-/// Initializes the test logger for logging during tests.
-///
-/// This function configures the logger to output log messages to standard output (stdout).
-/// It sets the log level to `Trace`, which means all log messages of level `Trace` and above
-/// will be displayed. The logger is initialized in test mode.
-///
-/// # Example
-///
-/// ```rust
-/// #[cfg(test)]
-/// mod tests {
-///     use super::*;
-///
-///     #[test]
-///     fn test_logging() {
-///         init_test_logger();
-///         log::trace!("This is a trace message.");
-///         log::info!("This is an info message.");
-///         // Additional test code...
-///     }
-/// }
-/// ```
-pub(crate) fn init_test_logger() {
-    let _ = env_logger::builder()
-    .target(env_logger::Target::Stdout)
-    .filter_level(log::LevelFilter::Trace)
-    .is_test(true)
-    .try_init();
-}
-
 /// Checks if the current user has administrative privileges.
 ///
 /// This function uses the `IsUserAnAdmin` function from the Windows API to determine
@@ -96,18 +66,15 @@ pub(crate) fn refresh_explorer_window() -> WincentResult<()> {
 
 #[cfg(test)]
 mod utils_test {
-    use log::debug;
     use super::*;
     
-    #[test]
+    #[test_log::test]
     fn test_logger() {
-        init_test_logger();
-        debug!("test logger init success");
+        println!("test logger init success");
     }
 
     #[test]
     fn test_check_admin() {
-        init_test_logger();
         let is_admin = is_admin();
         assert!(is_admin || !is_admin, "Should return a boolean value");
     }

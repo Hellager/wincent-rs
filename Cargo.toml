@@ -14,10 +14,9 @@ A library for handling windows quick access
 """
 
 [dependencies]
-env_logger = "0.11.5"
-log = "0.4.22"
 sysinfo = "0.32.0"
 tempfile = "3.14.0"
+test-log = "0.2.16"
 thiserror = "2.0.9"
 winreg = "0.52.0"
 

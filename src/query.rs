@@ -62,45 +62,38 @@ pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult
 mod tests {
     use super::*;
     use crate::error::WincentResult;
-    use crate::utils::init_test_logger;
-    use log::debug;
 
-    #[test]
+    #[test_log::test]
     fn test_query_recent_files() -> WincentResult<()> {
-        init_test_logger();
         let files = query_recent_with_ps_script(crate::QuickAccess::RecentFiles)?;
         
-        debug!("{} items in recent files", files.len());
+        println!("{} items in recent files", files.len());
         for (index, item) in files.iter().enumerate() {
-            debug!("{}. {}", index + 1, item);
+            println!("{}. {}", index + 1, item);
         }
 
         Ok(())
     }
 
-    #[test]
+    #[test_log::test]
     fn test_query_frequent_folders() -> WincentResult<()> {
-        init_test_logger();
-
         let folders = query_recent_with_ps_script(crate::QuickAccess::FrequentFolders)?;
         
-        debug!("{} items in frequent folders", folders.len());
+        println!("{} items in frequent folders", folders.len());
         for (index, item) in folders.iter().enumerate() {
-            debug!("{}. {}", index + 1, item);
+            println!("{}. {}", index + 1, item);
         }
 
         Ok(())
     }
 
-    #[test]
+    #[test_log::test]
     fn test_query_quick_access() -> WincentResult<()> {
-        init_test_logger();
-
         let items = query_recent_with_ps_script(crate::QuickAccess::All)?;
 
-        debug!("{} items in Quick Access", items.len());
+        println!("{} items in Quick Access", items.len());
         for (index, item) in items.iter().enumerate() {
-            debug!("{}. {}", index + 1, item);
+            println!("{}. {}", index + 1, item);
         }
 
         Ok(())

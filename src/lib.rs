@@ -500,52 +500,48 @@ pub fn set_frequent_folders_visiable(is_visiable: bool) -> WincentResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use utils::init_test_logger;
-    use log::{debug, error};
     use super::*;
 
-    #[test]
+    #[test_log::test]
     fn test_feasible() -> Result<(), WincentError> {
-        init_test_logger();
-
         let is_feasible = check_feasible()?;
         if is_feasible {
-            debug!("functions feasible to run");
+            println!("functions feasible to run");
         } else {
-            debug!("try fix feasible");
+            println!("try fix feasible");
             let _ = fix_feasible()?;
             let fix_res = check_feasible()?;
             if fix_res {
-                debug!("fix feasible success!");
+                println!("fix feasible success!");
             } else {
-                error!("failed to fix feasible!!!");
+                println!("failed to fix feasible!!!");
             }
         }
 
         Ok(())
     }
 
-    #[test]
+    #[test_log::test]
     fn test_query_quick_access() -> Result<(), WincentError> {
         let recent_files: Vec<String> = get_recent_files()?;
         let frequent_folders: Vec<String> = get_frequent_folders()?;
         let quick_access: Vec<String> = get_quick_access_items()?;
     
-        debug!("recent files");
+        println!("recent files");
         for (idx, item) in recent_files.iter().enumerate() {
-            debug!("{}. {}", idx, item);
+            println!("{}. {}", idx, item);
         }
-        debug!("\n\n");
+        println!("\n\n");
     
-        debug!("frequent folders");
+        println!("frequent folders");
         for (idx, item) in frequent_folders.iter().enumerate() {
-            debug!("{}. {}", idx, item);
+            println!("{}. {}", idx, item);
         }
-        debug!("\n\n");
+        println!("\n\n");
     
-        debug!("quick access items");
+        println!("quick access items");
         for (idx, item) in quick_access.iter().enumerate() {
-            debug!("{}. {}", idx, item);
+            println!("{}. {}", idx, item);
         }
 
         Ok(())

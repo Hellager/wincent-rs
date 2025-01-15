@@ -162,17 +162,13 @@ pub(crate) fn set_visiable_with_registry(target: crate::QuickAccess, visiable: b
 mod tests {
     use super::*;
     use crate::error::WincentResult;
-    use crate::utils::init_test_logger;
     use crate::QuickAccess;
-    use log::debug;
 
     #[ignore]
-    #[test]
+    #[test_log::test]
     fn test_recent_files_visibility() -> WincentResult<()> {
-        init_test_logger();
-
         let initial_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
-        debug!("Initial recent files visibility: {}", initial_state);
+        println!("Initial recent files visibility: {}", initial_state);
 
         set_visiable_with_registry(QuickAccess::RecentFiles, !initial_state)?;
         let changed_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
@@ -186,12 +182,10 @@ mod tests {
     }
 
     #[ignore]
-    #[test]
+    #[test_log::test]
     fn test_frequent_folders_visibility() -> WincentResult<()> {
-        init_test_logger();
-
         let initial_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
-        debug!("Initial frequent folders visibility: {}", initial_state);
+        println!("Initial frequent folders visibility: {}", initial_state);
 
         set_visiable_with_registry(QuickAccess::FrequentFolders, !initial_state)?;
         let changed_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
