@@ -1,4 +1,4 @@
-use crate::error::{WincentResult, WincentError};
+use crate::{WincentResult, error::WincentError};
 
 /// Retrieves the registry key for Quick Access settings.
 fn get_quick_access_reg() -> WincentResult<winreg::RegKey> {
@@ -66,7 +66,6 @@ pub(crate) fn set_visiable_with_registry(target: crate::QuickAccess, visiable: b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::WincentResult;
     use crate::QuickAccess;
 
     #[ignore]

@@ -1,4 +1,4 @@
-use crate::error::{WincentError, WincentResult};
+use crate::{WincentResult, error::WincentError};
 use std::io::Write;
 use std::process::Command;
 use tempfile::Builder;

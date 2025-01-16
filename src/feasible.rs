@@ -1,7 +1,8 @@
 use crate::{
     utils, 
-    scripts::{Script, execute_ps_script},
-    error::{WincentError, WincentResult}
+    WincentResult,
+    error::WincentError,
+    scripts::{Script, execute_ps_script}
 };
 use std::path::Path;
 
@@ -115,7 +116,6 @@ fn get_execution_policy() -> WincentResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::WincentResult;
     use std::path::Path;
 
     #[test]

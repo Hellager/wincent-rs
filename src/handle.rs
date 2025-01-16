@@ -1,6 +1,7 @@
 use crate::{
+    WincentResult,
+    error::WincentError,
     scripts::{Script, execute_ps_script},
-    error::{WincentError, WincentResult}
 };
 use std::path::Path;
 use std::ffi::OsString;
@@ -99,7 +100,6 @@ pub(crate) fn unpin_frequent_folder_with_ps_script(path: &str) -> WincentResult<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::WincentResult;
     use crate::query::query_recent_with_ps_script;
     use std::path::PathBuf;
     use std::fs::{self, File};

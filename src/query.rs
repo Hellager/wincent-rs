@@ -1,8 +1,10 @@
 use crate::{
     QuickAccess, 
-    scripts::{Script, execute_ps_script},
-    error::{WincentError, WincentResult}
+    WincentResult,
+    error::WincentError,
+    scripts::{Script, execute_ps_script}
 };
+
 
 /// Queries recent items from Quick Access using a PowerShell script.
 pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
@@ -33,7 +35,6 @@ pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::WincentResult;
 
     #[test]
     fn test_query_recent_files() -> WincentResult<()> {

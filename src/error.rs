@@ -39,11 +39,10 @@ pub enum WincentError {
     WindowsApi(i32),
 }
 
-pub type WincentResult<T> = Result<T, WincentError>; 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::WincentResult;
     use std::io::{Error, ErrorKind};
 
     #[test]

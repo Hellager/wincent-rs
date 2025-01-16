@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use crate::{
-    scripts::{Script, execute_ps_script}, 
-    error::{WincentError, WincentResult}
+    WincentResult,
+    error::WincentError,
+    scripts::{Script, execute_ps_script}
 };
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::UI::Shell::IsUserAnAdmin;

@@ -60,7 +60,7 @@ mod scripts;
 pub mod error;
 
 use crate::{
-    error::{WincentError, WincentResult},
+    error::WincentError,
     visible::{is_visialbe_with_registry, set_visiable_with_registry},
 };
 
@@ -70,6 +70,7 @@ pub(crate) enum QuickAccess {
     All
 }
 
+pub type WincentResult<T> = Result<T, WincentError>; 
 
 /****************************************************** Feature Feasible ******************************************************/
 
