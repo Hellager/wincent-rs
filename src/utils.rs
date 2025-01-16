@@ -30,11 +30,6 @@ pub(crate) fn refresh_explorer_window() -> WincentResult<()> {
 #[cfg(test)]
 mod utils_test {
     use super::*;
-    
-    #[test_log::test]
-    fn test_logger() {
-        println!("test logger init success");
-    }
 
     #[test]
     fn test_check_admin() {
