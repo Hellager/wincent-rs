@@ -57,6 +57,7 @@ mod query;
 mod visible;
 mod handle;
 mod scripts;
+mod test_utils;
 pub mod error;
 
 use crate::{

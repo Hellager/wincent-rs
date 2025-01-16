@@ -101,30 +101,8 @@ pub(crate) fn unpin_frequent_folder_with_ps_script(path: &str) -> WincentResult<
 mod tests {
     use super::*;
     use crate::query::query_recent_with_ps_script;
-    use std::path::PathBuf;
-    use std::fs::{self, File};
-    use std::io::Write;
     use std::{thread, time::Duration};
-
-    fn setup_test_env() -> WincentResult<PathBuf> {
-        let test_dir = std::env::current_dir()?.join("tests").join("test_folder");
-        fs::create_dir_all(&test_dir)?;
-        Ok(test_dir)
-    }
-
-    fn cleanup_test_env(path: &PathBuf) -> WincentResult<()> {
-        if path.exists() {
-            fs::remove_dir_all(path)?;
-        }
-        Ok(())
-    }
-
-    fn create_test_file(dir: &PathBuf, name: &str, content: &str) -> WincentResult<PathBuf> {
-        let file_path = dir.join(name);
-        let mut file = File::create(&file_path)?;
-        file.write_all(content.as_bytes())?;
-        Ok(file_path)
-    }
+    use crate::test_utils::{setup_test_env, create_test_file, cleanup_test_env};
 
     fn wait_for_folder_status(path: &str, should_exist: bool, max_retries: u32) -> WincentResult<bool> {
         for _ in 0..max_retries {
