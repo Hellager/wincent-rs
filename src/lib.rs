@@ -68,7 +68,6 @@
 //!
 //! ## Features
 //!
-//! - Async support
 //! - Comprehensive error handling
 //! - PowerShell script integration
 //! - Registry management
