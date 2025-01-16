@@ -6,26 +6,6 @@ use crate::{
 use std::path::Path;
 
 /// Retrieves the registry key for the PowerShell execution policy.
-///
-/// This function determines which registry key to open based on the current user's
-/// permissions (whether the user is an administrator).
-/// If the user is an administrator, it opens the registry key under HKEY_LOCAL_MACHINE;
-/// otherwise, it opens the registry key under HKEY_CURRENT_USER.
-///
-/// # Returns
-///
-/// Returns a `WincentResult<winreg::RegKey>` containing the requested registry key.
-/// If an error occurs, it returns `WincentError::Io`.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     let reg_key = get_execution_policy_reg()?;
-///     // Use reg_key for further operations
-///     Ok(())
-/// }
-/// ```
 fn get_execution_policy_reg() -> WincentResult<winreg::RegKey> {
     use winreg::enums::*;
     use winreg::RegKey;
@@ -45,28 +25,6 @@ fn get_execution_policy_reg() -> WincentResult<winreg::RegKey> {
 }
 
 /// Checks if the PowerShell execution policy is feasible based on the registry value.
-///
-/// This function retrieves the execution policy from the registry and checks if it
-/// matches any of the feasible options: "AllSigned", "Bypass", "RemoteSigned", or "Unrestricted".
-///
-/// # Returns
-///
-/// Returns a `WincentResult<bool>`, which is `true` if the execution policy is feasible,
-/// `false` if the policy is not found, and an error if there is an issue accessing the registry.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     let is_feasible = check_script_feasible_with_registry()?;
-///     if is_feasible {
-///         println!("The execution policy is feasible.");
-///     } else {
-///         println!("The execution policy is not feasible.");
-///     }
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn check_script_feasible_with_registry() -> WincentResult<bool> {
     let reg_value=  "ExecutionPolicy";
     let reg_key = get_execution_policy_reg()?;
@@ -91,24 +49,6 @@ pub(crate) fn check_script_feasible_with_registry() -> WincentResult<bool> {
 }
 
 /// Sets the PowerShell execution policy to "RemoteSigned" in the registry.
-///
-/// This function retrieves the execution policy registry key and sets its value to
-/// "RemoteSigned". This is useful for ensuring that scripts can be run in a secure manner.
-///
-/// # Returns
-///
-/// Returns a `WincentResult<()>`. If the operation is successful, it returns `Ok(())`.
-/// If there is an error while accessing or modifying the registry, it returns `WincentError::Io`.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     fix_script_feasible_with_registry()?;
-///     println!("Execution policy set to 'RemoteSigned'.");
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn fix_script_feasible_with_registry() -> WincentResult<()> {
     let reg_value=  "ExecutionPolicy";
     let reg_key = get_execution_policy_reg()?;
@@ -119,25 +59,6 @@ pub(crate) fn fix_script_feasible_with_registry() -> WincentResult<()> {
 }
 
 /// Checks if PowerShell query commands are available and executable.
-///
-/// # Returns
-///
-/// Returns a `WincentResult<bool>`, which is `true` if query commands are available,
-/// `false` otherwise, and an error if the script execution fails.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     let can_query = check_query_feasible_with_script()?;
-///     if can_query {
-///         println!("Query commands are available.");
-///     } else {
-///         println!("Query commands are not available.");
-///     }
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn check_query_feasible_with_script() -> WincentResult<bool> {
     let output = execute_ps_script(Script::CheckQueryFeasible, None)?;
 
@@ -145,25 +66,6 @@ pub(crate) fn check_query_feasible_with_script() -> WincentResult<bool> {
 }
 
 /// Checks if PowerShell pin/unpin commands are available and executable.
-///
-/// # Returns
-///
-/// Returns a `WincentResult<bool>`, which is `true` if pin/unpin commands are available,
-/// `false` otherwise, and an error if the script execution fails.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     let can_pin = check_pinunpin_feasible_with_script()?;
-///     if can_pin {
-///         println!("Pin/unpin commands are available.");
-///     } else {
-///         println!("Pin/unpin commands are not available.");
-///     }
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn check_pinunpin_feasible_with_script() -> WincentResult<bool> {
     let output = execute_ps_script(Script::CheckPinUnpinFeasible, None)?;
 
@@ -171,14 +73,6 @@ pub(crate) fn check_pinunpin_feasible_with_script() -> WincentResult<bool> {
 }
 
 /// Checks if a registry path exists.
-///
-/// # Parameters
-///
-/// - `path`: A Path reference representing the registry path to check
-///
-/// # Returns
-///
-/// Returns true if the registry path exists, false otherwise
 #[allow(dead_code)]
 fn registry_path_exists(path: &Path) -> bool {
     use winreg::RegKey;
@@ -204,10 +98,6 @@ fn registry_path_exists(path: &Path) -> bool {
 }
 
 /// Gets the current PowerShell execution policy.
-///
-/// # Returns
-///
-/// Returns a WincentResult containing the execution policy as a String
 #[allow(dead_code)]
 fn get_execution_policy() -> WincentResult<String> {
     let reg_key = get_execution_policy_reg()?;

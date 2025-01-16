@@ -48,12 +48,10 @@ mod tests {
 
     #[test]
     fn test_error_conversions() {
-        // 测试从 std::io::Error 转换
         let io_error = Error::new(ErrorKind::NotFound, "file not found");
         let wincent_error = WincentError::from(io_error);
         assert!(matches!(wincent_error, WincentError::Io(_)));
 
-        // 测试错误信息格式化
         let missing_param = WincentError::MissingParemeter;
         assert!(format!("{}", missing_param).contains("Missing parameter"));
 
@@ -66,7 +64,6 @@ mod tests {
 
     #[test]
     fn test_result_type() {
-        // 测试 WincentResult 类型
         let success: WincentResult<()> = Ok(());
         assert!(success.is_ok());
 

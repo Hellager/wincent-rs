@@ -5,34 +5,6 @@ use crate::{
 };
 
 /// Queries recent items from Quick Access using a PowerShell script.
-///
-/// This function executes a PowerShell script to retrieve items from Quick Access based on the specified type.
-/// It can query all items, recent files, or frequent folders.
-///
-/// # Parameters
-///
-/// - `qa_type`: An enum value of type `QuickAccess` that specifies the type of items to query.
-///   - `QuickAccess::All`: Queries all items in Quick Access.
-///   - `QuickAccess::RecentFiles`: Queries recent files.
-///   - `QuickAccess::FrequentFolders`: Queries frequent folders.
-///
-/// # Returns
-///
-/// Returns a `WincentResult<Vec<String>>`, which contains a vector of strings representing the queried items.
-/// If the operation is successful, it returns `Ok(data)`. If the script fails, it returns `WincentError::ScriptFailed`
-/// with the error message.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     let recent_files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
-///     for file in recent_files {
-///         println!("{}", file);
-///     }
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let output = match qa_type {
         QuickAccess::All => execute_ps_script(Script::QueryQuickAccess, None)?,

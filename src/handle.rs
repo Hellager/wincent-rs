@@ -17,30 +17,6 @@ pub(crate)enum PathType {
 }
 
 /// Validates if a given path exists and matches the expected type (file or directory).
-///
-/// # Arguments
-///
-/// * `path` - The path string to validate
-/// * `expected_type` - The expected type of the path (File or Directory)
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the path is valid and matches the expected type.
-///
-/// # Example
-///
-/// ```rust
-/// use wincent::handle::{validate_path, PathType};
-///
-/// fn main() -> Result<(), WincentError> {
-///     // Validate a file path
-///     validate_path("C:\\path\\to\\file.txt", PathType::File)?;
-///
-///     // Validate a directory path
-///     validate_path("C:\\path\\to\\directory", PathType::Directory)?;
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn validate_path(path: &str, expected_type: PathType) -> WincentResult<()> {
     let path_buf = Path::new(path);
     
@@ -64,33 +40,6 @@ pub(crate) fn validate_path(path: &str, expected_type: PathType) -> WincentResul
 }
 
 /// Executes a PowerShell script after validating the given path.
-///
-/// # Arguments
-///
-/// * `script` - The PowerShell script to execute
-/// * `path` - The path to validate and use in the script
-/// * `path_type` - The expected type of the path
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the script executes successfully.
-/// 
-/// # Example
-///
-/// ```rust
-/// use wincent::handle::{execute_script_with_validation, PathType};
-/// use wincent::scripts::Script;
-///
-/// fn main() -> Result<(), WincentError> {
-///     // Execute a script for a file
-///     execute_script_with_validation(
-///         Script::RemoveRecentFile,
-///         "C:\\path\\to\\file.txt",
-///         PathType::File
-///     )?;
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn execute_script_with_validation(script: Script, path: &str, path_type: PathType) -> WincentResult<()> {
     validate_path(path, path_type)?;
     
@@ -107,26 +56,6 @@ pub(crate) fn execute_script_with_validation(script: Script, path: &str, path_ty
 }
 
 /// Adds a file to the Windows Recent Items list using the Windows API.
-///
-/// # Arguments
-///
-/// * `path` - The path to the file to be added
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the file was successfully added to Recent Items.
-///
-/// # Example
-///
-/// ```rust
-/// use wincent::handle::add_file_to_recent_with_api;
-///
-/// fn main() -> Result<(), WincentError> {
-///     // Add a document to Recent Items
-///     add_file_to_recent_with_api("C:\\Documents\\report.docx")?;
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn add_file_to_recent_with_api(path: &str) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
 
@@ -153,76 +82,16 @@ pub(crate) fn add_file_to_recent_with_api(path: &str) -> WincentResult<()> {
 }
 
 /// Removes a file from the Windows Recent Items list using PowerShell.
-///
-/// # Arguments
-///
-/// * `path` - The path to the file to be removed
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the file was successfully removed from Recent Items.
-///
-/// # Example
-///
-/// ```rust
-/// use wincent::handle::remove_recent_files_with_ps_script;
-///
-/// fn main() -> Result<(), WincentError> {
-///     // Remove a document from Recent Items
-///     remove_recent_files_with_ps_script("C:\\Documents\\report.docx")?;
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn remove_recent_files_with_ps_script(path: &str) -> WincentResult<()> {
     execute_script_with_validation(Script::RemoveRecentFile, path, PathType::File)
 }
 
 /// Pins a folder to the Windows Quick Access Frequent Folders list.
-///
-/// # Arguments
-///
-/// * `path` - The path to the folder to be pinned
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was successfully pinned.
-///
-/// # Example
-///
-/// ```rust
-/// use wincent::handle::pin_frequent_folder_with_ps_script;
-///
-/// fn main() -> Result<(), WincentError> {
-///     // Pin a project folder to Quick Access
-///     pin_frequent_folder_with_ps_script("C:\\Projects\\my-project")?;
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn pin_frequent_folder_with_ps_script(path: &str) -> WincentResult<()> {
     execute_script_with_validation(Script::PinToFrequentFolder, path, PathType::Directory)
 }
 
 /// Unpins a folder from the Windows Quick Access Frequent Folders list.
-///
-/// # Arguments
-///
-/// * `path` - The path to the folder to be unpinned
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was successfully unpinned.
-///
-/// # Example
-///
-/// ```rust
-/// use wincent::handle::unpin_frequent_folder_with_ps_script;
-///
-/// fn main() -> Result<(), WincentError> {
-///     // Unpin a project folder from Quick Access
-///     unpin_frequent_folder_with_ps_script("C:\\Projects\\my-project")?;
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn unpin_frequent_folder_with_ps_script(path: &str) -> WincentResult<()> {
     execute_script_with_validation(Script::UnpinFromFrequentFolder, path, PathType::Directory)
 }

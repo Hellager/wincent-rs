@@ -99,30 +99,6 @@ static CHECK_PIN_UNPIN_FEASIBLE: &str = r#"
 "#;
 
 /// Generates PowerShell script content based on the specified method and optional parameters.
-///
-/// This function returns the content of a PowerShell script as a string, depending on the provided `method`.
-/// If the method requires parameters, it checks if they are provided and formats the script accordingly.
-///
-/// # Parameters
-///
-/// - `method`: An enum value of type `Script` that specifies which script to generate.
-/// - `para`: An optional string slice that provides additional parameters for certain scripts.
-///
-/// # Returns
-///
-/// Returns a `WincentResult<String>`, which contains the generated PowerShell script content as a string.
-/// If the operation is successful, it returns `Ok(content)`. If a required parameter is missing,
-/// it returns `WincentError::MissingParameter`.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     let script_content = get_script_content(Script::RemoveRecentFile, Some("C:\\Path\\To\\File.txt"))?;
-///     println!("{}", script_content);
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentResult<String> {
     match method {
         Script::RefreshExplorer => Ok(REFRESH_EXPLORER.to_string()),
@@ -175,30 +151,6 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
 }
 
 /// Executes a PowerShell script generated based on the specified method and optional parameters.
-///
-/// This function retrieves the content of a PowerShell script, writes it to a temporary file,
-/// and then executes the script using PowerShell. It returns the output of the script execution.
-///
-/// # Parameters
-///
-/// - `method`: An enum value of type `Script` that specifies which script to execute.
-/// - `para`: An optional string slice that provides additional parameters for certain scripts.
-///
-/// # Returns
-///
-/// Returns a `WincentResult<std::process::Output>`, which contains the output of the executed script.
-/// If the operation is successful, it returns `Ok(output)`. If there is an error during script generation,
-/// file creation, or execution, it returns an appropriate `WincentError`.
-///
-/// # Example
-///
-/// ```rust
-/// fn main() -> Result<(), WincentError> {
-///     let output = execute_ps_script(Script::QueryRecentFile, None)?;
-///     println!("Script output: {:?}", output);
-///     Ok(())
-/// }
-/// ```
 pub(crate) fn execute_ps_script(method: Script, para: Option<&str>) -> WincentResult<std::process::Output> {
     let content = get_script_content(method, para)?;
     let temp_script_file = Builder::new()
