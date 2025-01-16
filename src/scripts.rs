@@ -205,6 +205,18 @@ mod tests {
     }
 
     #[test]
+    fn test_get_check_query_feasible_script() {
+        let script = get_script_content(Script::CheckQueryFeasible, None).unwrap();
+        assert!(script.contains("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}"));
+    } 
+
+    #[test]
+    fn test_get_check_pin_unpin_feasible_script() {
+        let script = get_script_content(Script::CheckPinUnpinFeasible, None).unwrap();
+        assert!(script.contains("pintohome"));
+    }
+
+    #[test]
     fn test_script_content_validity() {
         let path = "C:\\Users\\User\\Documents";
         assert!(!get_script_content(Script::RefreshExplorer, None).unwrap().is_empty());
@@ -214,5 +226,7 @@ mod tests {
         assert!(!get_script_content(Script::RemoveRecentFile, Some(path)).unwrap().is_empty());
         assert!(!get_script_content(Script::PinToFrequentFolder, Some(path)).unwrap().is_empty());
         assert!(!get_script_content(Script::UnpinFromFrequentFolder, Some(path)).unwrap().is_empty());
+        assert!(!get_script_content(Script::CheckQueryFeasible, None).unwrap().is_empty());
+        assert!(!get_script_content(Script::CheckPinUnpinFeasible, None).unwrap().is_empty());
     }
 }
