@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::WincentResult;
 use std::path::PathBuf;
 use std::fs::{self, File};
