@@ -111,7 +111,7 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
                     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
                     $shell = New-Object -ComObject Shell.Application;
                     $files = $shell.Namespace("shell:::{{679f85cb-0220-4080-b29b-5540cc05aab6}}").Items() | where {{$_.IsFolder -eq $false}};
-                    $target = $files | where {{$_.Path -match ${}}};
+                    $target = $files | where {{$_.Path -eq "{}"}};
                     $target.InvokeVerb("remove");
                 "#, data);
                 return Ok(content);                
@@ -137,7 +137,7 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
                     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
                     $shell = New-Object -ComObject Shell.Application;
                     $folders = $shell.Namespace("shell:::{{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}}").Items();
-                    $target = $folders | where {{$_.Path -match ${}}};
+                    $target = $folders | Where-Object {{$_.Path -eq "{}"}};
                     $target.InvokeVerb("unpinfromhome");
                 "#, data);
                 return Ok(content);                
