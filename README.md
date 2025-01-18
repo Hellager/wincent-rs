@@ -7,8 +7,11 @@ Wincent is a rust library for managing Windows quick access functionality, provi
 ## Features
 
 - 🔍 Query Quick Access Contents
+- ➕ Add Items to Quick Access
 - 🗑️ Remove Specific Quick Access Entries
+- 🧹 Clear Quick Access Items
 - 👁️ Toggle Visibility of Quick Access Items
+
 
 ## Installation
 
@@ -21,75 +24,78 @@ wincent = "*"
 
 ## Quick Start
 
-### Querying Quick Access Contents
+### Querying  Quick  Access  Contents
 
 ```rust
-use wincent::{check_feasible, fix_feasible, get_quick_access_items，WincentError};
-use std::io::{Error, ErrorKind};
-
-#[tokio::main]
-async fn main() -> Result<(), WincentError> {
-    // check if the quick access is feasible
-    if !check_feasible()?{
-        // if not, fix it
-        fix_feasible()?;
-
-        if !check_feasible()? {
-            return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
-        }
-    }
-
-    // List all current quick access items
-    let quick_access_items: Vec<String> = get_quick_access_items().await?;
-    for item in quick_access_items {
-        println!("Quick Access items: {:?}", item);
-    }
-
-    Ok(())
-}
-```
-
-### Removing a Quick Access Entry
-
-```rust
-use wincent::{check_feasible, fix_feasible, get_recent_files，WincentError};
-use std::io::{Error, ErrorKind};
-
-#[tokio::main]
-async fn main() -> Result<(), WincentError> {
-    // check if the quick access is feasible
-    if !check_feasible()?{
-        // if not, fix it
-        fix_feasible()?;
-
-        if !check_feasible()? {
-            return Err(WincentError::IoError(Error::from(ErrorKind::PermissionDenied)));
-        }
-    }
-
-    // List all current quick access items
-    let recent_files: Vec<String> = get_recent_files().await?;
-    let danger_content = "password";
-    for item in recent_files {
-        if item.contains(danger_content) {
-            remove_from_recent_files(item).await?;
-        }
-    }
-
-    Ok(())
-}
-```
-
-### Toggling Visibility
-
-```rust
-use wincent::{is_recent_files_visiable, WincentError};
+use wincent::{check_feasible, fix_feasible, get_quick_access_items, WincentError};
 
 fn main() -> Result<(), WincentError> {
-    let is_visiable: bool = is_recent_files_visiable()?;
-    println!("is_visiable: {:?}", is_visiable);
+    // Check if quick access is feasible
+    if !check_feasible()? {
+        fix_feasible()?;
+    }
 
-    set_recent_files_visiable(!is_visiable)?;
+    // List all current quick access items
+    let quick_access_items = get_quick_access_items()?;
+    for item in quick_access_items {
+        println!("Quick Access item: {}", item);
+    }
+
+    Ok(())
+}
+```
+
+### Removing  a  Quick  Access  Entry
+
+```rust
+use wincent::{get_recent_files, remove_from_recent_files, WincentError};
+
+fn main() -> Result<(), WincentError> {
+    // Remove sensitive files from recent items
+    let recent_files = get_recent_files()?;
+    for item in recent_files {
+        if item.contains("password") {
+            remove_from_recent_files(&item)?;
+        }
+    }
+
+    Ok(())
+}
+```
+
+### Clearing  Quick Access  Items
+
+```rust
+use wincent::{empty_recent_files, empty_frequent_folders, empty_quick_access, WincentError};
+
+fn main() -> Result<(), WincentError> {
+    // Clear only recent files
+    empty_recent_files()?;
+    println!("Recent files cleared");
+
+    // Clear frequent folders (both pinned and normal)
+    empty_frequent_folders()?;
+    println!("Frequent folders cleared");
+
+    // Clear everything in Quick Access
+    empty_quick_access()?;
+    println!("Quick Access completely cleared");
+
+    Ok(())
+}
+```
+
+### Toggling  Visibility
+
+```rust
+use wincent::{is_recent_files_visiable, set_recent_files_visiable, WincentError};
+
+fn main() -> Result<(), WincentError> {
+    let is_visible = is_recent_files_visiable()?;
+    println!("Recent files visibility: {}", is_visible);
+
+    set_recent_files_visiable(!is_visible)?;
+    println!("Visibility toggled");
 
     Ok(())
 }
@@ -97,12 +103,12 @@ fn main() -> Result<(), WincentError> {
 
 ## Error Handling
 
-  The library uses Rust's `Result` type for comprehensive error management, allowing precise handling of potential issues during quick access manipulation.
+The library uses Rust's `Result` type for comprehensive error management, allowing precise handling of potential issues during quick access manipulation.
 
 ## Compatibility
 
-  - Supports Windows 10 and Windows 11
-  - Requires Rust 1.60.0 or later
+- Supports Windows 10 and Windows 11
+- Requires Rust 1.60.0 or later
 
 ## Contributing
 
@@ -124,10 +130,6 @@ cargo build
 cargo test
 ```
 
-## Roadmap
-
-- [ ] Test on more windows version
-- [ ] Better way to interact with quick access
 
 ## Disclaimer
 
