@@ -81,6 +81,7 @@ mod query;
 mod visible;
 mod handle;
 mod scripts;
+mod empty;
 mod test_utils;
 pub mod error;
 
@@ -584,6 +585,88 @@ pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
     handle::unpin_frequent_folder_with_ps_script(path)
 }
 
+/// Clears all items from the Windows Recent Files list.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if all recent files were successfully cleared.
+///
+/// # Example
+///
+/// ```rust
+/// use wincent::empty_recent_files;
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Clear all recent files
+///     empty_recent_files()?;
+///     println!("Recent files list has been cleared");
+///     Ok(())
+/// }
+/// ```
+pub fn empty_recent_files() -> WincentResult<()> {
+    if !check_script_feasible()? {
+        return Err(WincentError::UnsupportedOperation(
+            "PowerShell script execution is not feasible".to_string()
+        ));
+    }
+
+    empty::empty_recent_files_with_api()
+}
+
+/// Clears all items from the Windows Frequent Folders list, including both pinned and normal folders.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if all frequent folders were successfully cleared.
+///
+/// # Example
+///
+/// ```rust
+/// use wincent::empty_frequent_folders;
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Clear all frequent folders
+///     empty_frequent_folders()?;
+///     println!("Frequent folders list has been cleared");
+///     Ok(())
+/// }
+/// ```
+pub fn empty_frequent_folders() -> WincentResult<()> {
+    if !check_script_feasible()? {
+        return Err(WincentError::UnsupportedOperation(
+            "PowerShell script execution is not feasible".to_string()
+        ));
+    }
+
+    empty::empty_normal_folders_with_jumplist_file()?;
+    empty::empty_pinned_folders_with_script()?;
+    Ok(())
+}
+
+/// Clears all items from Windows Quick Access, including both recent files and frequent folders.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if all Quick Access items were successfully cleared.
+///
+/// # Example
+///
+/// ```rust
+/// use wincent::empty_quick_access;
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Clear all Quick Access items
+///     empty_quick_access()?;
+///     println!("Quick Access has been completely cleared");
+///     Ok(())
+/// }
+/// ```
+pub fn empty_quick_access() -> WincentResult<()> {
+    empty_recent_files()?;
+    empty_frequent_folders()?;
+    Ok(())
+}
+
 /****************************************************** Quick Access Visiablity ******************************************************/
 
 /// Checks if Quick Access visibility settings can be modified.
@@ -772,6 +855,48 @@ mod tests {
         set_recent_files_visiable(initial_recent)?;
         set_frequent_folders_visiable(initial_frequent)?;
         
+        Ok(())
+    }
+
+    #[test_log::test]
+    fn test_empty_operations() -> WincentResult<()> {
+        let test_dir = setup_test_env()?;
+        
+        // Test empty_recent_files
+        let test_file = create_test_file(&test_dir, "test.txt", "test content")?;
+        add_to_recent_files(test_file.to_str().unwrap())?;
+        thread::sleep(Duration::from_millis(500));
+        
+        assert!(is_in_recent_files(test_file.to_str().unwrap())?, "File should be in recent files");
+        empty_recent_files()?;
+        thread::sleep(Duration::from_millis(500));
+        assert!(!is_in_recent_files(test_file.to_str().unwrap())?, "Recent files should be empty");
+
+        // Test empty_frequent_folders
+        let dir_path = test_dir.to_str().unwrap();
+        add_to_frequent_folders(dir_path)?;
+        thread::sleep(Duration::from_millis(500));
+        
+        assert!(is_in_frequent_folders(dir_path)?, "Folder should be in frequent folders");
+        empty_frequent_folders()?;
+        thread::sleep(Duration::from_millis(500));
+        assert!(!is_in_frequent_folders(dir_path)?, "Frequent folders should be empty");
+
+        // Test empty_quick_access
+        add_to_recent_files(test_file.to_str().unwrap())?;
+        add_to_frequent_folders(dir_path)?;
+        thread::sleep(Duration::from_millis(500));
+        
+        assert!(is_in_quick_access(test_file.to_str().unwrap())? || 
+               is_in_quick_access(dir_path)?, "Items should be in Quick Access");
+        
+        empty_quick_access()?;
+        thread::sleep(Duration::from_millis(500));
+        
+        assert!(!is_in_quick_access(test_file.to_str().unwrap())? && 
+               !is_in_quick_access(dir_path)?, "Quick Access should be empty");
+
+        cleanup_test_env(&test_dir)?;
         Ok(())
     }
 }

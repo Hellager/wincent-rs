@@ -39,6 +39,12 @@ pub enum WincentError {
     WindowsApi(i32),
 }
 
+impl From<windows::core::Error> for WincentError {
+    fn from(err: windows::core::Error) -> Self {
+        WincentError::WindowsApi(err.code().0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
