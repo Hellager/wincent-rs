@@ -74,8 +74,6 @@ pub(crate) fn add_file_to_recent_with_api(path: &str) -> WincentResult<()> {
         // 0x0000_0003 equals SHARD_PATHW
         SHAddToRecentDocs(0x0000_0003, Some(file_path_wide.as_ptr() as *const _));
 
-        println!("execute SHAddToRecentDocs for file: {}", path);
-        
         CoUninitialize();
     }
 
