@@ -21,7 +21,7 @@
 //! ## Basic Example
 //!
 //! ```rust
-//! use wincent::{check_feasible, fix_feasible, get_quick_access_items};
+//! use wincent::{check_feasible, fix_feasible, get_quick_access_items, WincentError};
 //! 
 //! fn main() -> Result<(), WincentError> {
 //!     // Ensure operations are feasible
@@ -39,11 +39,13 @@
 //!
 //! ## Advanced Example
 //!
+//! ```no_run
 //! ```rust
 //! use wincent::{
 //!     add_to_frequent_folders,
 //!     is_in_quick_access,
 //!     remove_from_recent_files,
+//!     WincentError
 //! };
 //!
 //! fn main() -> Result<(), WincentError> {
@@ -64,6 +66,7 @@
 //!
 //!     Ok(())
 //! }
+//! ```
 //! ```
 //!
 //! ## Features
@@ -109,7 +112,7 @@ pub type WincentResult<T> = Result<T, WincentError>;
 /// # Example
 ///
 /// ```rust
-/// use wincent::check_script_feasible;
+/// use wincent::{check_script_feasible, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     if check_script_feasible()? {
@@ -129,7 +132,7 @@ pub fn check_script_feasible() -> WincentResult<bool> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::{check_script_feasible, fix_script_feasible};
+/// use wincent::{check_script_feasible, fix_script_feasible, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     if !check_script_feasible()? {
@@ -152,7 +155,7 @@ pub fn fix_script_feasible() -> WincentResult<()> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::check_query_feasible;
+/// use wincent::{check_query_feasible, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     if check_query_feasible()? {
@@ -176,7 +179,7 @@ pub fn check_query_feasible() -> WincentResult<bool> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::check_pinunpin_feasible;
+/// use wincent::{check_pinunpin_feasible, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     if check_pinunpin_feasible()? {
@@ -200,7 +203,7 @@ pub fn check_pinunpin_feasible() -> WincentResult<bool> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::{check_feasible, fix_feasible};
+/// use wincent::{check_feasible, fix_feasible, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     if !check_feasible()? {
@@ -235,7 +238,7 @@ pub fn check_feasible() -> WincentResult<bool> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::fix_feasible;
+/// use wincent::{fix_feasible, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     match fix_feasible()? {
@@ -261,7 +264,7 @@ pub fn fix_feasible() -> WincentResult<bool> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::get_recent_files;
+/// use wincent::{get_recent_files, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     let recent_files = get_recent_files()?;
@@ -296,7 +299,7 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::get_frequent_folders;
+/// use wincent::{get_frequent_folders, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     let folders = get_frequent_folders()?;
@@ -331,7 +334,7 @@ pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
 /// # Example
 ///
 /// ```rust
-/// use wincent::get_quick_access_items;
+/// use wincent::{get_quick_access_items, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     match get_quick_access_items() {
@@ -375,10 +378,10 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 ///
 /// Returns `true` if the file is found in the recent files list.
 ///
-/// # Example
+/// # Example       
 ///
 /// ```rust
-/// use wincent::is_in_recent_files;
+/// use wincent::{is_in_recent_files, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     let file_exists = is_in_recent_files("Documents\\report.docx")?;
@@ -405,9 +408,9 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
 /// Returns `true` if the folder is found in the frequent folders list.
 ///
 /// # Example
-///
+///     
 /// ```rust
-/// use wincent::is_in_frequent_folders;
+/// use wincent::{is_in_frequent_folders, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     let folder_exists = is_in_frequent_folders("Projects")?;
@@ -436,9 +439,9 @@ pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 /// Returns `true` if the path is found in either recent files or frequent folders.
 ///
 /// # Example
-///
+///     
 /// ```rust
-/// use wincent::is_in_quick_access;
+/// use wincent::{is_in_quick_access, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Check for a specific file or folder
@@ -469,13 +472,15 @@ pub fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::add_to_recent_files;
+/// use wincent::{add_to_recent_files, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     add_to_recent_files("C:\\Documents\\report.docx")?;
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_file() {
@@ -493,13 +498,15 @@ pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::remove_from_recent_files;
+/// use wincent::{remove_from_recent_files, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     remove_from_recent_files("C:\\Documents\\report.docx")?;
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_file() {
@@ -527,14 +534,16 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::add_to_frequent_folders;
+/// use wincent::{add_to_frequent_folders, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Pin a project folder
 ///     add_to_frequent_folders("C:\\Projects\\my-project")?;
 ///     Ok(())
-/// }
+/// }   
+/// ```
 /// ```
 pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_dir() {
@@ -561,15 +570,17 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 /// Returns `Ok(())` if the folder was successfully unpinned.
 ///
 /// # Example
-///
+///         
+/// ```no_run
 /// ```rust
-/// use wincent::remove_from_frequent_folders;
+/// use wincent::{remove_from_frequent_folders, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Unpin a project folder
 ///     remove_from_frequent_folders("C:\\Projects\\old-project")?;
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_dir() {
@@ -593,8 +604,9 @@ pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::empty_recent_files;
+/// use wincent::{empty_recent_files, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Clear all recent files
@@ -602,6 +614,7 @@ pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
 ///     println!("Recent files list has been cleared");
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn empty_recent_files() -> WincentResult<()> {
     if !check_script_feasible()? {
@@ -621,8 +634,9 @@ pub fn empty_recent_files() -> WincentResult<()> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::empty_frequent_folders;
+/// use wincent::{empty_frequent_folders, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Clear all frequent folders
@@ -630,6 +644,7 @@ pub fn empty_recent_files() -> WincentResult<()> {
 ///     println!("Frequent folders list has been cleared");
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn empty_frequent_folders() -> WincentResult<()> {
     if !check_script_feasible()? {
@@ -651,8 +666,9 @@ pub fn empty_frequent_folders() -> WincentResult<()> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::empty_quick_access;
+/// use wincent::{empty_quick_access, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Clear all Quick Access items
@@ -660,6 +676,7 @@ pub fn empty_frequent_folders() -> WincentResult<()> {
 ///     println!("Quick Access has been completely cleared");
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn empty_quick_access() -> WincentResult<()> {
     empty_recent_files()?;
@@ -677,8 +694,9 @@ pub fn empty_quick_access() -> WincentResult<()> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::{is_recent_files_visiable, set_recent_files_visiable};
+/// use wincent::{is_recent_files_visiable, set_recent_files_visiable, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     let is_visible = is_recent_files_visiable()?;
@@ -687,6 +705,7 @@ pub fn empty_quick_access() -> WincentResult<()> {
 ///     }
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn is_recent_files_visiable() -> WincentResult<bool> {
     is_visialbe_with_registry(QuickAccess::RecentFiles)
@@ -700,8 +719,9 @@ pub fn is_recent_files_visiable() -> WincentResult<bool> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::{is_frequent_folders_visible, set_frequent_folders_visiable};
+/// use wincent::{is_frequent_folders_visible, set_frequent_folders_visiable, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     let is_visible = is_frequent_folders_visible()?;
@@ -713,6 +733,7 @@ pub fn is_recent_files_visiable() -> WincentResult<bool> {
 ///     }
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn is_frequent_folders_visible() -> WincentResult<bool> {
     is_visialbe_with_registry(QuickAccess::FrequentFolders)
@@ -726,14 +747,16 @@ pub fn is_frequent_folders_visible() -> WincentResult<bool> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::set_recent_files_visiable;
+/// use wincent::{set_recent_files_visiable, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Hide recent files in Quick Access
 ///     set_recent_files_visiable(false)?;
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn set_recent_files_visiable(is_visiable: bool) -> WincentResult<()> {
     set_visiable_with_registry(QuickAccess::RecentFiles, is_visiable)
@@ -751,8 +774,9 @@ pub fn set_recent_files_visiable(is_visiable: bool) -> WincentResult<()> {
 ///
 /// # Example
 ///
+/// ```no_run
 /// ```rust
-/// use wincent::set_frequent_folders_visiable;
+/// use wincent::{set_frequent_folders_visiable, WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Hide frequent folders in Quick Access
@@ -760,6 +784,7 @@ pub fn set_recent_files_visiable(is_visiable: bool) -> WincentResult<()> {
 ///     println!("Frequent folders are now hidden");
 ///     Ok(())
 /// }
+/// ```
 /// ```
 pub fn set_frequent_folders_visiable(is_visiable: bool) -> WincentResult<()> {
     set_visiable_with_registry(QuickAccess::FrequentFolders, is_visiable)
