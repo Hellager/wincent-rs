@@ -68,8 +68,8 @@ mod tests {
     use super::*;
     use crate::QuickAccess;
 
-    #[ignore]
     #[test_log::test]
+    #[ignore]
     fn test_recent_files_visibility() -> WincentResult<()> {
         let initial_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
         println!("Initial recent files visibility: {}", initial_state);
@@ -85,8 +85,8 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
     #[test_log::test]
+    #[ignore]
     fn test_frequent_folders_visibility() -> WincentResult<()> {
         let initial_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
         println!("Initial frequent folders visibility: {}", initial_state);

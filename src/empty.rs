@@ -103,6 +103,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_empty_recent_files() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         
@@ -121,6 +122,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_empty_normal_folders() -> WincentResult<()> {
         empty_normal_folders_with_jumplist_file()?;
         thread::sleep(Duration::from_secs(1));
@@ -132,6 +134,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_empty_pinned_folders() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         

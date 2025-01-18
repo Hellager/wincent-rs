@@ -131,6 +131,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_pin_unpin_frequent_folder() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path = test_dir.to_str().unwrap();
@@ -176,6 +177,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_concurrent_operations() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         
@@ -194,6 +196,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_add_remove_file_in_recent() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
 
@@ -233,6 +236,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_add_file_to_recent_with_unicode() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         

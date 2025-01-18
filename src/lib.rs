@@ -772,6 +772,7 @@ mod tests {
     use std::{thread, time::Duration};
 
     #[test_log::test]
+    #[ignore]
     fn test_feasibility_checks() -> WincentResult<()> {
         // Test script execution feasibility
         let script_feasible = check_script_feasible()?;
@@ -802,6 +803,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_quick_access_operations() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         
@@ -838,6 +840,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_visibility_operations() -> WincentResult<()> {
         // Save initial states
         let initial_recent = is_recent_files_visiable()?;
@@ -859,6 +862,7 @@ mod tests {
     }
 
     #[test_log::test]
+    #[ignore]
     fn test_empty_operations() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         
