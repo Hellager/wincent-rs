@@ -58,7 +58,7 @@ mod tests {
         assert!(matches!(wincent_error, WincentError::Io(_)));
 
         let missing_param = WincentError::MissingParemeter;
-        assert!(format!("{}", missing_param).contains("Missing parameter"));
+        assert!(format!("{}", missing_param).contains("Missing function parameter"));
 
         let invalid_path = WincentError::InvalidPath("test/path".to_string());
         assert!(format!("{}", invalid_path).contains("test/path"));
