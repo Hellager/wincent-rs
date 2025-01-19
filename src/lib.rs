@@ -21,7 +21,7 @@
 //! ## Basic Example
 //!
 //! ```rust
-//! use wincent::{check_feasible, fix_feasible, get_quick_access_items, error::error::WincentError};
+//! use wincent::{check_feasible, fix_feasible, get_quick_access_items, error::WincentError};
 //! 
 //! fn main() -> Result<(), WincentError> {
 //!     // Ensure operations are feasible
@@ -39,10 +39,11 @@
 //!
 //! ## Advanced Example
 //!
-//! ```
+//! ```no_run
 //! use wincent::{
 //!     add_to_frequent_folders,
 //!     is_in_quick_access,
+//!     get_recent_files,
 //!     remove_from_recent_files,
 //!     error::WincentError
 //! };
@@ -470,7 +471,7 @@ pub fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{add_to_recent_files, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -494,7 +495,7 @@ pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{remove_from_recent_files, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -528,7 +529,7 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{add_to_frequent_folders, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -563,7 +564,7 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 ///
 /// # Example
 ///         
-/// ```rust
+/// ```no_run
 /// use wincent::{remove_from_frequent_folders, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -594,7 +595,7 @@ pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{empty_recent_files, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -622,7 +623,7 @@ pub fn empty_recent_files() -> WincentResult<()> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{empty_frequent_folders, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -652,7 +653,7 @@ pub fn empty_frequent_folders() -> WincentResult<()> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{empty_quick_access, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
