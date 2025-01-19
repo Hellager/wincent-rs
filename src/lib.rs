@@ -679,7 +679,7 @@ pub fn empty_quick_access() -> WincentResult<()> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{is_recent_files_visiable, set_recent_files_visiable, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -702,7 +702,7 @@ pub fn is_recent_files_visiable() -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{is_frequent_folders_visible, set_frequent_folders_visiable, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -728,7 +728,7 @@ pub fn is_frequent_folders_visible() -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{set_recent_files_visiable, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
@@ -753,7 +753,7 @@ pub fn set_recent_files_visiable(is_visiable: bool) -> WincentResult<()> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use wincent::{set_frequent_folders_visiable, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {

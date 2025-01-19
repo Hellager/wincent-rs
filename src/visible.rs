@@ -1,24 +1,19 @@
 use crate::{WincentResult, error::WincentError};
 
 /// Retrieves the registry key for Quick Access settings.
-fn get_quick_access_reg(is_read: bool) -> WincentResult<winreg::RegKey> {
+fn get_quick_access_reg() -> WincentResult<winreg::RegKey> {
     use winreg::enums::*;
     use winreg::RegKey;
 
     let hklm = RegKey::predef(HKEY_CURRENT_USER);
-    if is_read {
-        hklm.open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")
-            .map_err(WincentError::Io)
-    } else {
-        hklm.create_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")
-            .map(|(key, _)| key)
-            .map_err(WincentError::Io)
-    }
+    hklm.create_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer")
+        .map(|(key, _)| key)
+        .map_err(WincentError::Io)
 }
 
 /// Checks and fixes the Quick Access registry settings.
 fn check_fix_quick_acess_reg() -> WincentResult<()> {
-    let reg_key = get_quick_access_reg(true)?;
+    let reg_key = get_quick_access_reg()?;
 
     let values_to_check = vec!["ShowFrequent", "ShowRecent"];
     for value_name in &values_to_check {
@@ -37,7 +32,7 @@ fn check_fix_quick_acess_reg() -> WincentResult<()> {
 
 /// Checks the visibility of a Quick Access item based on registry settings.
 pub(crate) fn is_visialbe_with_registry(target: crate::QuickAccess) -> WincentResult<bool> {
-    let reg_key = get_quick_access_reg(true)?;
+    let reg_key = get_quick_access_reg()?;
     let _ = check_fix_quick_acess_reg()?;
     let reg_value = match target {
         crate::QuickAccess::FrequentFolders => "ShowFrequent",
@@ -45,18 +40,13 @@ pub(crate) fn is_visialbe_with_registry(target: crate::QuickAccess) -> WincentRe
         crate::QuickAccess::All => "ShowRecent",
     };
 
-    let val = reg_key.get_raw_value(reg_value).map_err(WincentError::Io)?;
-    // raw reg value vec will contains '\n' between characters, needs to filter
-    let filtered_vec: Vec<u8> = val.bytes.into_iter().filter(|&x| x != 0).collect();
-
-    let visibility = u32::from_ne_bytes(filtered_vec[0..4].try_into().map_err(|e| WincentError::ArrayConversion(e))?);
-    
+    let visibility: u32 = reg_key.get_value(reg_value).map_err(WincentError::Io)?;
     Ok(visibility != 0)
 }
 
 /// Sets the visibility of a Quick Access item in the registry.
 pub(crate) fn set_visiable_with_registry(target: crate::QuickAccess, visiable: bool) -> WincentResult<()> {
-    let reg_key = get_quick_access_reg(false)?;
+    let reg_key = get_quick_access_reg()?;
     let _ = check_fix_quick_acess_reg()?;
     let reg_value = match target {
         crate::QuickAccess::FrequentFolders => "ShowFrequent",
