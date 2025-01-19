@@ -1,10 +1,8 @@
 use crate::{
-    QuickAccess, 
-    WincentResult,
     error::WincentError,
-    scripts::{Script, execute_ps_script}
+    scripts::{execute_ps_script, Script},
+    QuickAccess, WincentResult,
 };
-
 
 /// Queries recent items from Quick Access using a PowerShell script.
 pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
@@ -15,9 +13,8 @@ pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult
     };
 
     if output.status.success() {
-        let stdout_str = String::from_utf8(output.stdout)
-            .map_err(WincentError::Utf8)?;
-        
+        let stdout_str = String::from_utf8(output.stdout).map_err(WincentError::Utf8)?;
+
         let data: Vec<String> = stdout_str
             .lines()
             .map(str::trim)
@@ -39,12 +36,19 @@ mod tests {
     #[test]
     fn test_query_recent_files() -> WincentResult<()> {
         let files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
-        
+
         if !files.is_empty() {
-            assert!(files.iter().all(|path| !path.is_empty()), "Paths should not be empty");
-            
+            assert!(
+                files.iter().all(|path| !path.is_empty()),
+                "Paths should not be empty"
+            );
+
             for path in &files {
-                assert!(path.contains(":\\"), "Path should be a valid Windows path format: {}", path);
+                assert!(
+                    path.contains(":\\"),
+                    "Path should be a valid Windows path format: {}",
+                    path
+                );
             }
         }
 
@@ -54,12 +58,19 @@ mod tests {
     #[test]
     fn test_query_frequent_folders() -> WincentResult<()> {
         let folders = query_recent_with_ps_script(QuickAccess::FrequentFolders)?;
-        
+
         if !folders.is_empty() {
-            assert!(folders.iter().all(|path| !path.is_empty()), "Paths should not be empty");
-            
+            assert!(
+                folders.iter().all(|path| !path.is_empty()),
+                "Paths should not be empty"
+            );
+
             for path in &folders {
-                assert!(path.contains(":\\"), "Path should be a valid Windows path format: {}", path);
+                assert!(
+                    path.contains(":\\"),
+                    "Path should be a valid Windows path format: {}",
+                    path
+                );
             }
         }
 
@@ -71,10 +82,17 @@ mod tests {
         let items = query_recent_with_ps_script(QuickAccess::All)?;
 
         if !items.is_empty() {
-            assert!(items.iter().all(|path| !path.is_empty()), "Paths should not be empty");
-            
+            assert!(
+                items.iter().all(|path| !path.is_empty()),
+                "Paths should not be empty"
+            );
+
             for path in &items {
-                assert!(path.contains(":\\"), "Path should be a valid Windows path format: {}", path);
+                assert!(
+                    path.contains(":\\"),
+                    "Path should be a valid Windows path format: {}",
+                    path
+                );
             }
         }
 
