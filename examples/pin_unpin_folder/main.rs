@@ -1,13 +1,9 @@
+use std::{thread, time::Duration};
 use tempfile::Builder;
 use wincent::{
-    add_to_frequent_folders,
-    remove_from_frequent_folders,
-    is_in_frequent_folders,
-    check_script_feasible,
-    fix_script_feasible,
-    WincentResult
+    add_to_frequent_folders, check_script_feasible, fix_script_feasible, is_in_frequent_folders,
+    remove_from_frequent_folders, WincentResult,
 };
-use std::{thread, time::Duration};
 
 fn main() -> WincentResult<()> {
     // Check and ensure script execution feasibility
@@ -17,9 +13,7 @@ fn main() -> WincentResult<()> {
     }
 
     // Create temporary folder
-    let temp_dir = Builder::new()
-        .prefix("wincent-test-")
-        .tempdir()?;
+    let temp_dir = Builder::new().prefix("wincent-test-").tempdir()?;
     let dir_path = temp_dir.path().to_str().unwrap();
 
     println!("Working with temporary folder: {}", dir_path);
@@ -27,7 +21,7 @@ fn main() -> WincentResult<()> {
     // Pin folder to frequent folders
     println!("Pinning folder to Quick Access...");
     add_to_frequent_folders(dir_path)?;
-    
+
     // Wait for Windows to update
     thread::sleep(Duration::from_millis(500));
 
@@ -42,7 +36,7 @@ fn main() -> WincentResult<()> {
     // Unpin folder from frequent folders
     println!("Unpinning folder from Quick Access...");
     remove_from_frequent_folders(dir_path)?;
-    
+
     // Wait for Windows to update
     thread::sleep(Duration::from_millis(500));
 

@@ -1,15 +1,9 @@
 extern crate wincent;
 
 use wincent::{
-    get_quick_access_items,
-    get_recent_files,
-    get_frequent_folders,
-    is_in_quick_access,
-    is_in_recent_files,
-    is_in_frequent_folders,
-    check_script_feasible,
-    fix_script_feasible,
-    WincentResult
+    check_script_feasible, fix_script_feasible, get_frequent_folders, get_quick_access_items,
+    get_recent_files, is_in_frequent_folders, is_in_quick_access, is_in_recent_files,
+    WincentResult,
 };
 
 fn print_items(title: &str, items: &[String]) {
@@ -47,17 +41,17 @@ fn main() -> WincentResult<()> {
     // Search for specific keywords
     let keywords = ["Documents", "Downloads", "Desktop"];
     println!("\nSearching for specific keywords...");
-    
+
     for keyword in keywords {
         println!("\nChecking for keyword: '{}'", keyword);
-        
+
         if is_in_quick_access(keyword)? {
             println!("'{}' found in Quick Access", keyword);
-            
+
             if is_in_recent_files(keyword)? {
                 println!("'{}' found in Recent Files", keyword);
             }
-            
+
             if is_in_frequent_folders(keyword)? {
                 println!("'{}' found in Frequent Folders", keyword);
             }

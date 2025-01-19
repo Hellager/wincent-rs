@@ -1,16 +1,25 @@
 use wincent::{
-    is_recent_files_visiable,
-    is_frequent_folders_visible,
-    set_recent_files_visiable,
-    set_frequent_folders_visiable,
-    WincentResult
+    is_frequent_folders_visible, is_recent_files_visiable, set_frequent_folders_visiable,
+    set_recent_files_visiable, WincentResult,
 };
 
 fn print_visibility_status() -> WincentResult<()> {
-    println!("\n=== Quick Access Visibility Status ===");
-    println!("Recent Files: {}", if is_recent_files_visiable()? { "Visible" } else { "Hidden" });
-    println!("Frequent Folders: {}", if is_frequent_folders_visible()? { "Visible" } else { "Hidden" });
-    println!("===================================\n");
+    println!(
+        "Recent Files: {}",
+        if is_recent_files_visiable()? {
+            "Visible"
+        } else {
+            "Hidden"
+        }
+    );
+    println!(
+        "Frequent Folders: {}",
+        if is_frequent_folders_visible()? {
+            "Visible"
+        } else {
+            "Hidden"
+        }
+    );
     Ok(())
 }
 
@@ -27,7 +36,7 @@ fn main() -> WincentResult<()> {
     println!("Hiding all sections...");
     set_recent_files_visiable(false)?;
     set_frequent_folders_visiable(false)?;
-    
+
     println!("Status after hiding:");
     print_visibility_status()?;
 
@@ -35,7 +44,7 @@ fn main() -> WincentResult<()> {
     println!("Showing all sections...");
     set_recent_files_visiable(true)?;
     set_frequent_folders_visiable(true)?;
-    
+
     println!("Status after showing:");
     print_visibility_status()?;
 
@@ -43,7 +52,7 @@ fn main() -> WincentResult<()> {
     println!("Setting different visibility...");
     set_recent_files_visiable(false)?;
     set_frequent_folders_visiable(true)?;
-    
+
     println!("Status after mixed settings:");
     print_visibility_status()?;
 
@@ -51,7 +60,7 @@ fn main() -> WincentResult<()> {
     println!("Restoring initial visibility...");
     set_recent_files_visiable(initial_recent)?;
     set_frequent_folders_visiable(initial_folders)?;
-    
+
     println!("Final status (restored to initial):");
     print_visibility_status()?;
 

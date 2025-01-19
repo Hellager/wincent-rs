@@ -1,14 +1,10 @@
 use std::io::Write;
+use std::{thread, time::Duration};
 use tempfile::Builder;
 use wincent::{
-    add_to_recent_files, 
-    remove_from_recent_files,
-    is_in_recent_files,
-    check_script_feasible,
-    fix_script_feasible,
-    WincentResult
+    add_to_recent_files, check_script_feasible, fix_script_feasible, is_in_recent_files,
+    remove_from_recent_files, WincentResult,
 };
-use std::{thread, time::Duration};
 
 fn main() -> WincentResult<()> {
     // Check and ensure script execution feasibility
@@ -22,9 +18,12 @@ fn main() -> WincentResult<()> {
         .prefix("wincent-test-")
         .suffix(".txt")
         .tempfile()?;
-    
+
     // Write some test content
-    writeln!(temp_file.as_file(), "This is a test file for Quick Access operations")?;
+    writeln!(
+        temp_file.as_file(),
+        "This is a test file for Quick Access operations"
+    )?;
     let file_path = temp_file.path().to_str().unwrap();
 
     println!("Working with temporary file: {}", file_path);
@@ -32,7 +31,7 @@ fn main() -> WincentResult<()> {
     // Add file to recent items
     println!("Adding file to Quick Access...");
     add_to_recent_files(file_path)?;
-    
+
     // Wait for Windows to update
     thread::sleep(Duration::from_millis(500));
 
@@ -47,7 +46,7 @@ fn main() -> WincentResult<()> {
     // Remove file from recent items
     println!("Removing file from Quick Access...");
     remove_from_recent_files(file_path)?;
-    
+
     // Wait for Windows to update
     thread::sleep(Duration::from_millis(500));
 
