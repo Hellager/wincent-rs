@@ -1,4 +1,4 @@
-use crate::{WincentResult, error::WincentError};
+use crate::{error::WincentError, WincentResult};
 use std::io::Write;
 use std::process::Command;
 use tempfile::Builder;
@@ -107,51 +107,63 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
         Script::QueryQuickAccess => Ok(QUERY_QUICK_ACCESS.to_string()),
         Script::RemoveRecentFile => {
             if let Some(data) = para {
-                let content = format!(r#"
+                let content = format!(
+                    r#"
                     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
                     $shell = New-Object -ComObject Shell.Application;
                     $files = $shell.Namespace("shell:::{{679f85cb-0220-4080-b29b-5540cc05aab6}}").Items() | where {{$_.IsFolder -eq $false}};
                     $target = $files | where {{$_.Path -eq "{}"}};
                     $target.InvokeVerb("remove");
-                "#, data);
-                Ok(content)                
+                "#,
+                    data
+                );
+                Ok(content)
             } else {
                 Err(WincentError::MissingParemeter)
             }
-        },
+        }
         Script::PinToFrequentFolder => {
             if let Some(data) = para {
-                let content = format!(r#"
+                let content = format!(
+                    r#"
                     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
                     $shell = New-Object -ComObject Shell.Application;
                     $shell.Namespace("{}").Self.InvokeVerb("pintohome");
-                "#, data);
-                Ok(content)                
+                "#,
+                    data
+                );
+                Ok(content)
             } else {
                 Err(WincentError::MissingParemeter)
             }
-        },
+        }
         Script::UnpinFromFrequentFolder => {
             if let Some(data) = para {
-                let content = format!(r#"
+                let content = format!(
+                    r#"
                     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
                     $shell = New-Object -ComObject Shell.Application;
                     $folders = $shell.Namespace("shell:::{{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}}").Items();
                     $target = $folders | Where-Object {{$_.Path -eq "{}"}};
                     $target.InvokeVerb("unpinfromhome");
-                "#, data);
-                Ok(content)               
+                "#,
+                    data
+                );
+                Ok(content)
             } else {
                 Err(WincentError::MissingParemeter)
             }
-        },
+        }
         Script::CheckQueryFeasible => Ok(CHECK_QUERY_FEASIBLE.to_string()),
         Script::CheckPinUnpinFeasible => Ok(CHECK_PIN_UNPIN_FEASIBLE.to_string()),
     }
 }
 
 /// Executes a PowerShell script generated based on the specified method and optional parameters.
-pub(crate) fn execute_ps_script(method: Script, para: Option<&str>) -> WincentResult<std::process::Output> {
+pub(crate) fn execute_ps_script(
+    method: Script,
+    para: Option<&str>,
+) -> WincentResult<std::process::Output> {
     let content = get_script_content(method, para)?;
     let temp_script_file = Builder::new()
         .prefix("wincent_")
@@ -171,9 +183,9 @@ pub(crate) fn execute_ps_script(method: Script, para: Option<&str>) -> WincentRe
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            temp_script_file.into_temp_path().to_str().ok_or_else(|| 
+            temp_script_file.into_temp_path().to_str().ok_or_else(|| {
                 WincentError::InvalidPath("Failed to convert temp file path".to_string())
-            )?,
+            })?,
         ])
         .output()
         .map_err(|e| WincentError::PowerShellExecution(e.to_string()))
@@ -208,7 +220,7 @@ mod tests {
     fn test_get_check_query_feasible_script() {
         let script = get_script_content(Script::CheckQueryFeasible, None).unwrap();
         assert!(script.contains("shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}"));
-    } 
+    }
 
     #[test]
     fn test_get_check_pin_unpin_feasible_script() {
@@ -219,14 +231,34 @@ mod tests {
     #[test]
     fn test_script_content_validity() {
         let path = "C:\\Users\\User\\Documents";
-        assert!(!get_script_content(Script::RefreshExplorer, None).unwrap().is_empty());
-        assert!(!get_script_content(Script::QueryQuickAccess, None).unwrap().is_empty());
-        assert!(!get_script_content(Script::QuertRecentFile, None).unwrap().is_empty());
-        assert!(!get_script_content(Script::QueryFrequentFolder, None).unwrap().is_empty());
-        assert!(!get_script_content(Script::RemoveRecentFile, Some(path)).unwrap().is_empty());
-        assert!(!get_script_content(Script::PinToFrequentFolder, Some(path)).unwrap().is_empty());
-        assert!(!get_script_content(Script::UnpinFromFrequentFolder, Some(path)).unwrap().is_empty());
-        assert!(!get_script_content(Script::CheckQueryFeasible, None).unwrap().is_empty());
-        assert!(!get_script_content(Script::CheckPinUnpinFeasible, None).unwrap().is_empty());
+        assert!(!get_script_content(Script::RefreshExplorer, None)
+            .unwrap()
+            .is_empty());
+        assert!(!get_script_content(Script::QueryQuickAccess, None)
+            .unwrap()
+            .is_empty());
+        assert!(!get_script_content(Script::QuertRecentFile, None)
+            .unwrap()
+            .is_empty());
+        assert!(!get_script_content(Script::QueryFrequentFolder, None)
+            .unwrap()
+            .is_empty());
+        assert!(!get_script_content(Script::RemoveRecentFile, Some(path))
+            .unwrap()
+            .is_empty());
+        assert!(!get_script_content(Script::PinToFrequentFolder, Some(path))
+            .unwrap()
+            .is_empty());
+        assert!(
+            !get_script_content(Script::UnpinFromFrequentFolder, Some(path))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!get_script_content(Script::CheckQueryFeasible, None)
+            .unwrap()
+            .is_empty());
+        assert!(!get_script_content(Script::CheckPinUnpinFeasible, None)
+            .unwrap()
+            .is_empty());
     }
 }
