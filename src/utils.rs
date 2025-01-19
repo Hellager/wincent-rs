@@ -1,18 +1,16 @@
 #![allow(dead_code)]
 
 use crate::{
-    WincentResult,
     error::WincentError,
-    scripts::{Script, execute_ps_script}
+    scripts::{execute_ps_script, Script},
+    WincentResult,
 };
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 
 /// Checks if the current user has administrative privileges.
 pub(crate) fn is_admin() -> bool {
-    unsafe {
-        IsUserAnAdmin() == BOOL(1)
-    }
+    unsafe { IsUserAnAdmin() == BOOL(1) }
 }
 
 /// Refreshes the Windows Explorer window using a PowerShell script.
