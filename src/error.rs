@@ -75,4 +75,4 @@ mod tests {
         let failure: WincentResult<()> = Err(WincentError::MissingParemeter);
         assert!(failure.is_err());
     }
-} 
+}
