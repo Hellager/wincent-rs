@@ -1,6 +1,5 @@
 //! # wincent
-//! 
-//! `wincent` is a Rust library for managing Windows Quick Access items, including recent files 
+//!
 //! and frequent folders. It provides a comprehensive API to interact with Windows Quick Access functionality.
 //!
 //! ## Main Features
@@ -22,7 +21,7 @@
 //!
 //! ```rust
 //! use wincent::{check_feasible, fix_feasible, get_quick_access_items, error::WincentError};
-//! 
+//!
 //! fn main() -> Result<(), WincentError> {
 //!     // Ensure operations are feasible
 //!     if !check_feasible()? {
@@ -77,15 +76,15 @@
 //! - Cross-version Windows support
 //!
 
-mod utils;
-mod feasible;
-mod query;
-mod visible;
-mod handle;
-mod scripts;
 mod empty;
-mod test_utils;
 pub mod error;
+mod feasible;
+mod handle;
+mod query;
+mod scripts;
+mod test_utils;
+mod utils;
+mod visible;
 
 use crate::{
     error::WincentError,
@@ -95,10 +94,10 @@ use crate::{
 pub(crate) enum QuickAccess {
     FrequentFolders,
     RecentFiles,
-    All
+    All,
 }
 
-pub type WincentResult<T> = Result<T, WincentError>; 
+pub type WincentResult<T> = Result<T, WincentError>;
 
 /****************************************************** Feature Feasible ******************************************************/
 
@@ -255,11 +254,11 @@ pub fn fix_feasible() -> WincentResult<bool> {
 /****************************************************** Query Quick Access ******************************************************/
 
 /// Gets a list of recent files from Windows Quick Access.
-/// 
+///
 /// # Returns
 ///
 /// Returns a vector of file paths as strings.
-/// 
+///
 /// # Example
 ///
 /// ```rust
@@ -276,13 +275,13 @@ pub fn fix_feasible() -> WincentResult<bool> {
 pub fn get_recent_files() -> WincentResult<Vec<String>> {
     if !check_script_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string()
+            "PowerShell script execution is not feasible".to_string(),
         ));
     }
 
     if !check_query_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "Quick Access query operation is not feasible".to_string()
+            "Quick Access query operation is not feasible".to_string(),
         ));
     }
 
@@ -290,7 +289,7 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 }
 
 /// Gets a list of frequent folders from Windows Quick Access.
-/// 
+///
 /// # Returns
 ///
 /// Returns a vector of folder paths as strings.
@@ -311,13 +310,13 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
     if !check_script_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string()
+            "PowerShell script execution is not feasible".to_string(),
         ));
     }
 
     if !check_query_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "Quick Access query operation is not feasible".to_string()
+            "Quick Access query operation is not feasible".to_string(),
         ));
     }
 
@@ -351,19 +350,18 @@ pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
 pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
     if !check_script_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string()
+            "PowerShell script execution is not feasible".to_string(),
         ));
     }
 
     if !check_query_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "Quick Access query operation is not feasible".to_string()
+            "Quick Access query operation is not feasible".to_string(),
         ));
     }
 
     query::query_recent_with_ps_script(QuickAccess::All)
 }
-
 
 /****************************************************** Check Quick Access ******************************************************/
 
@@ -393,7 +391,7 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
     let items = get_recent_files()?;
 
-    Ok(items.iter().any(|item| {item.contains(keyword) }))
+    Ok(items.iter().any(|item| item.contains(keyword)))
 }
 
 /// Checks if a folder path exists in the Windows Frequent Folders list.
@@ -424,7 +422,7 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
 pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
     let items = get_frequent_folders()?;
 
-    Ok(items.iter().any(|item| {item.contains(keyword) }))
+    Ok(items.iter().any(|item| item.contains(keyword)))
 }
 
 /// Checks if a path exists in the Windows Quick Access list.
@@ -458,7 +456,7 @@ pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 pub fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
     let items = get_quick_access_items()?;
 
-    Ok(items.iter().any(|item| {item.contains(keyword) }))
+    Ok(items.iter().any(|item| item.contains(keyword)))
 }
 
 /****************************************************** Handle Quick Access ******************************************************/
@@ -481,7 +479,10 @@ pub fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
 /// ```
 pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_file() {
-        return Err(WincentError::InvalidPath(format!("Not a valid file: {}", path)));
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid file: {}",
+            path
+        )));
     }
 
     handle::add_file_to_recent_with_api(path)
@@ -505,12 +506,15 @@ pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
 /// ```
 pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_file() {
-        return Err(WincentError::InvalidPath(format!("Not a valid file: {}", path)));
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid file: {}",
+            path
+        )));
     }
 
     if !check_script_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string()
+            "PowerShell script execution is not feasible".to_string(),
         ));
     }
 
@@ -540,13 +544,17 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// ```
 pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_dir() {
-        return Err(WincentError::InvalidPath(format!("Not a valid directory: {}", path)));
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid directory: {}",
+            path
+        )));
     }
 
     if !check_script_feasible()? || !check_pinunpin_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "Pin operation is not feasible".to_string()
-        ));
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid directory: {}",
+            path
+        )));
     }
 
     handle::pin_frequent_folder_with_ps_script(path)
@@ -575,12 +583,15 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 /// ```
 pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
     if !std::path::Path::new(path).is_dir() {
-        return Err(WincentError::InvalidPath(format!("Not a valid directory: {}", path)));
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid directory: {}",
+            path
+        )));
     }
 
     if !check_script_feasible()? || !check_pinunpin_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "Unpin operation is not feasible".to_string()
+            "Unpin operation is not feasible".to_string(),
         ));
     }
 
@@ -608,7 +619,7 @@ pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
 pub fn empty_recent_files() -> WincentResult<()> {
     if !check_script_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string()
+            "PowerShell script execution is not feasible".to_string(),
         ));
     }
 
@@ -636,7 +647,7 @@ pub fn empty_recent_files() -> WincentResult<()> {
 pub fn empty_frequent_folders() -> WincentResult<()> {
     if !check_script_feasible()? {
         return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string()
+            "PowerShell script execution is not feasible".to_string(),
         ));
     }
 
@@ -770,7 +781,7 @@ pub fn set_frequent_folders_visiable(is_visiable: bool) -> WincentResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{setup_test_env, create_test_file, cleanup_test_env};
+    use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
     use std::{thread, time::Duration};
 
     #[test_log::test]
@@ -792,7 +803,7 @@ mod tests {
         if !script_feasible || !query_feasible || !pinunpin_feasible {
             println!("Attempting to fix feasibility...");
             fix_script_feasible()?;
-            
+
             let fixed = check_feasible()?;
             if fixed {
                 println!("Successfully fixed feasibility");
@@ -808,35 +819,47 @@ mod tests {
     #[ignore]
     fn test_quick_access_operations() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
-        
+
         // Create test files
         let test_file = create_test_file(&test_dir, "test.txt", "test content")?;
         let test_path = test_file.to_str().unwrap();
-        
+
         // Test adding to recent files
         add_to_recent_files(test_path)?;
         thread::sleep(Duration::from_millis(500));
-        
+
         // Verify file was added
-        assert!(is_in_recent_files(test_path)?, "File should be in recent files");
-        
+        assert!(
+            is_in_recent_files(test_path)?,
+            "File should be in recent files"
+        );
+
         // Test adding folder to frequent folders
         let dir_path = test_dir.to_str().unwrap();
         add_to_frequent_folders(dir_path)?;
         thread::sleep(Duration::from_millis(500));
-        
+
         // Verify folder was added
-        assert!(is_in_frequent_folders(dir_path)?, "Folder should be in frequent folders");
-        
+        assert!(
+            is_in_frequent_folders(dir_path)?,
+            "Folder should be in frequent folders"
+        );
+
         // Test removal operations
         remove_from_recent_files(test_path)?;
         remove_from_frequent_folders(dir_path)?;
         thread::sleep(Duration::from_millis(500));
-        
+
         // Verify removals
-        assert!(!is_in_recent_files(test_path)?, "File should not be in recent files");
-        assert!(!is_in_frequent_folders(dir_path)?, "Folder should not be in frequent folders");
-        
+        assert!(
+            !is_in_recent_files(test_path)?,
+            "File should not be in recent files"
+        );
+        assert!(
+            !is_in_frequent_folders(dir_path)?,
+            "Folder should not be in frequent folders"
+        );
+
         cleanup_test_env(&test_dir)?;
         Ok(())
     }
@@ -847,19 +870,27 @@ mod tests {
         // Save initial states
         let initial_recent = is_recent_files_visiable()?;
         let initial_frequent = is_frequent_folders_visible()?;
-        
+
         // Test visibility toggling
         set_recent_files_visiable(!initial_recent)?;
         set_frequent_folders_visiable(!initial_frequent)?;
-        
+
         // Verify changes
-        assert_eq!(!initial_recent, is_recent_files_visiable()?, "Recent files visibility should be toggled");
-        assert_eq!(!initial_frequent, is_frequent_folders_visible()?, "Frequent folders visibility should be toggled");
-        
+        assert_eq!(
+            !initial_recent,
+            is_recent_files_visiable()?,
+            "Recent files visibility should be toggled"
+        );
+        assert_eq!(
+            !initial_frequent,
+            is_frequent_folders_visible()?,
+            "Frequent folders visibility should be toggled"
+        );
+
         // Restore initial states
         set_recent_files_visiable(initial_recent)?;
         set_frequent_folders_visiable(initial_frequent)?;
-        
+
         Ok(())
     }
 
@@ -867,40 +898,56 @@ mod tests {
     #[ignore]
     fn test_empty_operations() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
-        
+
         // Test empty_recent_files
         let test_file = create_test_file(&test_dir, "test.txt", "test content")?;
         add_to_recent_files(test_file.to_str().unwrap())?;
         thread::sleep(Duration::from_millis(500));
-        
-        assert!(is_in_recent_files(test_file.to_str().unwrap())?, "File should be in recent files");
+
+        assert!(
+            is_in_recent_files(test_file.to_str().unwrap())?,
+            "File should be in recent files"
+        );
         empty_recent_files()?;
         thread::sleep(Duration::from_millis(500));
-        assert!(!is_in_recent_files(test_file.to_str().unwrap())?, "Recent files should be empty");
+        assert!(
+            !is_in_recent_files(test_file.to_str().unwrap())?,
+            "Recent files should be empty"
+        );
 
         // Test empty_frequent_folders
         let dir_path = test_dir.to_str().unwrap();
         add_to_frequent_folders(dir_path)?;
         thread::sleep(Duration::from_millis(500));
-        
-        assert!(is_in_frequent_folders(dir_path)?, "Folder should be in frequent folders");
+
+        assert!(
+            is_in_frequent_folders(dir_path)?,
+            "Folder should be in frequent folders"
+        );
         empty_frequent_folders()?;
         thread::sleep(Duration::from_millis(500));
-        assert!(!is_in_frequent_folders(dir_path)?, "Frequent folders should be empty");
+        assert!(
+            !is_in_frequent_folders(dir_path)?,
+            "Frequent folders should be empty"
+        );
 
         // Test empty_quick_access
         add_to_recent_files(test_file.to_str().unwrap())?;
         add_to_frequent_folders(dir_path)?;
         thread::sleep(Duration::from_millis(500));
-        
-        assert!(is_in_quick_access(test_file.to_str().unwrap())? || 
-               is_in_quick_access(dir_path)?, "Items should be in Quick Access");
-        
+
+        assert!(
+            is_in_quick_access(test_file.to_str().unwrap())? || is_in_quick_access(dir_path)?,
+            "Items should be in Quick Access"
+        );
+
         empty_quick_access()?;
         thread::sleep(Duration::from_millis(500));
-        
-        assert!(!is_in_quick_access(test_file.to_str().unwrap())? && 
-               !is_in_quick_access(dir_path)?, "Quick Access should be empty");
+
+        assert!(
+            !is_in_quick_access(test_file.to_str().unwrap())? && !is_in_quick_access(dir_path)?,
+            "Quick Access should be empty"
+        );
 
         cleanup_test_env(&test_dir)?;
         Ok(())
