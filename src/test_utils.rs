@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::WincentResult;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use std::io::Write;
 
@@ -13,7 +13,7 @@ pub(crate) fn setup_test_env() -> WincentResult<PathBuf> {
 }
 
 /// Clean up test environment
-pub(crate) fn cleanup_test_env(path: &PathBuf) -> WincentResult<()> {
+pub(crate) fn cleanup_test_env(path: &Path) -> WincentResult<()> {
     if path.exists() {
         fs::remove_dir_all(path)?;
     }
@@ -21,7 +21,7 @@ pub(crate) fn cleanup_test_env(path: &PathBuf) -> WincentResult<()> {
 }
 
 /// Create test file and write content
-pub(crate) fn create_test_file(dir: &PathBuf, name: &str, content: &str) -> WincentResult<PathBuf> {
+pub(crate) fn create_test_file(dir: &Path, name: &str, content: &str) -> WincentResult<PathBuf> {
     let file_path = dir.join(name);
     let mut file = File::create(&file_path)?;
     file.write_all(content.as_bytes())?;

@@ -16,7 +16,7 @@ pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult
 
     if output.status.success() {
         let stdout_str = String::from_utf8(output.stdout)
-            .map_err(|e| WincentError::Utf8(e))?;
+            .map_err(WincentError::Utf8)?;
         
         let data: Vec<String> = stdout_str
             .lines()

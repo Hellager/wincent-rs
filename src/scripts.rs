@@ -114,9 +114,9 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
                     $target = $files | where {{$_.Path -eq "{}"}};
                     $target.InvokeVerb("remove");
                 "#, data);
-                return Ok(content);                
+                Ok(content)                
             } else {
-                return Err(WincentError::MissingParemeter);
+                Err(WincentError::MissingParemeter)
             }
         },
         Script::PinToFrequentFolder => {
@@ -126,9 +126,9 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
                     $shell = New-Object -ComObject Shell.Application;
                     $shell.Namespace("{}").Self.InvokeVerb("pintohome");
                 "#, data);
-                return Ok(content);                
+                Ok(content)                
             } else {
-                return Err(WincentError::MissingParemeter);
+                Err(WincentError::MissingParemeter)
             }
         },
         Script::UnpinFromFrequentFolder => {
@@ -140,9 +140,9 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
                     $target = $folders | Where-Object {{$_.Path -eq "{}"}};
                     $target.InvokeVerb("unpinfromhome");
                 "#, data);
-                return Ok(content);                
+                Ok(content)               
             } else {
-                return Err(WincentError::MissingParemeter);
+                Err(WincentError::MissingParemeter)
             }
         },
         Script::CheckQueryFeasible => Ok(CHECK_QUERY_FEASIBLE.to_string()),
@@ -158,7 +158,7 @@ pub(crate) fn execute_ps_script(method: Script, para: Option<&str>) -> WincentRe
         .suffix(".ps1")
         .rand_bytes(5)
         .tempfile()
-        .map_err(|e| WincentError::Io(e))?;
+        .map_err(WincentError::Io)?;
 
     let bom = [0xEF, 0xBB, 0xBF];
     let mut file = temp_script_file.as_file();

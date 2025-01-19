@@ -52,9 +52,7 @@ pub(crate) fn empty_normal_folders_with_jumplist_file() -> WincentResult<()> {
     let jumplist_file = std::path::Path::new(&recent_folder).join("AutomaticDestinations").join("f01b4d95cf55d32a.automaticDestinations-ms");
 
     if jumplist_file.exists() { 
-        std::fs::remove_file(&jumplist_file).map_err(|e| 
-            WincentError::Io(e)
-        )?;
+        std::fs::remove_file(&jumplist_file).map_err(WincentError::Io)?;
     }
     
     Ok(())

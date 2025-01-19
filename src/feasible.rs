@@ -17,11 +17,11 @@ fn get_execution_policy_reg() -> WincentResult<winreg::RegKey> {
 
     if utils::is_admin() {
         let hklm_reg_key = hklm.open_subkey_with_flags(key_path, winreg::enums::KEY_READ | winreg::enums::KEY_WRITE).map_err(WincentError::Io)?;
-        return Ok(hklm_reg_key);
+        Ok(hklm_reg_key)
     } else {
         let (hkcu_reg_key, _) = hkcu.create_subkey_with_flags(key_path, winreg::enums::KEY_READ | winreg::enums::KEY_WRITE)
             .map_err(WincentError::Io)?;
-        return Ok(hkcu_reg_key);
+        Ok(hkcu_reg_key)
     }
 }
 
@@ -41,9 +41,9 @@ pub(crate) fn check_script_feasible_with_registry() -> WincentResult<bool> {
         },
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
-                return Ok(false);
+                Ok(false)
             } else {
-                return Err(WincentError::Io(e));
+                Err(WincentError::Io(e))
             }
         }
     }
@@ -54,7 +54,7 @@ pub(crate) fn fix_script_feasible_with_registry() -> WincentResult<()> {
     let reg_value=  "ExecutionPolicy";
     let reg_key = get_execution_policy_reg()?;
 
-    let _ = reg_key.set_value(reg_value, &"RemoteSigned").map_err(WincentError::Io)?;
+    reg_key.set_value(reg_value, &"RemoteSigned").map_err(WincentError::Io)?;
 
     Ok(())
 }
