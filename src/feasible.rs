@@ -39,7 +39,7 @@ pub(crate) fn check_script_feasible_with_registry() -> WincentResult<bool> {
             let filtered_vec: Vec<u8> = val.bytes.into_iter().filter(|&x| x != 0).collect();
             let val_in_string = String::from_utf8_lossy(&filtered_vec).to_string();
             let _res = feasible_options.contains(&val_in_string.as_str());
-            return Ok(feasible_options.contains(&val_in_string.as_str()));
+            Ok(feasible_options.contains(&val_in_string.as_str()))
         }
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
