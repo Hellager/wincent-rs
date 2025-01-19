@@ -1,5 +1,6 @@
 //! # wincent
 //!
+//! `wincent` is a Rust library for managing Windows Quick Access items, including recent files 
 //! and frequent folders. It provides a comprehensive API to interact with Windows Quick Access functionality.
 //!
 //! ## Main Features
