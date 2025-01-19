@@ -27,7 +27,7 @@ wincent = "*"
 ### Querying  Quick  Access  Contents
 
 ```rust
-use wincent::{check_feasible, fix_feasible, get_quick_access_items, WincentError};
+use wincent::{check_feasible, fix_feasible, get_quick_access_items, error::WincentError};
 
 fn main() -> Result<(), WincentError> {
     // Check if quick access is feasible
@@ -48,7 +48,7 @@ fn main() -> Result<(), WincentError> {
 ### Removing  a  Quick  Access  Entry
 
 ```rust
-use wincent::{get_recent_files, remove_from_recent_files, WincentError};
+use wincent::{get_recent_files, remove_from_recent_files, error::WincentError};
 
 fn main() -> Result<(), WincentError> {
     // Remove sensitive files from recent items
@@ -63,32 +63,10 @@ fn main() -> Result<(), WincentError> {
 }
 ```
 
-### Clearing  Quick Access  Items
-
-```rust
-use wincent::{empty_recent_files, empty_frequent_folders, empty_quick_access, WincentError};
-
-fn main() -> Result<(), WincentError> {
-    // Clear only recent files
-    empty_recent_files()?;
-    println!("Recent files cleared");
-
-    // Clear frequent folders (both pinned and normal)
-    empty_frequent_folders()?;
-    println!("Frequent folders cleared");
-
-    // Clear everything in Quick Access
-    empty_quick_access()?;
-    println!("Quick Access completely cleared");
-
-    Ok(())
-}
-```
-
 ### Toggling  Visibility
 
 ```rust
-use wincent::{is_recent_files_visiable, set_recent_files_visiable, WincentError};
+use wincent::{is_recent_files_visiable, set_recent_files_visiable, error::WincentError};
 
 fn main() -> Result<(), WincentError> {
     let is_visible = is_recent_files_visiable()?;
