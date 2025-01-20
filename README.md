@@ -19,7 +19,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wincent = "*"
+wincent = "0.1.0"
 ```
 
 ## Quick Start
@@ -27,7 +27,11 @@ wincent = "*"
 ### Querying  Quick  Access  Contents
 
 ```rust
-use wincent::{check_feasible, fix_feasible, get_quick_access_items, error::WincentError};
+use wincent::{
+    feasible::{check_feasible, fix_feasible}, 
+    query::get_quick_access_items, 
+    error::WincentError
+};
 
 fn main() -> Result<(), WincentError> {
     // Check if quick access is feasible
@@ -48,7 +52,11 @@ fn main() -> Result<(), WincentError> {
 ### Removing  a  Quick  Access  Entry
 
 ```rust
-use wincent::{get_recent_files, remove_from_recent_files, error::WincentError};
+use wincent::{
+    query::get_recent_files, 
+    handle::remove_from_recent_files, 
+    error::WincentError
+};
 
 fn main() -> Result<(), WincentError> {
     // Remove sensitive files from recent items
@@ -66,7 +74,10 @@ fn main() -> Result<(), WincentError> {
 ### Toggling  Visibility
 
 ```rust
-use wincent::{is_recent_files_visiable, set_recent_files_visiable, error::WincentError};
+use wincent::{
+    visible::{is_recent_files_visiable, set_recent_files_visiable}, 
+    error::WincentError
+};
 
 fn main() -> Result<(), WincentError> {
     let is_visible = is_recent_files_visiable()?;
