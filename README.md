@@ -1,6 +1,6 @@
 # wincent-rs
 
-![Crates.io Version](https://img.shields.io/crates/v/wincent)
+[![](https://img.shields.io/crates/v/wincent.svg)](https://crates.io/crates/wincent)
 [![][img_doc]][doc]
 ![Crates.io Total Downloads](https://img.shields.io/crates/d/wincent)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Hellager/wincent-rs/publish.yml)
