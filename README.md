@@ -1,5 +1,11 @@
 # wincent-rs
 
+![Crates.io Version](https://img.shields.io/crates/v/wincent)
+[![][img_doc]][doc]
+![Crates.io Total Downloads](https://img.shields.io/crates/d/wincent)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Hellager/wincent-rs/publish.yml)
+![Crates.io License](https://img.shields.io/crates/l/wincent)
+
 ## Overview
 
 Wincent is a rust library for managing Windows quick access functionality, providing comprehensive control over your file system's quick access content.
@@ -19,7 +25,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wincent = "0.1.0"
+wincent = "0.1.1"
 ```
 
 ## Quick Start
@@ -140,3 +146,6 @@ Distributed under the MIT License. See `LICENSE` for more information.
 ## Author
 
 Developed with 🦀 by [@Hellager](https://github.com/Hellager)
+
+[img_doc]: https://img.shields.io/badge/doc-latest-orange
+[doc]: https://docs.rs/wincent/latest/wincent/
