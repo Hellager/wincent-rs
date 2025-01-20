@@ -1,7 +1,9 @@
-use std::error::Error;
-use wincent::{empty_frequent_folders, empty_quick_access, empty_recent_files};
+use wincent::{
+    empty::{empty_frequent_folders, empty_quick_access, empty_recent_files},
+    WincentResult,
+};
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> WincentResult<()> {
     // Example 1: Clear only recent files
     println!("Clearing recent files...");
     empty_recent_files()?;

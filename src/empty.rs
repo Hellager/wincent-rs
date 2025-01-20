@@ -1,6 +1,7 @@
 use crate::{
-    error::WincentError, handle::unpin_frequent_folder_with_ps_script,
-    query::query_recent_with_ps_script, QuickAccess, WincentResult,
+    error::WincentError, feasible::check_script_feasible,
+    handle::unpin_frequent_folder_with_ps_script, query::query_recent_with_ps_script, QuickAccess,
+    WincentResult,
 };
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -66,6 +67,88 @@ pub(crate) fn empty_pinned_folders_with_script() -> WincentResult<()> {
         unpin_frequent_folder_with_ps_script(&folder)?;
     }
 
+    Ok(())
+}
+
+/// Clears all items from the Windows Recent Files list.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if all recent files were successfully cleared.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{empty::empty_recent_files, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Clear all recent files
+///     empty_recent_files()?;
+///     println!("Recent files list has been cleared");
+///     Ok(())
+/// }
+/// ```
+pub fn empty_recent_files() -> WincentResult<()> {
+    if !check_script_feasible()? {
+        return Err(WincentError::UnsupportedOperation(
+            "PowerShell script execution is not feasible".to_string(),
+        ));
+    }
+
+    empty_recent_files_with_api()
+}
+
+/// Clears all items from the Windows Frequent Folders list, including both pinned and normal folders.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if all frequent folders were successfully cleared.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{empty::empty_frequent_folders, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Clear all frequent folders
+///     empty_frequent_folders()?;
+///     println!("Frequent folders list has been cleared");
+///     Ok(())
+/// }
+/// ```
+pub fn empty_frequent_folders() -> WincentResult<()> {
+    if !check_script_feasible()? {
+        return Err(WincentError::UnsupportedOperation(
+            "PowerShell script execution is not feasible".to_string(),
+        ));
+    }
+
+    empty_normal_folders_with_jumplist_file()?;
+    empty_pinned_folders_with_script()?;
+    Ok(())
+}
+
+/// Clears all items from Windows Quick Access, including both recent files and frequent folders.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if all Quick Access items were successfully cleared.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{empty::empty_quick_access, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Clear all Quick Access items
+///     empty_quick_access()?;
+///     println!("Quick Access has been completely cleared");
+///     Ok(())
+/// }
+/// ```
+pub fn empty_quick_access() -> WincentResult<()> {
+    empty_recent_files()?;
+    empty_frequent_folders()?;
     Ok(())
 }
 

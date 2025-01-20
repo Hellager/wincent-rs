@@ -1,8 +1,10 @@
 use std::{thread, time::Duration};
 use tempfile::Builder;
 use wincent::{
-    add_to_frequent_folders, check_script_feasible, fix_script_feasible, is_in_frequent_folders,
-    remove_from_frequent_folders, WincentResult,
+    feasible::{check_script_feasible, fix_script_feasible},
+    handle::{add_to_frequent_folders, remove_from_frequent_folders},
+    query::is_in_frequent_folders,
+    WincentResult,
 };
 
 fn main() -> WincentResult<()> {

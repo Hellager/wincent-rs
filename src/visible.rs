@@ -1,4 +1,4 @@
-use crate::{error::WincentError, WincentResult};
+use crate::{error::WincentError, QuickAccess, WincentResult};
 
 /// Retrieves the registry key for Quick Access settings.
 fn get_quick_access_reg() -> WincentResult<winreg::RegKey> {
@@ -64,6 +64,110 @@ pub(crate) fn set_visiable_with_registry(
         .map_err(WincentError::Io)?;
 
     Ok(())
+}
+
+/****************************************************** Quick Access Visiablity ******************************************************/
+
+/// Checks if Quick Access visibility settings can be modified.
+///
+/// # Returns
+///
+/// Returns `true` if Quick Access visibility can be controlled.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{
+///     visible::{is_recent_files_visiable, set_recent_files_visiable},
+///     error::WincentError,
+/// };
+///
+/// fn main() -> Result<(), WincentError> {
+///     let is_visible = is_recent_files_visiable()?;
+///     if !is_visible {
+///         set_recent_files_visiable(true)?;
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn is_recent_files_visiable() -> WincentResult<bool> {
+    is_visialbe_with_registry(QuickAccess::RecentFiles)
+}
+
+/// Checks if frequent folders are visible in Windows Quick Access.
+///
+/// # Returns
+///
+/// Returns `true` if frequent folders are visible, `false` if they are hidden.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{
+///     visible::{is_frequent_folders_visible, set_frequent_folders_visiable},
+///     error::WincentError,
+/// };
+///
+/// fn main() -> Result<(), WincentError> {
+///     let is_visible = is_frequent_folders_visible()?;
+///     println!("Frequent folders are {}", if is_visible { "visible" } else { "hidden" });
+///     
+///     // Ensure frequent folders are visible
+///     if !is_visible {
+///         set_frequent_folders_visiable(true)?;
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn is_frequent_folders_visible() -> WincentResult<bool> {
+    is_visialbe_with_registry(QuickAccess::FrequentFolders)
+}
+
+/// Sets the visibility of Quick Access recent files.
+///
+/// # Arguments
+///
+/// * `is_visiable` - Whether recent files should be visible
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{visible::set_recent_files_visiable, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Hide recent files in Quick Access
+///     set_recent_files_visiable(false)?;
+///     Ok(())
+/// }
+/// ```
+pub fn set_recent_files_visiable(is_visiable: bool) -> WincentResult<()> {
+    set_visiable_with_registry(QuickAccess::RecentFiles, is_visiable)
+}
+
+/// Sets the visibility of frequent folders in Windows Quick Access.
+///
+/// # Arguments
+///
+/// * `is_visiable` - `true` to show frequent folders, `false` to hide them
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the visibility was successfully changed.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{visible::set_frequent_folders_visiable, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Hide frequent folders in Quick Access
+///     set_frequent_folders_visiable(false)?;
+///     println!("Frequent folders are now hidden");
+///     Ok(())
+/// }
+/// ```
+pub fn set_frequent_folders_visiable(is_visiable: bool) -> WincentResult<()> {
+    set_visiable_with_registry(QuickAccess::FrequentFolders, is_visiable)
 }
 
 #[cfg(test)]

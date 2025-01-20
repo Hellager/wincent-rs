@@ -1,5 +1,6 @@
 use crate::{
     error::WincentError,
+    feasible::{check_pinunpin_feasible, check_script_feasible},
     scripts::{execute_ps_script, Script},
     WincentResult,
 };
@@ -102,6 +103,145 @@ pub(crate) fn pin_frequent_folder_with_ps_script(path: &str) -> WincentResult<()
 /// Unpins a folder from the Windows Quick Access Frequent Folders list.
 pub(crate) fn unpin_frequent_folder_with_ps_script(path: &str) -> WincentResult<()> {
     execute_script_with_validation(Script::UnpinFromFrequentFolder, path, PathType::Directory)
+}
+
+/****************************************************** Handle Quick Access ******************************************************/
+
+/// Adds a file to Windows Recent Files.
+///
+/// # Arguments
+///
+/// * `path` - The full path to the file to be added
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{handle::add_to_recent_files, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     add_to_recent_files("C:\\Documents\\report.docx")?;
+///     Ok(())
+/// }
+/// ```
+pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
+    if !std::path::Path::new(path).is_file() {
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid file: {}",
+            path
+        )));
+    }
+
+    add_file_to_recent_with_api(path)
+}
+
+/// Removes a file from Windows Recent Files.
+///
+/// # Arguments
+///
+/// * `path` - The full path to the file to be removed
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{handle::remove_from_recent_files, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     remove_from_recent_files("C:\\Documents\\report.docx")?;
+///     Ok(())
+/// }
+/// ```
+pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
+    if !std::path::Path::new(path).is_file() {
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid file: {}",
+            path
+        )));
+    }
+
+    if !check_script_feasible()? {
+        return Err(WincentError::UnsupportedOperation(
+            "PowerShell script execution is not feasible".to_string(),
+        ));
+    }
+
+    remove_recent_files_with_ps_script(path)
+}
+
+/// Pins a folder to Windows Quick Access.
+///
+/// # Arguments
+///
+/// * `path` - The full path to the folder to be pinned
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the folder was successfully pinned.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{handle::add_to_frequent_folders, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Pin a project folder
+///     add_to_frequent_folders("C:\\Projects\\my-project")?;
+///     Ok(())
+/// }   
+/// ```
+pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
+    if !std::path::Path::new(path).is_dir() {
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid directory: {}",
+            path
+        )));
+    }
+
+    if !check_script_feasible()? || !check_pinunpin_feasible()? {
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid directory: {}",
+            path
+        )));
+    }
+
+    pin_frequent_folder_with_ps_script(path)
+}
+
+/// Unpins a folder from Windows Quick Access.
+///
+/// # Arguments
+///
+/// * `path` - The full path to the folder to be unpinned
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the folder was successfully unpinned.
+///
+/// # Example
+///         
+/// ```no_run
+/// use wincent::{handle::remove_from_frequent_folders, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Unpin a project folder
+///     remove_from_frequent_folders("C:\\Projects\\old-project")?;
+///     Ok(())
+/// }
+/// ```
+pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
+    if !std::path::Path::new(path).is_dir() {
+        return Err(WincentError::InvalidPath(format!(
+            "Not a valid directory: {}",
+            path
+        )));
+    }
+
+    if !check_script_feasible()? || !check_pinunpin_feasible()? {
+        return Err(WincentError::UnsupportedOperation(
+            "Unpin operation is not feasible".to_string(),
+        ));
+    }
+
+    unpin_frequent_folder_with_ps_script(path)
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
-extern crate wincent;
-
 use wincent::{
-    check_script_feasible, fix_script_feasible, get_frequent_folders, get_quick_access_items,
-    get_recent_files, is_in_frequent_folders, is_in_quick_access, is_in_recent_files,
+    feasible::{check_script_feasible, fix_script_feasible},
+    query::{
+        get_frequent_folders, get_quick_access_items, get_recent_files, is_in_frequent_folders,
+        is_in_quick_access, is_in_recent_files,
+    },
     WincentResult,
 };
 

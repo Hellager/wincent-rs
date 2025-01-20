@@ -1,6 +1,9 @@
 use wincent::{
-    is_frequent_folders_visible, is_recent_files_visiable, set_frequent_folders_visiable,
-    set_recent_files_visiable, WincentResult,
+    visible::{
+        is_frequent_folders_visible, is_recent_files_visiable, set_frequent_folders_visiable,
+        set_recent_files_visiable,
+    },
+    WincentResult,
 };
 
 fn print_visibility_status() -> WincentResult<()> {

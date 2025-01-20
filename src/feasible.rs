@@ -117,6 +117,161 @@ fn get_execution_policy() -> WincentResult<String> {
     }
 }
 
+/****************************************************** Feature Feasible ******************************************************/
+
+/// Checks if PowerShell script execution is feasible on the current system.
+///
+/// # Returns
+///
+/// Returns `true` if script execution is allowed, `false` otherwise.
+///
+/// # Example
+///
+/// ```rust
+/// use wincent::{feasible::check_script_feasible, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     if check_script_feasible()? {
+///         println!("PowerShell scripts can be executed");
+///     } else {
+///         println!("PowerShell script execution is restricted");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn check_script_feasible() -> WincentResult<bool> {
+    check_script_feasible_with_registry()
+}
+
+/// Fixes PowerShell script execution policy to allow script execution.
+///
+/// # Example
+///
+/// ```rust
+/// use wincent::{
+///     feasible::{check_script_feasible, fix_script_feasible},
+///     error::WincentError
+/// };
+///
+/// fn main() -> Result<(), WincentError> {
+///     if !check_script_feasible()? {
+///         fix_script_feasible()?;
+///         assert!(check_script_feasible()?);
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn fix_script_feasible() -> WincentResult<()> {
+    fix_script_feasible_with_registry()
+}
+
+/// Checks if Quick Access query operations are feasible on the current system.
+///
+/// # Returns
+///
+/// Returns `true` if Quick Access query operations are supported, `false` otherwise.
+///
+/// # Example
+///
+/// ```rust
+/// use wincent::{feasible::check_query_feasible, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     if check_query_feasible()? {
+///         println!("Quick Access query operations are supported");
+///     } else {
+///         println!("Quick Access query operations are not supported");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn check_query_feasible() -> WincentResult<bool> {
+    check_query_feasible_with_script()
+}
+
+/// Checks if pin/unpin operations are feasible on the current system.
+///
+/// # Returns
+///
+/// Returns `true` if pin/unpin operations are supported, `false` otherwise.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{feasible::check_pinunpin_feasible, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     if check_pinunpin_feasible()? {
+///         println!("Pin/unpin operations are supported");
+///     } else {
+///         println!("Pin/unpin operations are not supported");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn check_pinunpin_feasible() -> WincentResult<bool> {
+    check_pinunpin_feasible_with_script()
+}
+
+/// Checks if all Quick Access operations are feasible on the current system.
+///
+/// # Returns
+///
+/// Returns `true` only if all operations are supported, `false` otherwise.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{feasible::{check_feasible, fix_feasible}, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     if !check_feasible()? {
+///         println!("Some Quick Access operations are not supported");
+///         // Try to fix the issues
+///         if fix_feasible()? {
+///             println!("Successfully enabled Quick Access operations");
+///         }
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn check_feasible() -> WincentResult<bool> {
+    // First check script execution policy
+    if !check_script_feasible()? {
+        return Ok(false);
+    }
+
+    // Then check both operations
+    let query_ok = check_query_feasible()?;
+    let pinunpin_ok = check_pinunpin_feasible()?;
+
+    Ok(query_ok && pinunpin_ok)
+}
+
+/// Attempts to fix Quick Access operation feasibility issues.
+///
+/// # Returns
+///
+/// Returns `true` if all operations are successfully enabled, `false` otherwise.
+///
+/// # Example
+///
+/// ```no_run
+/// use wincent::{feasible::fix_feasible, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     match fix_feasible()? {
+///         true => println!("Successfully enabled Quick Access operations"),
+///         false => println!("Failed to enable some Quick Access operations")
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn fix_feasible() -> WincentResult<bool> {
+    fix_script_feasible()?;
+    check_feasible()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,8 +2,10 @@ use std::io::Write;
 use std::{thread, time::Duration};
 use tempfile::Builder;
 use wincent::{
-    add_to_recent_files, check_script_feasible, fix_script_feasible, is_in_recent_files,
-    remove_from_recent_files, WincentResult,
+    feasible::{check_script_feasible, fix_script_feasible},
+    handle::{add_to_recent_files, remove_from_recent_files},
+    query::is_in_recent_files,
+    WincentResult,
 };
 
 fn main() -> WincentResult<()> {
