@@ -1,3 +1,25 @@
+//! Check and fix functions execution feasibility.
+//!
+//! ## Example
+//!
+//! ```no_run
+//! use wincent::{
+//!     feasible::{check_feasible, fix_feasible},
+//!     error::WincentError,
+//! };
+//!
+//! fn main() -> Result<(), WincentError> {
+//!     if !check_feasible()? {
+//!         println!("Some Quick Access operations are not supported");
+//!         // Try to fix the issues
+//!         if fix_feasible()? {
+//!             println!("Successfully enabled Quick Access operations");
+//!         }
+//!     }
+//!     Ok(())
+//! }
+//! ```
+
 use crate::{
     error::WincentError,
     scripts::{execute_ps_script, Script},
