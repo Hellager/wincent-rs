@@ -1,6 +1,6 @@
 [package]
 name = "wincent"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Hellager"]
 edition = "2021"
 repository = "https://github.com/Hellager/wincent-rs"
