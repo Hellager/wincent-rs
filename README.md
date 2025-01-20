@@ -6,6 +6,8 @@
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Hellager/wincent-rs/publish.yml)
 ![Crates.io License](https://img.shields.io/crates/l/wincent)
 
+Read this in other languages: [English](README.md) | [中文](README.cn.md)
+
 ## Overview
 
 Wincent is a rust library for managing Windows quick access functionality, providing comprehensive control over your file system's quick access content.
@@ -28,21 +30,28 @@ Add the following to your `Cargo.toml`:
 wincent = "0.1.1"
 ```
 
+## Notes
+
+- The implementation of features is highly dependent on system APIs. Windows may tighten related permissions or calls for security reasons, which may lead to failure.
+- The personal system environment may differ from the testing environment, resulting in the functionality not working properly. The author has observed similar issues, likely due to certain software modifying related registry entries. The specific registry items have not been identified. Before use, you can call related functions to check if they are feasible, mainly concerning folder operations.
+- The visibility section will modify the registry, which may lead to unexpected results. The window layout is likely to be affected, so please use it with caution.
+
 ## Quick Start
 
 ### Querying  Quick  Access  Contents
 
 ```rust
 use wincent::{
-    feasible::{check_feasible, fix_feasible}, 
+    feasible::{check_script_feasible, fix_script_feasible}, 
     query::get_quick_access_items, 
     error::WincentError
 };
 
 fn main() -> Result<(), WincentError> {
     // Check if quick access is feasible
-    if !check_feasible()? {
-        fix_feasible()?;
+    if !check_script_feasible()? {
+        println!("Fixing script execution policy...");
+        fix_script_feasible()?;
     }
 
     // List all current quick access items
