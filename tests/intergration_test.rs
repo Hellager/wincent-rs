@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use wincent::predule::*;
-    use std::{thread, time::Duration};
     use std::fs::{self, File};
-    use std::path::{Path, PathBuf};
     use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::{thread, time::Duration};
+    use wincent::predule::*;
 
     /// Create test environment
     pub(crate) fn setup_test_env() -> WincentResult<PathBuf> {
@@ -22,7 +22,11 @@ mod tests {
     }
 
     /// Create test file and write content
-    pub(crate) fn create_test_file(dir: &Path, name: &str, content: &str) -> WincentResult<PathBuf> {
+    pub(crate) fn create_test_file(
+        dir: &Path,
+        name: &str,
+        content: &str,
+    ) -> WincentResult<PathBuf> {
         let file_path = dir.join(name);
         let mut file = File::create(&file_path)?;
         file.write_all(content.as_bytes())?;
