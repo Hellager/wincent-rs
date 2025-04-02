@@ -249,15 +249,17 @@ impl ScriptStrategy for CheckPinUnpinFeasibleStrategy {
         $shell = New-Object -ComObject Shell.Application
         $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
 
+        Start-Sleep -Seconds 3
+
         $folders = $shell.Namespace('{}').Items();
-        $target = $folders | Where-Object {{$_.Path -match "$scriptPath"}};
+        $target = $folders | Where-Object {{$_.Path -eq $scriptPath}};
         $target.InvokeVerb('unpinfromhome');
     }}.ToString()
 
     $arguments = "-Command & {{$scriptBlock}} -scriptPath '$currentPath'"
     $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
 
-    $timeout = 5
+    $timeout = 10
     if (-not $process.WaitForExit($timeout * 1000)) {{
         try {{
             $process.Kill()
