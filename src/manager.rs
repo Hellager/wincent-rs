@@ -11,7 +11,7 @@ use crate::{
     WincentResult,
     handle::{validate_path, PathType, add_file_to_recent_with_api},
     empty::{empty_recent_files_with_api, empty_normal_folders_with_jumplist_file},
-    feasible::{check_script_feasible, fix_script_feasible, check_query_feasible_async, check_handle_feasible_async},
+    feasible::{check_script_feasible, fix_script_feasible},
 };
 use std::sync::{Arc, Mutex};
 
@@ -77,7 +77,7 @@ impl QuickAccessManager {
             match *guard {
                 Some(feasible) => feasible,
                 None => {
-                    let feasible = check_query_feasible_async().await?;
+                    let feasible = self.check_query_feasible_async().await?;
                     *guard = Some(feasible);
                     feasible
                 }
@@ -94,7 +94,7 @@ impl QuickAccessManager {
             match *guard {
                 Some(feasible) => feasible,
                 None => {
-                    let feasible = check_handle_feasible_async().await?;
+                    let feasible = self.check_handle_feasible_async().await?;
                     *guard = Some(feasible);
                     feasible
                 }
@@ -112,6 +112,11 @@ impl QuickAccessManager {
             QuickAccess::FrequentFolders => Ok(PSScript::QueryFrequentFolder)
         }
     }
+
+    async fn check_query_feasible_async(&self) -> WincentResult<bool> {
+        let _ = self.executor.execute(PSScript::CheckQueryFeasible, None).await?;
+        Ok(true)
+    }
     
     /// Ensures query operations are feasible
     async fn ensure_query_feasible(&self) -> WincentResult<()> {
@@ -127,7 +132,7 @@ impl QuickAccessManager {
         }; // Lock released
         
         if need_check {
-            let feasible = check_query_feasible_async().await?;
+            let feasible = self.check_query_feasible_async().await?;
             let mut guard = self.is_query_feasible.lock().unwrap();
             *guard = Some(feasible);
             
@@ -141,6 +146,11 @@ impl QuickAccessManager {
         Ok(())
     }
     
+    async fn check_handle_feasible_async(&self) -> WincentResult<bool> {
+        let _ = self.executor.execute(PSScript::CheckPinUnpinFeasible, None).await?;
+        Ok(true)
+    }
+
     /// Ensures handling operations are feasible
     async fn ensure_handle_feasible(&self) -> WincentResult<()> {
         let need_check = {
@@ -155,7 +165,7 @@ impl QuickAccessManager {
         }; // Lock released
         
         if need_check {
-            let feasible = check_handle_feasible_async().await?;
+            let feasible = self.check_handle_feasible_async().await?;
             let mut guard = self.is_handle_feasible.lock().unwrap();
             *guard = Some(feasible);
             

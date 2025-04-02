@@ -141,20 +141,6 @@ fn get_execution_policy() -> WincentResult<String> {
     }
 }
 
-pub(crate) async fn check_query_feasible_async() -> WincentResult<bool> {
-    let output = ScriptExecutor::execute_with_timeout(PSScript::CheckQueryFeasible, None, 5).await?;
-    let _ = ScriptExecutor::parse_output_to_strings(output)?;
-
-    Ok(true)
-}   
-
-pub(crate) async fn check_handle_feasible_async() -> WincentResult<bool> {
-    let output = ScriptExecutor::execute_with_timeout(PSScript::CheckPinUnpinFeasible, None, 5).await?;
-    let _ = ScriptExecutor::parse_output_to_strings(output)?;
-
-    Ok(true)
-}
-
 /****************************************************** Feature Feasible ******************************************************/
 
 /// Checks if PowerShell script execution is feasible on the current system.
@@ -428,28 +414,6 @@ mod tests {
             println!("Pin/Unpin feasibility check after fix: {}", fixed_result);
         }
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_check_query_feasible() -> WincentResult<()> {
-        fix_script_feasible()?;
-        
-        let result = check_query_feasible_async().await;
-        
-        assert!(result.is_ok(), "check_query_feasible should not error");
-        
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_check_manage_feasible() -> WincentResult<()> {
-        fix_script_feasible()?;
-        
-        let result = check_handle_feasible_async().await;
-        
-        assert!(result.is_ok(), "check_manage_feasible should not error");
-        
         Ok(())
     }
 }

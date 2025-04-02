@@ -72,6 +72,7 @@ impl ScriptExecutor {
     }
     
     /// Executes script with timeout protection
+    #[allow(dead_code)]
     pub async fn execute_with_timeout(
         script_type: PSScript,
         parameter: Option<String>,
