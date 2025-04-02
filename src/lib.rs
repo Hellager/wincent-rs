@@ -96,21 +96,9 @@ pub mod manager;
 
 #[allow(unused)]
 pub mod predule {
-    pub use crate::empty::{empty_frequent_folders, empty_quick_access, empty_recent_files};
-    pub use crate::feasible::{
-        check_feasible, check_pinunpin_feasible, check_query_feasible, check_script_feasible,
-        fix_script_feasible,
-    };
-    pub use crate::handle::{
-        add_to_frequent_folders, add_to_recent_files, remove_from_frequent_folders,
-        remove_from_recent_files,
-    };
-    pub use crate::query::{is_in_frequent_folders, is_in_quick_access, is_in_recent_files};
-    pub use crate::visible::{
-        is_frequent_folders_visible, is_recent_files_visiable, set_frequent_folders_visiable,
-        set_recent_files_visiable,
-    };
-    pub use crate::WincentResult;
+    pub use crate::manager::QuickAccessManager;
+    pub use crate::{WincentResult, QuickAccess};
+    pub use crate::error::WincentError;
 }
 
 use crate::error::WincentError;
