@@ -10,6 +10,8 @@ use std::time::{Duration, SystemTime};
 pub(crate) struct ScriptStorage;
 
 impl ScriptStorage {
+    const SCRIPT_VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
     /// Retrieves Wincent temporary directory
     fn get_wincent_temp_dir() -> WincentResult<PathBuf> {
         let temp_dir = std::env::temp_dir().join("wincent");
@@ -96,7 +98,11 @@ impl ScriptStorage {
     /// Retrieves static script path (parameter-less scripts)
     pub fn get_script_path(script_type: PSScript) -> WincentResult<PathBuf> {
         let static_dir = Self::get_static_scripts_dir()?;
-        let script_name = format!("{:?}.ps1", script_type);
+        let script_name = format!(
+            "{:?}_{}.ps1", 
+            script_type, 
+            Self::SCRIPT_VERSION
+        );
         let script_path = static_dir.join(script_name);
         
         // Create script if missing
@@ -112,7 +118,12 @@ impl ScriptStorage {
     pub fn get_dynamic_script_path(script_type: PSScript, parameter: &str) -> WincentResult<PathBuf> {
         let dynamic_dir = Self::get_dynamic_scripts_dir()?;
         let param_hash = Self::hash_parameter(parameter);
-        let script_name = format!("{:?}_{}.ps1", script_type, param_hash);
+        let script_name = format!(
+            "{:?}_{}_{}.ps1", 
+            script_type, 
+            Self::SCRIPT_VERSION,
+            param_hash
+        );
         let script_path = dynamic_dir.join(script_name);
         
         // Create script if missing
@@ -129,6 +140,10 @@ impl ScriptStorage {
 mod tests {
     use super::*;
     use std::fs;
+
+    fn current_version() -> String {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
     
     #[test_log::test]
     fn test_temp_directory_creation() {
@@ -145,8 +160,15 @@ mod tests {
         let result = ScriptStorage::get_script_path(PSScript::RefreshExplorer);
         assert!(result.is_ok());
         let path = result.unwrap();
+        let version_str = format!("_{}.ps1", current_version());
         assert!(path.exists());
         assert!(path.to_string_lossy().contains("RefreshExplorer"));
+        assert!(
+            path.to_string_lossy().contains(&version_str),
+            "Path {} should contain version {}",
+            path.display(),
+            current_version()
+        );
         
         // Clean up test files
         let _ = fs::remove_file(path);
@@ -160,6 +182,17 @@ mod tests {
         let path = result.unwrap();
         assert!(path.exists());
         assert!(path.to_string_lossy().contains("PinToFrequentFolder"));
+
+        let expected_pattern = format!(
+            "PinToFrequentFolder_{}_",
+            current_version()
+        );
+        assert!(
+            path.to_string_lossy().contains(&expected_pattern),
+            "Path {} should contain pattern {}",
+            path.display(),
+            expected_pattern
+        );
         
         // Clean up test files
         let _ = fs::remove_file(path);
