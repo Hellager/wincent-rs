@@ -45,22 +45,46 @@ impl ScriptStorage {
         
         Ok(dynamic_dir)
     }
+
+    fn parse_script_version(file_name: &str) -> Option<String> {
+        let base_name = file_name.strip_suffix(".ps1")?;
+        
+        let parts: Vec<&str> = base_name.split('_').collect();
+        if parts.len() >= 2 {
+            Some(parts[1].to_string())
+        } else {
+            None
+        }
+    }
     
     /// Cleans up expired scripts (older than 24 hours)
     fn cleanup_expired_scripts(dir: &Path) -> WincentResult<()> {
         let expiry_duration = Duration::from_secs(24 * 60 * 60); // 24 hours
         let now = SystemTime::now();
+        let current_version = Self::SCRIPT_VERSION;
         
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.is_file() {
-                        if let Ok(created_time) = metadata.created() {
-                            if now.duration_since(created_time).unwrap_or(Duration::from_secs(0)) > expiry_duration {
-                                // Ignore removal errors and continue
-                                let _ = fs::remove_file(entry.path());
+                let path = entry.path();
+                
+                if path.is_file() && path.extension().map_or(false, |e| e == "ps1") {
+                    let mut should_remove = false;
+                    if let Some(file_version) = path.file_name()
+                        .and_then(|n| n.to_str())
+                        .and_then(Self::parse_script_version) 
+                    {
+                        should_remove = file_version != current_version;
+                    }
+                    if !should_remove {
+                        if let Ok(metadata) = entry.metadata() {
+                            if let Ok(created) = metadata.created() {
+                                should_remove = now.duration_since(created)
+                                    .unwrap_or(Duration::ZERO) > expiry_duration;
                             }
                         }
+                    }
+                    if should_remove {
+                        let _ = fs::remove_file(path);
                     }
                 }
             }
@@ -140,9 +164,29 @@ impl ScriptStorage {
 mod tests {
     use super::*;
     use std::fs;
+    use std::time::SystemTime;
+    use filetime::{FileTime, set_file_mtime};
 
     fn current_version() -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+
+    #[test]
+    fn test_version_parsing() {
+        assert_eq!(
+            ScriptStorage::parse_script_version("RefreshExplorer_0.5.2.ps1"),
+            Some("0.5.2".into())
+        );
+        
+        assert_eq!(
+            ScriptStorage::parse_script_version("PinToFrequent_0.5.2_abcd1234.ps1"),
+            Some("0.5.2".into())
+        );
+        
+        assert_eq!(
+            ScriptStorage::parse_script_version("InvalidName.ps1"),
+            None
+        );
     }
     
     #[test_log::test]
@@ -208,5 +252,32 @@ mod tests {
         
         assert_ne!(hash1, hash2);
         assert_eq!(hash1.len(), 8);
+    }
+
+    #[test]
+    fn test_cleanup_logic() -> WincentResult<()> {
+        let temp_dir = tempfile::tempdir()?;
+        
+        // Create test files with different states
+        let current_ver_file = temp_dir.path().join(format!("Test_{}.ps1", env!("CARGO_PKG_VERSION")));
+        let old_ver_file = temp_dir.path().join("Test_0.4.0.ps1");
+        let expired_current_ver = temp_dir.path().join("Test_0.5.2_expired.ps1");
+        // Create test files
+        File::create(&current_ver_file)?;
+        File::create(&old_ver_file)?;
+        File::create(&expired_current_ver)?;
+        // Set expiration time for the expired file (25 hours ago)
+        let expired_time = SystemTime::now() - Duration::from_secs(25 * 3600);
+        set_file_mtime(
+            &expired_current_ver,
+            FileTime::from_system_time(expired_time)
+        )?;
+        // Execute cleanup
+        ScriptStorage::cleanup_expired_scripts(temp_dir.path())?;
+        // Verify cleanup results
+        assert!(current_ver_file.exists(), "Current version file should be preserved");
+        assert!(!old_ver_file.exists(), "Outdated version file should be removed");
+        assert!(!expired_current_ver.exists(), "Expired file should be removed regardless of version");
+        Ok(())
     }
 }
