@@ -430,4 +430,26 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_check_query_feasible() -> WincentResult<()> {
+        fix_script_feasible()?;
+        
+        let result = check_query_feasible_async().await;
+        
+        assert!(result.is_ok(), "check_query_feasible should not error");
+        
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_check_manage_feasible() -> WincentResult<()> {
+        fix_script_feasible()?;
+        
+        let result = check_handle_feasible_async().await;
+        
+        assert!(result.is_ok(), "check_manage_feasible should not error");
+        
+        Ok(())
+    }
 }

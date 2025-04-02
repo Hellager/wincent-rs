@@ -314,8 +314,10 @@ mod tests {
     #[tokio::test]
     async fn test_feasibility_check() -> WincentResult<()> {
         let manager = QuickAccessManager::new();
+
         let feasible = manager.check_feasible().await?;
         println!("Operation feasibility status: {}", feasible);
+    
         Ok(())
     }
     
