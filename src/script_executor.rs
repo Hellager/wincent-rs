@@ -229,6 +229,7 @@ impl CachedScriptExecutor {
     }
     
     /// Executes script with timeout protection
+    #[allow(dead_code)]
     pub async fn execute_with_timeout(
         &self,
         script_type: PSScript,

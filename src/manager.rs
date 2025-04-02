@@ -109,8 +109,7 @@ impl QuickAccessManager {
         match qa_type {
             QuickAccess::All => Ok(PSScript::QueryQuickAccess),
             QuickAccess::RecentFiles => Ok(PSScript::QueryRecentFile),
-            QuickAccess::FrequentFolders => Ok(PSScript::QueryFrequentFolder),
-            _ => Err(WincentError::UnknownQuickAccessType(qa_type as u32)),
+            QuickAccess::FrequentFolders => Ok(PSScript::QueryFrequentFolder)
         }
     }
     
@@ -285,10 +284,7 @@ impl QuickAccessManager {
             QuickAccess::All => {
                 Box::pin(self.empty_items(QuickAccess::RecentFiles)).await?;
                 Box::pin(self.empty_items(QuickAccess::FrequentFolders)).await?;
-            },
-            _ => return Err(WincentError::UnsupportedOperation(
-                format!("Unsupported clear operation for {:?}", qa_type)
-            )),
+            }
         }
         
         self.executor.clear_cache();
