@@ -37,6 +37,15 @@ pub enum WincentError {
 
     #[error("Windows API error: {0}")]
     WindowsApi(i32),
+
+    #[error("Script strategy not found: {0}")]
+    ScriptStrategyNotFound(String),
+
+    #[error("Async execution error: {0}")]
+    AsyncExecution(String),
+
+    #[error("Operation timed out: {0}")]
+    Timeout(String),
 }
 
 impl From<windows::core::Error> for WincentError {

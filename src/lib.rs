@@ -88,6 +88,11 @@ mod scripts;
 mod test_utils;
 mod utils;
 pub mod visible;
+
+mod script_strategy;
+mod script_storage;
+mod script_executor;
+
 #[allow(unused)]
 pub mod predule {
     pub use crate::empty::{empty_frequent_folders, empty_quick_access, empty_recent_files};
