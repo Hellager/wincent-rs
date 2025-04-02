@@ -92,6 +92,7 @@ pub mod visible;
 mod script_strategy;
 mod script_storage;
 mod script_executor;
+pub mod manager;
 
 #[allow(unused)]
 pub mod predule {
@@ -114,7 +115,8 @@ pub mod predule {
 
 use crate::error::WincentError;
 
-pub(crate) enum QuickAccess {
+#[derive(Debug)]
+pub enum QuickAccess {
     FrequentFolders,
     RecentFiles,
     All,

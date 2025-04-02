@@ -23,6 +23,8 @@
 use crate::{
     error::WincentError,
     scripts::{execute_ps_script, Script},
+    script_strategy::PSScript,  
+    script_executor::ScriptExecutor,
     utils, WincentResult,
 };
 use std::path::Path;
@@ -137,6 +139,20 @@ fn get_execution_policy() -> WincentResult<String> {
         }
         Err(e) => Err(WincentError::Io(e)),
     }
+}
+
+pub(crate) async fn check_query_feasible_async() -> WincentResult<bool> {
+    let output = ScriptExecutor::execute_with_timeout(PSScript::CheckQueryFeasible, None, 5).await?;
+    let _ = ScriptExecutor::parse_output_to_strings(output)?;
+
+    Ok(true)
+}   
+
+pub(crate) async fn check_handle_feasible_async() -> WincentResult<bool> {
+    let output = ScriptExecutor::execute_with_timeout(PSScript::CheckPinUnpinFeasible, None, 5).await?;
+    let _ = ScriptExecutor::parse_output_to_strings(output)?;
+
+    Ok(true)
 }
 
 /****************************************************** Feature Feasible ******************************************************/
