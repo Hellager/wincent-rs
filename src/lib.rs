@@ -89,16 +89,16 @@ mod test_utils;
 mod utils;
 pub mod visible;
 
-mod script_strategy;
-mod script_storage;
-mod script_executor;
 pub mod manager;
+mod script_executor;
+mod script_storage;
+mod script_strategy;
 
 #[allow(unused)]
 pub mod predule {
-    pub use crate::manager::QuickAccessManager;
-    pub use crate::{WincentResult, QuickAccess};
     pub use crate::error::WincentError;
+    pub use crate::manager::QuickAccessManager;
+    pub use crate::{QuickAccess, WincentResult};
 }
 
 use crate::error::WincentError;
