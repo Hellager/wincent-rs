@@ -14,14 +14,16 @@ use crate::{
     feasible::{check_script_feasible, fix_script_feasible},
 };
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
+use tokio::time::{timeout, Duration};
 
 /// Windows Quick Access management system
 pub struct QuickAccessManager {
     executor: Arc<CachedScriptExecutor>,
-    is_script_feasible: Mutex<Option<bool>>,
-    is_query_feasible: Mutex<Option<bool>>,
-    is_handle_feasible: Mutex<Option<bool>>,
+    script_feasibility: OnceCell<bool>,
+    query_feasibility: OnceCell<bool>,
+    handle_feasibility: OnceCell<bool>,
+    lock_timeout: Duration,
 }
 
 impl QuickAccessManager {
@@ -29,83 +31,66 @@ impl QuickAccessManager {
     pub async fn new() -> WincentResult<Self> {
         let manager = Self {
             executor: Arc::new(CachedScriptExecutor::new()),
-            is_script_feasible: Mutex::new(None),
-            is_query_feasible: Mutex::new(None),
-            is_handle_feasible: Mutex::new(None),
+            script_feasibility: OnceCell::new(),
+            query_feasibility: OnceCell::new(),
+            handle_feasibility: OnceCell::new(),
+            lock_timeout: Duration::from_secs(10),
         };
         
-        // Initial script feasibility check
-        let check_result = tokio::task::spawn_blocking(|| check_script_feasible())
+        let check_result = tokio::task::spawn_blocking(check_script_feasible)
             .await??;
     
         if !check_result {
             let _ = fix_script_feasible();
-            let recheck = tokio::task::spawn_blocking(|| check_script_feasible())
+            let recheck = tokio::task::spawn_blocking(check_script_feasible)
                 .await??;
-            let mut guard = manager.is_script_feasible.lock().await;
-            *guard = Some(recheck);
+            manager.script_feasibility.set(recheck).unwrap_or(());
+        } else {
+            manager.script_feasibility.set(true).unwrap_or(());
         }
         
         Ok(manager)
     }
     
-    /// Verifies feasibility of all operations
-    ///
-    /// # Returns
-    ///
-    /// `true` if all operations are feasible, `false` otherwise
     pub async fn check_feasible(&self) -> WincentResult<bool> {
-        // Check script execution feasibility
-        let script_feasible = {
-            let mut guard = self.is_script_feasible.lock().await;
-            match *guard {
-                Some(feasible) => feasible,
-                None => {
-                    let feasible = check_script_feasible()?;
-                    *guard = Some(feasible);
-                    feasible
-                }
+        let script_feasible = match self.script_feasibility.get() {
+            Some(&feasible) => feasible,
+            None => {
+                let feasible = check_script_feasible()?;
+                self.script_feasibility.set(feasible).unwrap_or(());
+                feasible
             }
-        }; // Lock released
+        };
         
         if !script_feasible {
             return Ok(false);
         }
         
-        // Check query feasibility
-        let query_feasible = {
-            let mut guard = self.is_query_feasible.lock().await;
-            match *guard {
-                Some(feasible) => feasible,
-                None => {
-                    let feasible = self.check_query_feasible_async().await?;
-                    *guard = Some(feasible);
-                    feasible
-                }
+        let query_feasible = match self.query_feasibility.get() {
+            Some(&feasible) => feasible,
+            None => {
+                let feasible = self.check_query_feasible_async().await?;
+                self.query_feasibility.set(feasible).unwrap_or(());
+                feasible
             }
-        }; // Lock released
+        };
         
         if !query_feasible {
             return Ok(false);
         }
         
-        // Check handling feasibility
-        let handle_feasible = {
-            let mut guard = self.is_handle_feasible.lock().await;
-            match *guard {
-                Some(feasible) => feasible,
-                None => {
-                    let feasible = self.check_handle_feasible_async().await?;
-                    *guard = Some(feasible);
-                    feasible
-                }
+        let handle_feasible = match self.handle_feasibility.get() {
+            Some(&feasible) => feasible,
+            None => {
+                let feasible = self.check_handle_feasible_async().await?;
+                self.handle_feasibility.set(feasible).unwrap_or(());
+                feasible
             }
-        }; // Lock released
+        };
         
         Ok(script_feasible && query_feasible && handle_feasible)
     }
     
-    /// Maps QuickAccess type to corresponding script type
     fn map_to_script_type(&self, qa_type: QuickAccess) -> WincentResult<PSScript> {
         match qa_type {
             QuickAccess::All => Ok(PSScript::QueryQuickAccess),
@@ -115,67 +100,63 @@ impl QuickAccessManager {
     }
 
     async fn check_query_feasible_async(&self) -> WincentResult<bool> {
-        let _ = self.executor.execute(PSScript::CheckQueryFeasible, None).await?;
+        let _ = timeout(
+            self.lock_timeout,
+            self.executor.execute(PSScript::CheckQueryFeasible, None)
+        ).await.map_err(|_| WincentError::Timeout("Query feasibility check timed out".to_string()))??;
+        
         Ok(true)
     }
     
-    /// Ensures query operations are feasible
     async fn ensure_query_feasible(&self) -> WincentResult<()> {
-        let need_check = {
-            let guard = self.is_query_feasible.lock().await;
-            match *guard {
-                Some(false) => return Err(WincentError::UnsupportedOperation(
-                    "Query operation not feasible".to_string()
-                )),
-                Some(true) => false, // Already verified
-                None => true, // Requires check
+        let _ = match self.query_feasibility.get() {
+            Some(&false) => return Err(WincentError::UnsupportedOperation(
+                "Query operation not feasible".to_string()
+            )),
+            Some(&true) => true,
+            None => {
+                let feasible = self.check_query_feasible_async().await?;
+                self.query_feasibility.set(feasible).unwrap_or(());
+                
+                if !feasible {
+                    return Err(WincentError::UnsupportedOperation(
+                        "Query operation not feasible".to_string()
+                    ));
+                }
+                true
             }
-        }; // Lock released
-        
-        if need_check {
-            let feasible = self.check_query_feasible_async().await?;
-            let mut guard = self.is_query_feasible.lock().await;
-            *guard = Some(feasible);
-            
-            if !feasible {
-                return Err(WincentError::UnsupportedOperation(
-                    "Query operation not feasible".to_string()
-                ));
-            }
-        }
+        };
         
         Ok(())
     }
     
     async fn check_handle_feasible_async(&self) -> WincentResult<bool> {
-        let _ = self.executor.execute(PSScript::CheckPinUnpinFeasible, None).await?;
+        let _ = timeout(
+            self.lock_timeout,
+            self.executor.execute(PSScript::CheckPinUnpinFeasible, None)
+        ).await.map_err(|_| WincentError::Timeout("Handle feasibility check timed out".to_string()))??;
+        
         Ok(true)
     }
 
-    /// Ensures handling operations are feasible
     async fn ensure_handle_feasible(&self) -> WincentResult<()> {
-        let need_check = {
-            let guard = self.is_handle_feasible.lock().await;
-            match *guard {
-                Some(false) => return Err(WincentError::UnsupportedOperation(
-                    "Handle operation not feasible".to_string()
-                )),
-                Some(true) => false, // Already verified
-                None => true, // Requires check
+        let _ = match self.handle_feasibility.get() {
+            Some(&false) => return Err(WincentError::UnsupportedOperation(
+                "Handle operation not feasible".to_string()
+            )),
+            Some(&true) => true,
+            None => {
+                let feasible = self.check_handle_feasible_async().await?;
+                self.handle_feasibility.set(feasible).unwrap_or(());
+                
+                if !feasible {
+                    return Err(WincentError::UnsupportedOperation(
+                        "Handle operation not feasible".to_string()
+                    ));
+                }
+                true
             }
-        }; // Lock released
-        
-        if need_check {
-            let feasible = self.check_handle_feasible_async().await?;
-            let mut guard = self.is_handle_feasible.lock().await;
-            *guard = Some(feasible);
-            
-            if !feasible {
-                return Err(WincentError::UnsupportedOperation(
-                    "Handle operation not feasible".to_string()
-                ));
-            }
-        }
+        };
         
         Ok(())
     }
@@ -313,6 +294,7 @@ mod tests {
     use super::*;
     
     #[tokio::test]
+    #[ignore = "Modifies system state"]
     async fn test_feasibility_check() -> WincentResult<()> {
         let manager = QuickAccessManager::new().await?;
 
