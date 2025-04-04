@@ -54,6 +54,12 @@ impl From<windows::core::Error> for WincentError {
     }
 }
 
+impl From<tokio::task::JoinError> for WincentError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        WincentError::AsyncExecution(err.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

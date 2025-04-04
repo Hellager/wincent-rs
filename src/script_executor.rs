@@ -189,7 +189,7 @@ impl CachedScriptExecutor {
     ) -> WincentResult<Vec<String>> {
         // Bypass cache for non-query operations
         if !Self::should_cache(script_type) {
-            let output = ScriptExecutor::execute_ps_script(script_type, parameter.as_deref())?;
+            let output = ScriptExecutor::execute_ps_script_async(script_type, parameter).await?;
             return ScriptExecutor::parse_output_to_strings(output);
         }
         
@@ -214,7 +214,7 @@ impl CachedScriptExecutor {
         }
         
         // Cache miss: execute and store
-        let output = ScriptExecutor::execute_ps_script(script_type, parameter.as_deref())?;
+        let output = ScriptExecutor::execute_ps_script_async(script_type, parameter).await?;
         let result = ScriptExecutor::parse_output_to_strings(output)?;
         
         // Update cache

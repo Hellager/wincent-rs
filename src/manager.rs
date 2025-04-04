@@ -13,7 +13,8 @@ use crate::{
     empty::{empty_recent_files_with_api, empty_normal_folders_with_jumplist_file},
     feasible::{check_script_feasible, fix_script_feasible},
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Windows Quick Access management system
 pub struct QuickAccessManager {
@@ -25,7 +26,7 @@ pub struct QuickAccessManager {
 
 impl QuickAccessManager {
     /// Creates new Quick Access manager
-    pub fn new() -> Self {
+    pub async fn new() -> WincentResult<Self> {
         let manager = Self {
             executor: Arc::new(CachedScriptExecutor::new()),
             is_script_feasible: Mutex::new(None),
@@ -34,18 +35,18 @@ impl QuickAccessManager {
         };
         
         // Initial script feasibility check
-        if let Ok(false) = check_script_feasible() {
-            // Attempt automatic fix
+        let check_result = tokio::task::spawn_blocking(|| check_script_feasible())
+            .await??;
+    
+        if !check_result {
             let _ = fix_script_feasible();
-            // Re-check feasibility
-            if let Ok(is_feasible) = check_script_feasible() {
-                let mut script_feasible = manager.is_script_feasible.lock().unwrap();
-                *script_feasible = Some(is_feasible);
-                // Lock released here
-            }
+            let recheck = tokio::task::spawn_blocking(|| check_script_feasible())
+                .await??;
+            let mut guard = manager.is_script_feasible.lock().await;
+            *guard = Some(recheck);
         }
         
-        manager
+        Ok(manager)
     }
     
     /// Verifies feasibility of all operations
@@ -56,7 +57,7 @@ impl QuickAccessManager {
     pub async fn check_feasible(&self) -> WincentResult<bool> {
         // Check script execution feasibility
         let script_feasible = {
-            let mut guard = self.is_script_feasible.lock().unwrap();
+            let mut guard = self.is_script_feasible.lock().await;
             match *guard {
                 Some(feasible) => feasible,
                 None => {
@@ -73,7 +74,7 @@ impl QuickAccessManager {
         
         // Check query feasibility
         let query_feasible = {
-            let mut guard = self.is_query_feasible.lock().unwrap();
+            let mut guard = self.is_query_feasible.lock().await;
             match *guard {
                 Some(feasible) => feasible,
                 None => {
@@ -90,7 +91,7 @@ impl QuickAccessManager {
         
         // Check handling feasibility
         let handle_feasible = {
-            let mut guard = self.is_handle_feasible.lock().unwrap();
+            let mut guard = self.is_handle_feasible.lock().await;
             match *guard {
                 Some(feasible) => feasible,
                 None => {
@@ -121,7 +122,7 @@ impl QuickAccessManager {
     /// Ensures query operations are feasible
     async fn ensure_query_feasible(&self) -> WincentResult<()> {
         let need_check = {
-            let guard = self.is_query_feasible.lock().unwrap();
+            let guard = self.is_query_feasible.lock().await;
             match *guard {
                 Some(false) => return Err(WincentError::UnsupportedOperation(
                     "Query operation not feasible".to_string()
@@ -133,7 +134,7 @@ impl QuickAccessManager {
         
         if need_check {
             let feasible = self.check_query_feasible_async().await?;
-            let mut guard = self.is_query_feasible.lock().unwrap();
+            let mut guard = self.is_query_feasible.lock().await;
             *guard = Some(feasible);
             
             if !feasible {
@@ -154,7 +155,7 @@ impl QuickAccessManager {
     /// Ensures handling operations are feasible
     async fn ensure_handle_feasible(&self) -> WincentResult<()> {
         let need_check = {
-            let guard = self.is_handle_feasible.lock().unwrap();
+            let guard = self.is_handle_feasible.lock().await;
             match *guard {
                 Some(false) => return Err(WincentError::UnsupportedOperation(
                     "Handle operation not feasible".to_string()
@@ -166,7 +167,7 @@ impl QuickAccessManager {
         
         if need_check {
             let feasible = self.check_handle_feasible_async().await?;
-            let mut guard = self.is_handle_feasible.lock().unwrap();
+            let mut guard = self.is_handle_feasible.lock().await;
             *guard = Some(feasible);
             
             if !feasible {
@@ -307,19 +308,13 @@ impl QuickAccessManager {
     }
 }
 
-impl Default for QuickAccessManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     
     #[tokio::test]
     async fn test_feasibility_check() -> WincentResult<()> {
-        let manager = QuickAccessManager::new();
+        let manager = QuickAccessManager::new().await?;
 
         let feasible = manager.check_feasible().await?;
         println!("Operation feasibility status: {}", feasible);
@@ -329,7 +324,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_item_retrieval() -> WincentResult<()> {
-        let manager = QuickAccessManager::new();
+        let manager = QuickAccessManager::new().await?;
         
         // Test full retrieval
         let all_items = manager.get_items(QuickAccess::All).await?;
@@ -348,7 +343,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_item_presence_check() -> WincentResult<()> {
-        let manager = QuickAccessManager::new();
+        let manager = QuickAccessManager::new().await?;
         let items = manager.get_items(QuickAccess::All).await?;
         
         if let Some(item) = items.first() {
@@ -366,7 +361,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Modifies system state"]
     async fn test_item_management_cycle() -> WincentResult<()> {
-        let manager = QuickAccessManager::new();
+        let manager = QuickAccessManager::new().await?;
         
         // File management test
         let temp_file = tempfile::Builder::new()
@@ -403,7 +398,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Modifies system state"]
     async fn test_collection_clearance() -> WincentResult<()> {
-        let manager = QuickAccessManager::new();
+        let manager = QuickAccessManager::new().await?;
         
         manager.empty_items(QuickAccess::RecentFiles).await?;
         let recent_files = manager.get_items(QuickAccess::RecentFiles).await?;
