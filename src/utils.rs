@@ -5,12 +5,12 @@ use crate::{
     scripts::{execute_ps_script, Script},
     WincentResult,
 };
-use windows::Win32::Foundation::{BOOL, HANDLE};
-use windows::Win32::UI::Shell::IsUserAnAdmin;
-use windows::Win32::UI::Shell::{FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
-use windows::Win32::System::Com::CoTaskMemFree;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
+use windows::Win32::Foundation::{BOOL, HANDLE};
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::UI::Shell::IsUserAnAdmin;
+use windows::Win32::UI::Shell::{FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
 
 /// Checks if the current user has administrative privileges.
 pub(crate) fn is_admin() -> bool {
@@ -68,8 +68,14 @@ mod utils_test {
     #[test]
     fn test_get_windows_recent_folder() -> WincentResult<()> {
         let recent_folder = get_windows_recent_folder()?;
-        assert!(!recent_folder.is_empty(), "Recent folder path should not be empty");
-        assert!(std::path::Path::new(&recent_folder).exists(), "Recent folder should exist");
+        assert!(
+            !recent_folder.is_empty(),
+            "Recent folder path should not be empty"
+        );
+        assert!(
+            std::path::Path::new(&recent_folder).exists(),
+            "Recent folder should exist"
+        );
         Ok(())
     }
 }
