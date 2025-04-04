@@ -38,7 +38,7 @@ impl BaseScriptStrategy {
     fn utf8_header() -> &'static str {
         "$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"
     }
-    
+
     fn shell_com_object() -> &'static str {
         "$shell = New-Object -ComObject Shell.Application;"
     }
@@ -284,23 +284,54 @@ pub(crate) struct ScriptStrategyFactory;
 impl ScriptStrategyFactory {
     /// Retrieves the strategy instance for the specified script type
     pub fn get_strategy(script_type: PSScript) -> WincentResult<Box<dyn ScriptStrategy>> {
-        static STRATEGIES: OnceLock<HashMap<PSScript, Box<dyn ScriptStrategy + Sync + Send>>> = OnceLock::new();
-        
+        static STRATEGIES: OnceLock<HashMap<PSScript, Box<dyn ScriptStrategy + Sync + Send>>> =
+            OnceLock::new();
+
         let strategies = STRATEGIES.get_or_init(|| {
             let mut map = HashMap::new();
-            map.insert(PSScript::RefreshExplorer, Box::new(RefreshExplorerStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::QueryQuickAccess, Box::new(QueryQuickAccessStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::QueryRecentFile, Box::new(QueryRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::QueryFrequentFolder, Box::new(QueryFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::RemoveRecentFile, Box::new(RemoveRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::PinToFrequentFolder, Box::new(PinToFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::UnpinFromFrequentFolder, Box::new(UnpinFromFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::CheckQueryFeasible, Box::new(CheckQueryFeasibleStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::CheckPinUnpinFeasible, Box::new(CheckPinUnpinFeasibleStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
-            map.insert(PSScript::EmptyPinnedFolders, Box::new(EmptyPinnedFoldersStrategy) as Box<dyn ScriptStrategy + Sync + Send>);
+            map.insert(
+                PSScript::RefreshExplorer,
+                Box::new(RefreshExplorerStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::QueryQuickAccess,
+                Box::new(QueryQuickAccessStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::QueryRecentFile,
+                Box::new(QueryRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::QueryFrequentFolder,
+                Box::new(QueryFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::RemoveRecentFile,
+                Box::new(RemoveRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::PinToFrequentFolder,
+                Box::new(PinToFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::UnpinFromFrequentFolder,
+                Box::new(UnpinFromFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::CheckQueryFeasible,
+                Box::new(CheckQueryFeasibleStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::CheckPinUnpinFeasible,
+                Box::new(CheckPinUnpinFeasibleStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
+                PSScript::EmptyPinnedFolders,
+                Box::new(EmptyPinnedFoldersStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
             map
         });
-        
+
         // Clone strategy instances to avoid borrowing issues
         match strategies.get(&script_type) {
             Some(_strategy) => {
@@ -317,13 +348,19 @@ impl ScriptStrategyFactory {
                     PSScript::CheckPinUnpinFeasible => Box::new(CheckPinUnpinFeasibleStrategy),
                     PSScript::EmptyPinnedFolders => Box::new(EmptyPinnedFoldersStrategy),
                 })
-            },
-            None => Err(WincentError::ScriptStrategyNotFound(format!("{:?}", script_type))),
+            }
+            None => Err(WincentError::ScriptStrategyNotFound(format!(
+                "{:?}",
+                script_type
+            ))),
         }
     }
-    
+
     /// Generates script content
-    pub fn generate_script(script_type: PSScript, parameter: Option<&str>) -> WincentResult<String> {
+    pub fn generate_script(
+        script_type: PSScript,
+        parameter: Option<&str>,
+    ) -> WincentResult<String> {
         let strategy = Self::get_strategy(script_type)?;
         strategy.generate(parameter)
     }
@@ -336,70 +373,94 @@ mod tests {
     #[test]
     fn test_pin_frequent_folder_script_generation() {
         let path = "C:\\Users\\User\\Documents";
-        let script = ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path)).unwrap();
+        let script =
+            ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
+                .unwrap();
         assert!(script.contains("pintohome"));
     }
 
     #[test]
     fn test_unpin_frequent_folder_script_generation() {
         let path = "C:\\Users\\User\\Documents";
-        let script = ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path)).unwrap();
+        let script =
+            ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
+                .unwrap();
         assert!(script.contains("unpinfromhome"));
     }
 
     #[test]
     fn test_remove_recent_files_script_generation() {
         let path = "C:\\Users\\User\\Documents";
-        let script = ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path)).unwrap();
+        let script =
+            ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path)).unwrap();
         assert!(script.contains("remove"));
     }
 
     #[test]
     fn test_query_feasibility_check_script() {
-        let script = ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None).unwrap();
+        let script =
+            ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None).unwrap();
         assert!(script.contains(ShellNamespaces::QUICK_ACCESS));
     }
 
     #[test]
     fn test_pin_unpin_feasibility_check_script() {
-        let script = ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None).unwrap();
+        let script =
+            ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None).unwrap();
         assert!(script.contains("pintohome"));
     }
 
     #[test]
     fn test_script_content_validity() {
         let path = "C:\\Users\\User\\Documents";
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::RefreshExplorer, None)
-            .unwrap()
-            .is_empty());
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::QueryQuickAccess, None)
-            .unwrap()
-            .is_empty());
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::QueryRecentFile, None)
-            .unwrap()
-            .is_empty());
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::QueryFrequentFolder, None)
-            .unwrap()
-            .is_empty());
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path))
-            .unwrap()
-            .is_empty());
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
-            .unwrap()
-            .is_empty());
         assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
+            !ScriptStrategyFactory::generate_script(PSScript::RefreshExplorer, None)
                 .unwrap()
                 .is_empty()
         );
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None)
-            .unwrap()
-            .is_empty());
-        assert!(!ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None)
-            .unwrap()
-            .is_empty());
+        assert!(
+            !ScriptStrategyFactory::generate_script(PSScript::QueryQuickAccess, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !ScriptStrategyFactory::generate_script(PSScript::QueryRecentFile, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !ScriptStrategyFactory::generate_script(PSScript::QueryFrequentFolder, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!ScriptStrategyFactory::generate_script(
+            PSScript::UnpinFromFrequentFolder,
+            Some(path)
+        )
+        .unwrap()
+        .is_empty());
+        assert!(
+            !ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None)
+                .unwrap()
+                .is_empty()
+        );
     }
-    
+
     #[test]
     #[should_panic(expected = "not implemented")]
     fn test_nonexistent_strategy_error_handling() {
@@ -409,7 +470,7 @@ mod tests {
                 unimplemented!("not implemented");
             }
         }
-        
+
         let mock = Box::new(MockStrategy);
         let _ = mock.generate(None);
     }
