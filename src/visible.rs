@@ -76,7 +76,7 @@ pub(crate) fn set_visiable_with_registry(
 /// # Returns
 ///
 /// Returns `true` if Quick Access visibility can be controlled.
-/// 
+///
 pub fn is_recent_files_visiable() -> WincentResult<bool> {
     is_visialbe_with_registry(QuickAccess::RecentFiles)
 }
