@@ -75,7 +75,7 @@
 //!     Ok(())
 //! }
 //! ```
-
+#![allow(dead_code)]
 use crate::{error::WincentError, QuickAccess, WincentResult};
 
 /// Retrieves the registry key for Quick Access settings.
