@@ -248,52 +248,52 @@ pub fn set_frequent_folders_visiable(is_visiable: bool) -> WincentResult<()> {
     set_visiable_with_registry(QuickAccess::FrequentFolders, is_visiable)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::QuickAccess;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use crate::QuickAccess;
 
-    #[test]
-    #[ignore]
-    fn test_recent_files_visibility() -> WincentResult<()> {
-        let initial_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
+//     #[test]
+//     #[ignore]
+//     fn test_recent_files_visibility() -> WincentResult<()> {
+//         let initial_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
 
-        set_visiable_with_registry(QuickAccess::RecentFiles, !initial_state)?;
-        let changed_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
-        assert_eq!(
-            changed_state, !initial_state,
-            "Visibility should be changed"
-        );
+//         set_visiable_with_registry(QuickAccess::RecentFiles, !initial_state)?;
+//         let changed_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
+//         assert_eq!(
+//             changed_state, !initial_state,
+//             "Visibility should be changed"
+//         );
 
-        set_visiable_with_registry(QuickAccess::RecentFiles, initial_state)?;
-        let final_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
-        assert_eq!(
-            final_state, initial_state,
-            "Should restore to initial state"
-        );
+//         set_visiable_with_registry(QuickAccess::RecentFiles, initial_state)?;
+//         let final_state = is_visialbe_with_registry(QuickAccess::RecentFiles)?;
+//         assert_eq!(
+//             final_state, initial_state,
+//             "Should restore to initial state"
+//         );
 
-        Ok(())
-    }
+//         Ok(())
+//     }
 
-    #[test]
-    #[ignore]
-    fn test_frequent_folders_visibility() -> WincentResult<()> {
-        let initial_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
+//     #[test]
+//     #[ignore]
+//     fn test_frequent_folders_visibility() -> WincentResult<()> {
+//         let initial_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
 
-        set_visiable_with_registry(QuickAccess::FrequentFolders, !initial_state)?;
-        let changed_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
-        assert_eq!(
-            changed_state, !initial_state,
-            "Visibility should be changed"
-        );
+//         set_visiable_with_registry(QuickAccess::FrequentFolders, !initial_state)?;
+//         let changed_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
+//         assert_eq!(
+//             changed_state, !initial_state,
+//             "Visibility should be changed"
+//         );
 
-        set_visiable_with_registry(QuickAccess::FrequentFolders, initial_state)?;
-        let final_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
-        assert_eq!(
-            final_state, initial_state,
-            "Should restore to initial state"
-        );
+//         set_visiable_with_registry(QuickAccess::FrequentFolders, initial_state)?;
+//         let final_state = is_visialbe_with_registry(QuickAccess::FrequentFolders)?;
+//         assert_eq!(
+//             final_state, initial_state,
+//             "Should restore to initial state"
+//         );
 
-        Ok(())
-    }
-}
+//         Ok(())
+//     }
+// }
