@@ -125,9 +125,9 @@ impl ScriptStrategy for RemoveRecentFileStrategy {
             r#"
     {}
     {}
-    $files = $shell.Namespace("{}").Items() | where {{$_.IsFolder -eq $false}};
-    $target = $files | where {{$_.Path -eq "{}"}};
-    $target.InvokeVerb("remove");
+    $files = $shell.Namespace('{}').Items() | where {{$_.IsFolder -eq $false}};
+    $target = $files | where {{$_.Path -eq '{}'}};
+    $target.InvokeVerb('remove');
 "#,
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
@@ -147,7 +147,7 @@ impl ScriptStrategy for PinToFrequentFolderStrategy {
             r#"
     {}
     {}
-    $shell.Namespace("{}").Self.InvokeVerb("pintohome");
+    $shell.Namespace('{}').Self.InvokeVerb('pintohome');
 "#,
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
@@ -166,9 +166,18 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
             r#"
     {}
     {}
-    $folders = $shell.Namespace("{}").Items();
-    $target = $folders | Where-Object {{$_.Path -eq "{}"}};
-    $target.InvokeVerb("unpinfromhome");
+
+    $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
+    if ($isWin11)
+    {{
+        $shell.Namespace('{path}').Self.InvokeVerb('pintohome')
+    }}
+    else
+    {{
+        $folders = $shell.Namespace('{}').Items();
+        $target = $folders | Where-Object {{$_.Path -eq '{}'}};
+        $target.InvokeVerb('unpinfromhome');    
+    }} 
 "#,
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
@@ -187,10 +196,19 @@ impl ScriptStrategy for EmptyPinnedFoldersStrategy {
             r#"
     {}
     {}
-    $shell.Namespace('{}').Items() | ForEach-Object {{ $_.InvokeVerb("unpinfromhome") }};
+    $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
+    if ($isWin11)
+    {{
+        $shell.Namespace('{}').Items() | ForEach-Object {{ $_.InvokeVerb('pintohome') }};
+    }}
+    else
+    {{
+        $shell.Namespace('{}').Items() | ForEach-Object {{ $_.InvokeVerb('unpinfromhome') }};
+    }}
 "#,
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
+            ShellNamespaces::FREQUENT_FOLDERS,
             ShellNamespaces::FREQUENT_FOLDERS,
         ))
     }
@@ -247,7 +265,17 @@ impl ScriptStrategy for CheckPinUnpinFeasibleStrategy {
 
         Start-Sleep -Seconds 3
 
-        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
+        $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
+        if ($isWin11) 
+        {{
+            $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
+        }}
+        else
+        {{
+            $folders = $shell.Namespace('{}').Items();
+            $target = $folders | Where-Object {{$_.Path -eq $PSScriptRoot}};
+            $target.InvokeVerb('unpinfromhome');
+        }}
     }}.ToString()
 
     $arguments = "-Command & {{$scriptBlock}}"
@@ -266,7 +294,8 @@ impl ScriptStrategy for CheckPinUnpinFeasibleStrategy {
         }}
     }}
 "#,
-            BaseScriptStrategy::utf8_header()
+            BaseScriptStrategy::utf8_header(),
+            ShellNamespaces::FREQUENT_FOLDERS
         ))
     }
 }
