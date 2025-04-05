@@ -87,7 +87,7 @@ pub mod query;
 mod scripts;
 mod test_utils;
 mod utils;
-pub mod visible;
+mod visible;
 
 pub mod manager;
 mod script_executor;
