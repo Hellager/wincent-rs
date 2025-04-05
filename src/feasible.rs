@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test_log::test]
-    #[ignore]
+    #[ignore = "Modifies system state"]
     fn test_check_pinunpin_feasible_with_script() -> WincentResult<()> {
         let result = check_pinunpin_feasible_with_script()?;
 

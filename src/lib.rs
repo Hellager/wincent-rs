@@ -20,7 +20,7 @@
 //!
 //! ## Basic Example
 //!
-//! ```rust
+//! ```no_run
 //! use wincent::{
 //!     feasible::{check_feasible, fix_feasible},
 //!     query::get_quick_access_items,

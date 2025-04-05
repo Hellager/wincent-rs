@@ -241,22 +241,16 @@ impl ScriptStrategy for CheckPinUnpinFeasibleStrategy {
         Ok(format!(
             r#"
     {}
-
-    $currentPath = $PSScriptRoot
-
     $scriptBlock = {{
-        param($scriptPath)
         $shell = New-Object -ComObject Shell.Application
-        $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
+        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
 
         Start-Sleep -Seconds 3
 
-        $folders = $shell.Namespace('{}').Items();
-        $target = $folders | Where-Object {{$_.Path -eq $scriptPath}};
-        $target.InvokeVerb('unpinfromhome');
+        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
     }}.ToString()
 
-    $arguments = "-Command & {{$scriptBlock}} -scriptPath '$currentPath'"
+    $arguments = "-Command & {{$scriptBlock}}"
     $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
 
     $timeout = 10
@@ -272,8 +266,7 @@ impl ScriptStrategy for CheckPinUnpinFeasibleStrategy {
         }}
     }}
 "#,
-            BaseScriptStrategy::utf8_header(),
-            ShellNamespaces::FREQUENT_FOLDERS
+            BaseScriptStrategy::utf8_header()
         ))
     }
 }

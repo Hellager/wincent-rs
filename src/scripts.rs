@@ -69,22 +69,19 @@ static CHECK_QUERY_FEASIBLE: &str = r#"
 static CHECK_PIN_UNPIN_FEASIBLE: &str = r#"
     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
 
-    $currentPath = $PSScriptRoot
-
     $scriptBlock = {
-        param($scriptPath)
         $shell = New-Object -ComObject Shell.Application
-        $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
+        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
 
-        $folders = $shell.Namespace('shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}').Items();
-        $target = $folders | Where-Object {$_.Path -match ${$scriptPath}};
-        $target.InvokeVerb('unpinfromhome');
+        Start-Sleep -Seconds 3
+
+        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
     }.ToString()
 
-    $arguments = "-Command & {$scriptBlock} -scriptPath '$currentPath'"
+    $arguments = "-Command & {$scriptBlock}"
     $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
 
-    $timeout = 5
+    $timeout = 10
     if (-not $process.WaitForExit($timeout * 1000)) {
         try {
             $process.Kill()
@@ -159,17 +156,34 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
     }
 }
 
+fn get_wincent_temp_dir() -> WincentResult<std::path::PathBuf> {
+    let temp_dir = std::env::temp_dir().join("wincent");
+    if !temp_dir.exists() {
+        std::fs::create_dir_all(&temp_dir).map_err(WincentError::Io)?;
+    }
+    Ok(temp_dir)
+}
+
+fn get_temp_scripts_dir() -> WincentResult<std::path::PathBuf> {
+    let temp_dir = get_wincent_temp_dir()?.join("temp");
+    if !temp_dir.exists() {
+        std::fs::create_dir_all(&temp_dir).map_err(WincentError::Io)?;
+    }
+    Ok(temp_dir)
+}
+
 /// Executes a PowerShell script generated based on the specified method and optional parameters.
 pub(crate) fn execute_ps_script(
     method: Script,
     para: Option<&str>,
 ) -> WincentResult<std::process::Output> {
     let content = get_script_content(method, para)?;
+    let saved_dir = get_temp_scripts_dir()?;
     let temp_script_file = Builder::new()
         .prefix("wincent_")
         .suffix(".ps1")
         .rand_bytes(5)
-        .tempfile()
+        .tempfile_in(saved_dir)
         .map_err(WincentError::Io)?;
 
     let bom = [0xEF, 0xBB, 0xBF];
