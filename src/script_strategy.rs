@@ -281,7 +281,7 @@ impl ScriptStrategy for CheckPinUnpinFeasibleStrategy {
         }}
     }}.ToString()
 
-    $arguments = "-Command & {$scriptBlock} -scriptPath '$currentPath'"
+    $arguments = "-Command & {{$scriptBlock}} -scriptPath '$currentPath'"
     $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
 
     $timeout = 10
