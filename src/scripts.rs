@@ -152,11 +152,19 @@ pub(crate) fn get_script_content(method: Script, para: Option<&str>) -> WincentR
                     r#"
                     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
                     $shell = New-Object -ComObject Shell.Application;
-                    $folders = $shell.Namespace("shell:::{{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}}").Items();
-                    $target = $folders | Where-Object {{$_.Path -eq "{}"}};
-                    $target.InvokeVerb("unpinfromhome");
+                    $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
+                    if ($isWin11)
+                    {{
+                        $shell.Namespace('{}').Self.InvokeVerb('pintohome')
+                    }}
+                    else
+                    {{
+                        $folders = $shell.Namespace("shell:::{{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}}").Items();
+                        $target = $folders | Where-Object {{$_.Path -eq '{}'}};
+                        $target.InvokeVerb('unpinfromhome');    
+                    }} 
                 "#,
-                    data
+                    data, data
                 );
                 Ok(content)
             } else {
