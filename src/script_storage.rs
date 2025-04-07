@@ -64,7 +64,7 @@ impl ScriptStorage {
             for entry in entries.flatten() {
                 let path = entry.path();
 
-                if path.is_file() && path.extension().map_or(false, |e| e == "ps1") {
+                if path.is_file() && path.extension().is_some_and(|e| e == "ps1") {
                     let mut should_remove = false;
                     if let Some(file_version) = path
                         .file_name()
