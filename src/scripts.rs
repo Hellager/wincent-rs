@@ -69,16 +69,28 @@ static CHECK_QUERY_FEASIBLE: &str = r#"
 static CHECK_PIN_UNPIN_FEASIBLE: &str = r#"
     $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
 
+    $currentPath = $PSScriptRoot
     $scriptBlock = {
+        param($scriptPath)
         $shell = New-Object -ComObject Shell.Application
-        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
+        $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
 
         Start-Sleep -Seconds 3
 
-        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
+        $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match 'Windows 11'
+        if ($isWin11) 
+        {
+            $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
+        }
+        else
+        {
+            $folders = $shell.Namespace('shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}').Items();
+            $target = $folders | Where-Object {$_.Path -eq $scriptPath};
+            $target.InvokeVerb('unpinfromhome');
+        }
     }.ToString()
 
-    $arguments = "-Command & {$scriptBlock}"
+    $arguments = "-Command & {$scriptBlock} -scriptPath '$currentPath'"
     $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
 
     $timeout = 10
