@@ -259,26 +259,29 @@ impl ScriptStrategy for CheckPinUnpinFeasibleStrategy {
         Ok(format!(
             r#"
     {}
+
+    $currentPath = $PSScriptRoot
     $scriptBlock = {{
+        param($scriptPath)
         $shell = New-Object -ComObject Shell.Application
-        $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
+        $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
 
         Start-Sleep -Seconds 3
 
         $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
         if ($isWin11) 
         {{
-            $shell.Namespace($PSScriptRoot).Self.InvokeVerb('pintohome')
+            $shell.Namespace($scriptPath).Self.InvokeVerb('pintohome')
         }}
         else
         {{
             $folders = $shell.Namespace('{}').Items();
-            $target = $folders | Where-Object {{$_.Path -eq $PSScriptRoot}};
+            $target = $folders | Where-Object {{$_.Path -eq $scriptPath}};
             $target.InvokeVerb('unpinfromhome');
         }}
     }}.ToString()
 
-    $arguments = "-Command & {{$scriptBlock}}"
+    $arguments = "-Command & {$scriptBlock} -scriptPath '$currentPath'"
     $process = Start-Process powershell -ArgumentList $arguments -NoNewWindow -PassThru
 
     $timeout = 10
