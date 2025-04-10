@@ -15,11 +15,7 @@
 //! 2. Attempt automatic remediation if supported
 //! 3. Provide fallback strategies when unavailable
 
-use crate::{
-    script_executor::ScriptExecutor,
-    script_strategy::PSScript,
-    WincentResult,
-};
+use crate::{script_executor::ScriptExecutor, script_strategy::PSScript, WincentResult};
 
 /// Checks if PowerShell query commands are available and executable.
 pub(crate) fn check_query_feasible_with_script() -> WincentResult<bool> {

@@ -15,11 +15,8 @@
 //! - Atomic operations with proper cleanup sequencing
 
 use crate::{
-    error::WincentError,
-    utils::get_windows_recent_folder,
-    script_executor::ScriptExecutor,
-    script_strategy::PSScript,
-    WincentResult,
+    error::WincentError, script_executor::ScriptExecutor, script_strategy::PSScript,
+    utils::get_windows_recent_folder, WincentResult,
 };
 use windows::Win32::System::Com::CoInitializeEx;
 use windows::Win32::System::Com::CoUninitialize;

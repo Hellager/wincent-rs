@@ -1,21 +1,18 @@
 #![allow(dead_code)]
 
 use crate::{
-    error::WincentError,
-    script_executor::ScriptExecutor,
-    script_strategy::PSScript,
-    WincentResult,
+    error::WincentError, script_executor::ScriptExecutor, script_strategy::PSScript, WincentResult,
 };
 use std::ffi::OsString;
-use std::path::Path;
 use std::os::windows::ffi::OsStringExt;
+use std::path::Path;
+use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{BOOL, HANDLE};
 use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::Diagnostics::Debug::VER_PLATFORM_WIN32_NT;
+use windows::Win32::System::SystemInformation::OSVERSIONINFOEXW;
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 use windows::Win32::UI::Shell::{FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
-use windows::Wdk::System::SystemServices::RtlGetVersion;
-use windows::Win32::System::SystemInformation::OSVERSIONINFOEXW;
-use windows::Win32::System::Diagnostics::Debug::VER_PLATFORM_WIN32_NT;
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PathType {
@@ -104,7 +101,9 @@ pub(crate) fn is_win11() -> WincentResult<bool> {
     let version_info = get_os_version()?;
 
     if version_info.dwPlatformId != VER_PLATFORM_WIN32_NT.0 {
-        return Err(WincentError::SystemError("No Windows NT system".to_string()));
+        return Err(WincentError::SystemError(
+            "No Windows NT system".to_string(),
+        ));
     }
 
     match (version_info.dwMajorVersion, version_info.dwMinorVersion) {

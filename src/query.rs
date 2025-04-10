@@ -17,17 +17,19 @@
 //! - Maximum 20 items per category (Windows default)
 
 use crate::{
-    script_executor::ScriptExecutor,
-    script_strategy::PSScript,
-    QuickAccess, WincentResult,
+    script_executor::ScriptExecutor, script_strategy::PSScript, QuickAccess, WincentResult,
 };
 
 /// Queries recent items from Quick Access using a PowerShell script.
 pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let output = match qa_type {
         QuickAccess::All => ScriptExecutor::execute_ps_script(PSScript::QueryQuickAccess, None)?,
-        QuickAccess::RecentFiles => ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?,
-        QuickAccess::FrequentFolders => ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?,
+        QuickAccess::RecentFiles => {
+            ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?
+        }
+        QuickAccess::FrequentFolders => {
+            ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?
+        }
     };
 
     let data = ScriptExecutor::parse_output_to_strings(output)?;

@@ -14,9 +14,9 @@ use crate::{
     empty::{empty_normal_folders_with_jumplist_file, empty_recent_files_with_api},
     error::WincentError,
     handle::add_file_to_recent_with_api,
-    utils::{validate_path, PathType},
     script_executor::CachedScriptExecutor,
     script_strategy::PSScript,
+    utils::{validate_path, PathType},
     QuickAccess, WincentResult,
 };
 use std::sync::Arc;
@@ -32,17 +32,12 @@ struct FeasibilityStatus {
 
 impl FeasibilityStatus {
     async fn check(executor: &Arc<CachedScriptExecutor>, timeout_duration: Duration) -> Self {
-        let query_feasible = Self::check_feasibility(
-            executor,
-            PSScript::CheckQueryFeasible,
-            timeout_duration
-        ).await;
+        let query_feasible =
+            Self::check_feasibility(executor, PSScript::CheckQueryFeasible, timeout_duration).await;
 
-        let handle_feasible = Self::check_feasibility(
-            executor,
-            PSScript::CheckPinUnpinFeasible,
-            timeout_duration
-        ).await;
+        let handle_feasible =
+            Self::check_feasibility(executor, PSScript::CheckPinUnpinFeasible, timeout_duration)
+                .await;
 
         Self {
             query: query_feasible,
@@ -53,17 +48,15 @@ impl FeasibilityStatus {
     async fn check_feasibility(
         executor: &Arc<CachedScriptExecutor>,
         script: PSScript,
-        timeout_duration: Duration
+        timeout_duration: Duration,
     ) -> bool {
-        let check_result = tokio::time::timeout(
-            timeout_duration,
-            executor.execute(script, None)
-        ).await;
+        let check_result =
+            tokio::time::timeout(timeout_duration, executor.execute(script, None)).await;
 
         match check_result {
             Ok(Ok(_)) => true,
-            Ok(Err(_)) => false,  // Execution failed
-            Err(_) => false,      // Timeout occurred
+            Ok(Err(_)) => false, // Execution failed
+            Err(_) => false,     // Timeout occurred
         }
     }
 }
@@ -107,7 +100,7 @@ impl QuickAccessManager {
     }
 
     /// Checks system capability for Quick Access operations
-    /// 
+    ///
     /// In most case, no need to check feasibility
     ///
     /// # Returns
@@ -115,10 +108,11 @@ impl QuickAccessManager {
     /// - Ability to query Quick Access items
     /// - Ability to modify Quick Access items
     pub async fn check_feasible(&self) -> (bool, bool) {
-        let status = self.feasibility
+        let status = self
+            .feasibility
             .get_or_init(|| FeasibilityStatus::check(&self.executor, self.lock_timeout))
             .await;
-        
+
         (status.query, status.handle)
     }
 
@@ -150,11 +144,15 @@ impl QuickAccessManager {
                     add_file_to_recent_with_api(path)?;
                     Vec::new()
                 } else {
-                    self.executor.execute_with_timeout(script, Some(path.to_string()), 10).await?
+                    self.executor
+                        .execute_with_timeout(script, Some(path.to_string()), 10)
+                        .await?
                 }
             }
             QuickAccess::FrequentFolders => {
-                self.executor.execute_with_timeout(script, Some(path.to_string()), 10).await?
+                self.executor
+                    .execute_with_timeout(script, Some(path.to_string()), 10)
+                    .await?
             }
             _ => {
                 return Err(WincentError::UnsupportedOperation(format!(
@@ -186,7 +184,9 @@ impl QuickAccessManager {
     /// List of path strings
     pub async fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
         let script_type = self.map_to_script_type(qa_type)?;
-        self.executor.execute_with_timeout(script_type, None, 10).await
+        self.executor
+            .execute_with_timeout(script_type, None, 10)
+            .await
     }
 
     /// Checks item presence in Quick Access
@@ -214,9 +214,12 @@ impl QuickAccessManager {
         let script = match qa_type {
             QuickAccess::RecentFiles => PSScript::AddRecentFile,
             QuickAccess::FrequentFolders => PSScript::PinToFrequentFolder,
-            _ => return Err(WincentError::UnsupportedOperation(
-                format!("Unsupported add operation for {:?}", qa_type)
-            )),
+            _ => {
+                return Err(WincentError::UnsupportedOperation(format!(
+                    "Unsupported add operation for {:?}",
+                    qa_type
+                )))
+            }
         };
 
         let path_type = match qa_type {
@@ -225,7 +228,8 @@ impl QuickAccessManager {
             _ => unreachable!(),
         };
 
-        self.handle_operation(Operation::Add(script), path, qa_type, path_type).await
+        self.handle_operation(Operation::Add(script), path, qa_type, path_type)
+            .await
     }
 
     /// Removes item from Quick Access
@@ -238,9 +242,12 @@ impl QuickAccessManager {
         let script = match qa_type {
             QuickAccess::RecentFiles => PSScript::RemoveRecentFile,
             QuickAccess::FrequentFolders => PSScript::UnpinFromFrequentFolder,
-            _ => return Err(WincentError::UnsupportedOperation(
-                format!("Unsupported remove operation for {:?}", qa_type)
-            )),
+            _ => {
+                return Err(WincentError::UnsupportedOperation(format!(
+                    "Unsupported remove operation for {:?}",
+                    qa_type
+                )))
+            }
         };
 
         let path_type = match qa_type {
@@ -249,7 +256,8 @@ impl QuickAccessManager {
             _ => unreachable!(),
         };
 
-        self.handle_operation(Operation::Remove(script), path, qa_type, path_type).await
+        self.handle_operation(Operation::Remove(script), path, qa_type, path_type)
+            .await
     }
 
     /// Clears Quick Access items
@@ -264,7 +272,9 @@ impl QuickAccessManager {
             }
             QuickAccess::FrequentFolders => {
                 empty_normal_folders_with_jumplist_file()?;
-                self.executor.execute_with_timeout(PSScript::EmptyPinnedFolders, None, 10).await?;
+                self.executor
+                    .execute_with_timeout(PSScript::EmptyPinnedFolders, None, 10)
+                    .await?;
             }
             QuickAccess::All => {
                 Box::pin(self.empty_items(QuickAccess::RecentFiles)).await?;
@@ -300,7 +310,10 @@ mod tests {
         let manager = QuickAccessManager::new().await?;
 
         {
-            let _ = manager.feasibility.set(FeasibilityStatus { handle: true, query: true });
+            let _ = manager.feasibility.set(FeasibilityStatus {
+                handle: true,
+                query: true,
+            });
             let items = manager.get_items(QuickAccess::All).await?;
             println!("Items with feasibility=true: {}", items.len());
         }
@@ -342,15 +355,26 @@ mod tests {
         let file_path = temp_file.path().to_str().unwrap();
 
         {
-            let _ = manager.feasibility.set(FeasibilityStatus { handle: true, query: true });
-            manager.add_item(file_path, QuickAccess::RecentFiles).await?;
-            manager.remove_item(file_path, QuickAccess::RecentFiles).await?;
+            let _ = manager.feasibility.set(FeasibilityStatus {
+                handle: true,
+                query: true,
+            });
+            manager
+                .add_item(file_path, QuickAccess::RecentFiles)
+                .await?;
+            manager
+                .remove_item(file_path, QuickAccess::RecentFiles)
+                .await?;
         }
 
         {
             let _ = manager.feasibility.get();
-            manager.add_item(file_path, QuickAccess::RecentFiles).await?;
-            manager.remove_item(file_path, QuickAccess::RecentFiles).await?;
+            manager
+                .add_item(file_path, QuickAccess::RecentFiles)
+                .await?;
+            manager
+                .remove_item(file_path, QuickAccess::RecentFiles)
+                .await?;
         }
 
         Ok(())
@@ -362,7 +386,10 @@ mod tests {
         let manager = QuickAccessManager::new().await?;
 
         {
-            let _ = manager.feasibility.set(FeasibilityStatus { handle: true, query: true });
+            let _ = manager.feasibility.set(FeasibilityStatus {
+                handle: true,
+                query: true,
+            });
             manager.empty_items(QuickAccess::RecentFiles).await?;
         }
 
