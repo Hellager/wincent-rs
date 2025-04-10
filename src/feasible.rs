@@ -1,24 +1,19 @@
-//! Check and fix functions execution feasibility.
+//! System capability checks and feature enablement
 //!
-//! ## Example
+//! Provides runtime verification of system capabilities required for Quick Access operations,
+//! with automatic remediation for common configuration issues.
 //!
-//! ```no_run
-//! use wincent::{
-//!     feasible::{check_feasible, fix_feasible},
-//!     error::WincentError,
-//! };
+//! # Key Functionality
+//! - PowerShell command availability checks
+//! - Query operation capability verification
+//! - Pin/Unpin operation system support detection
+//! - Execution policy validation
+//! - Automatic remediation of configuration issues
 //!
-//! fn main() -> Result<(), WincentError> {
-//!     if !check_feasible()? {
-//!         println!("Some Quick Access operations are not supported");
-//!         // Try to fix the issues
-//!         if fix_feasible()? {
-//!             println!("Successfully enabled Quick Access operations");
-//!         }
-//!     }
-//!     Ok(())
-//! }
-//! ```
+//! # Usage Flow
+//! 1. Check operation feasibility before execution
+//! 2. Attempt automatic remediation if supported
+//! 3. Provide fallback strategies when unavailable
 
 use crate::{
     script_executor::ScriptExecutor,

@@ -1,40 +1,18 @@
-//! Clear Windows Quick Access items, including recent files
-//! and frequent folders.
+//! Windows Quick Access cleanup operations
 //!
-//! ## Example
+//! Provides unified interface for clearing Windows Quick Access items including:
+//! - Recent files
+//! - Frequent folders (both pinned and normal)
+//! - Complete Quick Access history
 //!
-//! ```no_run
-//! use wincent::{
-//!     empty::{empty_frequent_folders, empty_quick_access, empty_recent_files},
-//!     WincentResult,
-//! };
+//! Implements multiple cleanup strategies with fallback mechanisms
 //!
-//! fn main() -> WincentResult<()> {
-//!     // Example 1: Clear only recent files
-//!     println!("Clearing recent files...");
-//!     empty_recent_files()?;
-//!     println!("Recent files cleared successfully");
-//!
-//!     // Example 2: Clear frequent folders (both pinned and normal)
-//!     println!("\nClearing frequent folders...");
-//!     empty_frequent_folders()?;
-//!     println!("Frequent folders cleared successfully");
-//!
-//!     // Example 3: Clear everything in Quick Access
-//!     println!("\nClearing entire Quick Access...");
-//!     empty_quick_access()?;
-//!     println!("Quick Access cleared successfully");
-//!
-//!     // Example 4: Selective clearing with error handling
-//!     println!("\nDemonstrating error handling...");
-//!     match empty_recent_files() {
-//!         Ok(_) => println!("Recent files cleared"),
-//!         Err(e) => println!("Failed to clear recent files: {}", e),
-//!     }
-//!
-//!     Ok(())
-//! }
-//! ```
+//! # Key Functionality
+//! - Clear recent files using Windows Shell API
+//! - Remove frequent folders through file system operations
+//! - Clear pinned folders via PowerShell scripts
+//! - Full Quick Access reset capabilities
+//! - Atomic operations with proper cleanup sequencing
 
 use crate::{
     error::WincentError,

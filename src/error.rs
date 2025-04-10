@@ -1,3 +1,21 @@
+//! Error handling and error type definitions
+//!
+//! Provides centralized error handling for Windows Quick Access operations,
+//! with unified error types and automatic error conversions.
+//!
+//! # Key Features
+//! - Cross-domain error classification (I/O, system, scripting)
+//! - Automatic error conversion from common Rust types
+//! - Detailed error context preservation
+//! - Async-task error propagation support
+//! - Comprehensive test utilities
+//!
+//! # Error Handling Guide
+//! 1. Use `WincentResult<T>` as return type for fallible operations
+//! 2. Leverage `?` operator for automatic error conversion
+//! 3. Add context to errors using `.map_err` before returning
+//! 4. Match specific error variants for recovery attempts
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
