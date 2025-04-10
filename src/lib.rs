@@ -18,58 +18,6 @@
 //!   - Show/Hide recent files
 //!   - Show/Hide frequent folders
 //!
-//! ## Basic Example
-//!
-//! ```no_run
-//! use wincent::{
-//!     feasible::{check_feasible, fix_feasible},
-//!     query::get_quick_access_items,
-//!     error::WincentError
-//! };
-//!
-//! fn main() -> Result<(), WincentError> {
-//!     // Ensure operations are feasible
-//!     if !check_feasible()? {
-//!         fix_feasible()?;
-//!     }
-//!
-//!     // Get all Quick Access items
-//!     let items = get_quick_access_items()?;
-//!     println!("Found {} Quick Access items", items.len());
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Advanced Example
-//!
-//! ```no_run
-//! use wincent::{
-//!     handle::{add_to_frequent_folders, remove_from_recent_files},
-//!     query::{get_recent_files, is_in_quick_access},
-//!     error::WincentError
-//! };
-//!
-//! fn main() -> Result<(), WincentError> {
-//!     // Pin an important project folder
-//!     let project_path = "C:\\Projects\\important-project";
-//!     if !is_in_quick_access(project_path)? {
-//!         add_to_frequent_folders(project_path)?;
-//!     }
-//!
-//!     // Remove sensitive files from recent items
-//!     let sensitive_files = get_recent_files()?
-//!         .into_iter()
-//!         .filter(|path| path.contains("password") || path.contains("secret"));
-//!
-//!     for file in sensitive_files {
-//!         remove_from_recent_files(&file)?;
-//!     }
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
 //! ## Features
 //!
 //! - Comprehensive error handling

@@ -72,7 +72,7 @@ impl FeasibilityStatus {
 ///
 /// # Example
 /// ```rust,no_run
-/// use wincent::quick_access::{QuickAccessManager, QuickAccess};
+/// use wincent::predule::*;
 ///
 /// #[tokio::main]
 /// async fn main() {
