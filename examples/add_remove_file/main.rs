@@ -6,10 +6,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 use wincent::{
+    error::WincentError,
     handle::{add_to_recent_files, remove_from_recent_files},
     query::is_in_recent_files,
     WincentResult,
-    error::WincentError,
 };
 
 struct ScopedFile {
@@ -22,7 +22,7 @@ impl ScopedFile {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        
+
         let filename = format!("wincent-test-{}.txt", timestamp);
         let path = env::current_dir()?.join(filename);
 
@@ -47,7 +47,9 @@ impl Drop for ScopedFile {
 
 fn main() -> WincentResult<()> {
     let file = ScopedFile::new()?;
-    let file_path = file.path_str().ok_or_else(|| WincentError::InvalidPath("Invalid file path encoding".to_string()))?;
+    let file_path = file
+        .path_str()
+        .ok_or_else(|| WincentError::InvalidPath("Invalid file path encoding".to_string()))?;
 
     println!("Working with temporary file: {}", file_path);
 

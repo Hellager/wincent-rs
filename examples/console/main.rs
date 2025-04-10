@@ -187,7 +187,10 @@ async fn check_feasibility(manager: &QuickAccessManager) -> WincentResult<()> {
     if query_feasible && handle_feasible {
         spinner.complete(true, "All operations are allowed");
     } else {
-        spinner.complete(false, "Some operations may be restricted, please check system settings");
+        spinner.complete(
+            false,
+            "Some operations may be restricted, please check system settings",
+        );
     }
 
     Ok(())
