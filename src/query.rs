@@ -72,35 +72,22 @@
 //! ```
 
 use crate::{
-    error::WincentError,
-    feasible::{check_query_feasible, check_script_feasible},
-    scripts::{execute_ps_script, Script},
+    script_executor::ScriptExecutor,
+    script_strategy::PSScript,
     QuickAccess, WincentResult,
 };
 
 /// Queries recent items from Quick Access using a PowerShell script.
 pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let output = match qa_type {
-        QuickAccess::All => execute_ps_script(Script::QueryQuickAccess, None)?,
-        QuickAccess::RecentFiles => execute_ps_script(Script::QuertRecentFile, None)?,
-        QuickAccess::FrequentFolders => execute_ps_script(Script::QueryFrequentFolder, None)?,
+        QuickAccess::All => ScriptExecutor::execute_ps_script(PSScript::QueryQuickAccess, None)?,
+        QuickAccess::RecentFiles => ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?,
+        QuickAccess::FrequentFolders => ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?,
     };
 
-    if output.status.success() {
-        let stdout_str = String::from_utf8(output.stdout).map_err(WincentError::Utf8)?;
+    let data = ScriptExecutor::parse_output_to_strings(output)?;
 
-        let data: Vec<String> = stdout_str
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(String::from)
-            .collect();
-
-        Ok(data)
-    } else {
-        let error = String::from_utf8(output.stderr)?;
-        Err(WincentError::ScriptFailed(error))
-    }
+    Ok(data)
 }
 
 /****************************************************** Query Quick Access ******************************************************/
@@ -125,18 +112,6 @@ pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult
 /// }
 /// ```
 pub fn get_recent_files() -> WincentResult<Vec<String>> {
-    if !check_script_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string(),
-        ));
-    }
-
-    if !check_query_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "Quick Access query operation is not feasible".to_string(),
-        ));
-    }
-
     query_recent_with_ps_script(QuickAccess::RecentFiles)
 }
 
@@ -160,18 +135,6 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 /// }
 /// ```
 pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
-    if !check_script_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string(),
-        ));
-    }
-
-    if !check_query_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "Quick Access query operation is not feasible".to_string(),
-        ));
-    }
-
     query_recent_with_ps_script(QuickAccess::FrequentFolders)
 }
 
@@ -200,18 +163,6 @@ pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
 /// }
 /// ```
 pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
-    if !check_script_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string(),
-        ));
-    }
-
-    if !check_query_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "Quick Access query operation is not feasible".to_string(),
-        ));
-    }
-
     query_recent_with_ps_script(QuickAccess::All)
 }
 
