@@ -1,32 +1,53 @@
-use std::io::Write;
-use std::{thread, time::Duration};
-use tempfile::Builder;
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::PathBuf,
+    thread,
+    time::{Duration, SystemTime},
+};
 use wincent::{
-    feasible::{check_script_feasible, fix_script_feasible},
     handle::{add_to_recent_files, remove_from_recent_files},
     query::is_in_recent_files,
     WincentResult,
+    error::WincentError,
 };
 
-fn main() -> WincentResult<()> {
-    // Check and ensure script execution feasibility
-    if !check_script_feasible()? {
-        println!("Fixing script execution policy...");
-        fix_script_feasible()?;
+struct ScopedFile {
+    path: PathBuf,
+}
+
+impl ScopedFile {
+    fn new() -> io::Result<Self> {
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        
+        let filename = format!("wincent-test-{}.txt", timestamp);
+        let path = env::current_dir()?.join(filename);
+
+        let mut file = fs::File::create(&path)?;
+        writeln!(file, "This is a test file for Quick Access operations")?;
+
+        Ok(Self { path })
     }
 
-    // Create temporary file
-    let temp_file = Builder::new()
-        .prefix("wincent-test-")
-        .suffix(".txt")
-        .tempfile()?;
+    fn path_str(&self) -> Option<&str> {
+        self.path.to_str()
+    }
+}
 
-    // Write some test content
-    writeln!(
-        temp_file.as_file(),
-        "This is a test file for Quick Access operations"
-    )?;
-    let file_path = temp_file.path().to_str().unwrap();
+impl Drop for ScopedFile {
+    fn drop(&mut self) {
+        if let Err(e) = fs::remove_file(&self.path) {
+            eprintln!("Failed to delete temporary file: {}", e);
+        }
+    }
+}
+
+fn main() -> WincentResult<()> {
+    let file = ScopedFile::new()?;
+    let file_path = file.path_str().ok_or_else(|| WincentError::InvalidPath("Invalid file path encoding".to_string()))?;
 
     println!("Working with temporary file: {}", file_path);
 
@@ -35,7 +56,7 @@ fn main() -> WincentResult<()> {
     add_to_recent_files(file_path)?;
 
     // Wait for Windows to update
-    thread::sleep(Duration::from_millis(500));
+    thread::sleep(Duration::from_millis(1000));
 
     // Verify if file has been added
     if is_in_recent_files(file_path)? {

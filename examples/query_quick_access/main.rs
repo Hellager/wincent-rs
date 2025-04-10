@@ -1,5 +1,4 @@
 use wincent::{
-    feasible::{check_script_feasible, fix_script_feasible},
     query::{
         get_frequent_folders, get_quick_access_items, get_recent_files, is_in_frequent_folders,
         is_in_quick_access, is_in_recent_files,
@@ -20,12 +19,6 @@ fn print_items(title: &str, items: &[String]) {
 }
 
 fn main() -> WincentResult<()> {
-    // Check and ensure script execution feasibility
-    if !check_script_feasible()? {
-        println!("Fixing script execution policy...");
-        fix_script_feasible()?;
-    }
-
     // Get all Quick Access items
     println!("Querying Quick Access items...");
     let all_items = get_quick_access_items()?;

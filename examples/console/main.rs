@@ -107,12 +107,12 @@ fn show_welcome() {
 
 // Display main menu
 fn show_main_menu() {
-    println!("\n{}{}Select operation:{}", YELLOW, BOLD, RESET);
-    println!("{}1. Check execution policy status", BLUE);
-    println!("{}2. Manage quick access items", BLUE);
-    println!("{}3. List quick access items", BLUE);
-    println!("{}4. Clear quick access items", BLUE);
-    println!("{}0. Exit program{}", BLUE, RESET);
+    println!("\n{}{}Select Operation:{}", YELLOW, BOLD, RESET);
+    println!("{}1. Check Execution Policy Status", BLUE);
+    println!("{}2. Manage Quick Access Items", BLUE);
+    println!("{}3. View Quick Access Items", BLUE);
+    println!("{}4. Clear Quick Access Items", BLUE);
+    println!("{}0. Exit Program{}", BLUE, RESET);
     print!("\n{}Enter choice [0-4]: {}", YELLOW, RESET);
     io::stdout().flush().unwrap();
 }
@@ -169,11 +169,8 @@ fn read_path_input(prompt: &str) -> String {
 
 // Wait for any key press
 fn wait_for_key() {
-    println!("\n{}Press any key to continue...{}", YELLOW, RESET);
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read input");
+    println!("\n{}Precess any button to continue...{}", YELLOW, RESET);
+    let _ = read_input();
 }
 
 // Check execution policy status
@@ -185,15 +182,12 @@ async fn check_feasibility(manager: &QuickAccessManager) -> WincentResult<()> {
         sleep(Duration::from_millis(100)).await;
     }
 
-    let feasible = manager.check_feasible().await?;
+    let (query_feasible, handle_feasible) = manager.check_feasible().await;
 
-    if feasible {
-        spinner.complete(true, "All operations are permitted");
+    if query_feasible && handle_feasible {
+        spinner.complete(true, "All operations are allowed");
     } else {
-        spinner.complete(
-            false,
-            "Some operations may be restricted, check system settings",
-        );
+        spinner.complete(false, "Some operations may be restricted, please check system settings");
     }
 
     Ok(())
@@ -347,7 +341,7 @@ async fn query_and_display_items(
             spinner.complete(true, &format!("Successfully retrieved {} list", type_name));
 
             println!(
-                "\n{}{}{} List ({} items):{}",
+                "\n{}{}{} ({} items):{}",
                 YELLOW,
                 BOLD,
                 type_name,
@@ -380,13 +374,13 @@ async fn empty_items(manager: &QuickAccessManager, qa_type: QuickAccess) -> Winc
         QuickAccess::All => "All Quick Access Items",
     };
 
-    print!("{}Confirm clearing {}? (y/n): {}", YELLOW, type_name, RESET);
+    print!("{}Confirm to clear {}? (y/n): {}", YELLOW, type_name, RESET);
     io::stdout().flush().unwrap();
 
     let confirm = read_input().to_lowercase();
 
     if confirm != "y" && confirm != "yes" {
-        println!("{}Operation canceled{}", YELLOW, RESET);
+        println!("{}Operation cancelled{}", YELLOW, RESET);
         return Ok(());
     }
 
@@ -572,7 +566,7 @@ async fn main() -> Result<(), WincentError> {
                     sleep(Duration::from_millis(200)).await;
                 }
 
-                spinner.complete(true, "Thank you for using Windows Quick Access Manager");
+                spinner.complete(true, "Thanks for using Windows Quick Access Manager");
                 break;
             }
             _ => {

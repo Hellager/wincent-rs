@@ -1,19 +1,12 @@
 use std::{thread, time::Duration};
 use tempfile::Builder;
 use wincent::{
-    feasible::{check_script_feasible, fix_script_feasible},
     handle::{add_to_frequent_folders, remove_from_frequent_folders},
     query::is_in_frequent_folders,
     WincentResult,
 };
 
 fn main() -> WincentResult<()> {
-    // Check and ensure script execution feasibility
-    if !check_script_feasible()? {
-        println!("Fixing script execution policy...");
-        fix_script_feasible()?;
-    }
-
     // Create temporary folder
     let temp_dir = Builder::new().prefix("wincent-test-").tempdir()?;
     let dir_path = temp_dir.path().to_str().unwrap();
