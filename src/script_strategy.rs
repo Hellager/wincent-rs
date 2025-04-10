@@ -10,6 +10,7 @@ pub(crate) enum PSScript {
     QueryQuickAccess,
     QueryRecentFile,
     QueryFrequentFolder,
+    AddRecentFile,
     RemoveRecentFile,
     PinToFrequentFolder,
     UnpinFromFrequentFolder,
@@ -111,6 +112,26 @@ impl ScriptStrategy for QueryQuickAccessStrategy {
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
             ShellNamespaces::QUICK_ACCESS
+        ))
+    }
+}
+
+/// Strategy for adding recent files
+/// Placeholder for now, not implemented
+pub(crate) struct AddRecentFileStrategy;
+
+impl ScriptStrategy for AddRecentFileStrategy {
+    fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
+        let path = parameter.ok_or(WincentError::MissingParemeter)?;
+        Ok(format!(
+            r#"
+    {}
+    {}
+    Write-Output '{}'
+"#,
+            BaseScriptStrategy::utf8_header(),
+            BaseScriptStrategy::shell_com_object(),
+            path
         ))
     }
 }
@@ -331,6 +352,10 @@ impl ScriptStrategyFactory {
                 Box::new(QueryFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
             );
             map.insert(
+                PSScript::AddRecentFile,
+                Box::new(AddRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
+            );
+            map.insert(
                 PSScript::RemoveRecentFile,
                 Box::new(RemoveRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
             );
@@ -366,6 +391,7 @@ impl ScriptStrategyFactory {
                     PSScript::QueryQuickAccess => Box::new(QueryQuickAccessStrategy),
                     PSScript::QueryRecentFile => Box::new(QueryRecentFileStrategy),
                     PSScript::QueryFrequentFolder => Box::new(QueryFrequentFolderStrategy),
+                    PSScript::AddRecentFile => Box::new(AddRecentFileStrategy),
                     PSScript::RemoveRecentFile => Box::new(RemoveRecentFileStrategy),
                     PSScript::PinToFrequentFolder => Box::new(PinToFrequentFolderStrategy),
                     PSScript::UnpinFromFrequentFolder => Box::new(UnpinFromFrequentFolderStrategy),
