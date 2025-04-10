@@ -37,19 +37,16 @@
 //! ```
 
 use crate::{
-    error::WincentError, feasible::check_script_feasible,
-    handle::unpin_frequent_folder_with_ps_script, query::query_recent_with_ps_script, QuickAccess,
+    error::WincentError,
+    utils::get_windows_recent_folder,
+    script_executor::ScriptExecutor,
+    script_strategy::PSScript,
     WincentResult,
 };
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
-use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Com::CoInitializeEx;
-use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 use windows::Win32::UI::Shell::SHAddToRecentDocs;
-use windows::Win32::UI::Shell::{FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
 
 /// Clears the Windows Recent Files list using the Windows Shell API.
 pub(crate) fn empty_recent_files_with_api() -> WincentResult<()> {
@@ -70,21 +67,7 @@ pub(crate) fn empty_recent_files_with_api() -> WincentResult<()> {
 
 /// Clears normal folders from Quick Access by removing the Windows jump list file.
 pub(crate) fn empty_normal_folders_with_jumplist_file() -> WincentResult<()> {
-    let result = unsafe {
-        SHGetKnownFolderPath(
-            &FOLDERID_Recent,
-            KNOWN_FOLDER_FLAG(0x00),
-            HANDLE(std::ptr::null_mut()),
-        )
-    }?;
-
-    let recent_folder = unsafe {
-        let wide_str = OsString::from_wide(result.as_wide());
-        CoTaskMemFree(Some(result.as_ptr() as _));
-        wide_str
-            .into_string()
-            .map_err(|_| WincentError::SystemError("Invalid UTF-16".to_string()))?
-    };
+    let recent_folder = get_windows_recent_folder()?;
 
     let jumplist_file = std::path::Path::new(&recent_folder)
         .join("AutomaticDestinations")
@@ -99,11 +82,8 @@ pub(crate) fn empty_normal_folders_with_jumplist_file() -> WincentResult<()> {
 
 /// Removes all pinned folders from Quick Access using PowerShell commands.
 pub(crate) fn empty_pinned_folders_with_script() -> WincentResult<()> {
-    let folders = query_recent_with_ps_script(QuickAccess::FrequentFolders)?;
-
-    for folder in folders {
-        unpin_frequent_folder_with_ps_script(&folder)?;
-    }
+    let output = ScriptExecutor::execute_ps_script(PSScript::EmptyPinnedFolders, None)?;
+    let _ = ScriptExecutor::parse_output_to_strings(output)?;
 
     Ok(())
 }
@@ -127,12 +107,6 @@ pub(crate) fn empty_pinned_folders_with_script() -> WincentResult<()> {
 /// }
 /// ```
 pub fn empty_recent_files() -> WincentResult<()> {
-    if !check_script_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string(),
-        ));
-    }
-
     empty_recent_files_with_api()
 }
 
@@ -155,12 +129,6 @@ pub fn empty_recent_files() -> WincentResult<()> {
 /// }
 /// ```
 pub fn empty_frequent_folders() -> WincentResult<()> {
-    if !check_script_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string(),
-        ));
-    }
-
     empty_normal_folders_with_jumplist_file()?;
     empty_pinned_folders_with_script()?;
     Ok(())
@@ -200,7 +168,8 @@ mod tests {
 
     fn wait_for_files_empty(max_retries: u32) -> WincentResult<bool> {
         for _ in 0..max_retries {
-            let recent_files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
+            let output = ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?;
+            let recent_files = ScriptExecutor::parse_output_to_strings(output)?;
             if recent_files.is_empty() {
                 return Ok(true);
             }
@@ -211,7 +180,8 @@ mod tests {
 
     fn wait_for_folders_empty(max_retries: u32) -> WincentResult<bool> {
         for _ in 0..max_retries {
-            let folders = query_recent_with_ps_script(QuickAccess::FrequentFolders)?;
+            let output = ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?;
+            let folders = ScriptExecutor::parse_output_to_strings(output)?;
             if folders.is_empty() {
                 return Ok(true);
             }
@@ -229,7 +199,8 @@ mod tests {
         add_file_to_recent_with_api(test_file.to_str().unwrap())?;
         thread::sleep(Duration::from_secs(1));
 
-        let recent_files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
+        let output = ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?;
+        let recent_files = ScriptExecutor::parse_output_to_strings(output)?;
         assert!(
             !recent_files.is_empty(),
             "File should have been added to recent list"
@@ -251,9 +222,10 @@ mod tests {
         empty_normal_folders_with_jumplist_file()?;
         thread::sleep(Duration::from_secs(1));
 
-        let recent_files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
+        let output = ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?;
+        let folders = ScriptExecutor::parse_output_to_strings(output)?;
         assert!(
-            recent_files.is_empty(),
+            folders.is_empty(),
             "No recent files should exist after jump list cleanup"
         );
 
@@ -268,7 +240,8 @@ mod tests {
         pin_frequent_folder_with_ps_script(test_dir.to_str().unwrap())?;
         thread::sleep(Duration::from_secs(1));
 
-        let folders = query_recent_with_ps_script(QuickAccess::FrequentFolders)?;
+        let output = ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?;
+        let folders = ScriptExecutor::parse_output_to_strings(output)?;
         assert!(!folders.is_empty(), "Should have pinned folders");
 
         empty_pinned_folders_with_script()?;
