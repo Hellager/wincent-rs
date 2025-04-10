@@ -84,15 +84,12 @@ pub mod error;
 pub mod feasible;
 pub mod handle;
 pub mod query;
-mod scripts;
-mod test_utils;
-mod utils;
-mod visible;
-
 pub mod manager;
 mod script_executor;
 mod script_storage;
 mod script_strategy;
+mod test_utils;
+mod utils;
 
 #[allow(unused)]
 pub mod predule {
@@ -103,7 +100,7 @@ pub mod predule {
 
 use crate::error::WincentError;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum QuickAccess {
     FrequentFolders,
     RecentFiles,
