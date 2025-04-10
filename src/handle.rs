@@ -130,61 +130,27 @@
 
 use crate::{
     error::WincentError,
-    feasible::{check_pinunpin_feasible, check_script_feasible},
-    scripts::{execute_ps_script, Script},
+    script_executor::ScriptExecutor,
+    script_strategy::PSScript,
+    utils::{validate_path, PathType},
     WincentResult,
 };
 use std::ffi::OsString;
 use std::os::windows::prelude::*;
-use std::path::Path;
 use windows::Win32::System::Com::CoInitializeEx;
 use windows::Win32::System::Com::CoUninitialize;
 use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 use windows::Win32::UI::Shell::SHAddToRecentDocs;
 
-#[derive(Debug, Copy, Clone)]
-pub(crate) enum PathType {
-    File,
-    Directory,
-}
-
-/// Validates if a given path exists and matches the expected type (file or directory).
-pub(crate) fn validate_path(path: &str, expected_type: PathType) -> WincentResult<()> {
-    let path_buf = Path::new(path);
-
-    if path.is_empty() {
-        return Err(WincentError::InvalidPath("Empty path provided".to_string()));
-    }
-
-    if !path_buf.exists() {
-        return Err(WincentError::InvalidPath(format!(
-            "Path does not exist: {}",
-            path
-        )));
-    }
-
-    match expected_type {
-        PathType::File if !path_buf.is_file() => Err(WincentError::InvalidPath(format!(
-            "Not a valid file: {}",
-            path
-        ))),
-        PathType::Directory if !path_buf.is_dir() => Err(WincentError::InvalidPath(format!(
-            "Not a valid directory: {}",
-            path
-        ))),
-        _ => Ok(()),
-    }
-}
-
 /// Executes a PowerShell script after validating the given path.
 pub(crate) fn execute_script_with_validation(
-    script: Script,
+    script: PSScript,
     path: &str,
     path_type: PathType,
 ) -> WincentResult<()> {
     validate_path(path, path_type)?;
 
-    let output = execute_ps_script(script, Some(path))?;
+    let output = ScriptExecutor::execute_ps_script(script, Some(path))?;
 
     match output.status.success() {
         true => Ok(()),
@@ -222,17 +188,17 @@ pub(crate) fn add_file_to_recent_with_api(path: &str) -> WincentResult<()> {
 
 /// Removes a file from the Windows Recent Items list using PowerShell.
 pub(crate) fn remove_recent_files_with_ps_script(path: &str) -> WincentResult<()> {
-    execute_script_with_validation(Script::RemoveRecentFile, path, PathType::File)
+    execute_script_with_validation(PSScript::RemoveRecentFile, path, PathType::File)
 }
 
 /// Pins a folder to the Windows Quick Access Frequent Folders list.
 pub(crate) fn pin_frequent_folder_with_ps_script(path: &str) -> WincentResult<()> {
-    execute_script_with_validation(Script::PinToFrequentFolder, path, PathType::Directory)
+    execute_script_with_validation(PSScript::PinToFrequentFolder, path, PathType::Directory)
 }
 
 /// Unpins a folder from the Windows Quick Access Frequent Folders list.
 pub(crate) fn unpin_frequent_folder_with_ps_script(path: &str) -> WincentResult<()> {
-    execute_script_with_validation(Script::UnpinFromFrequentFolder, path, PathType::Directory)
+    execute_script_with_validation(PSScript::UnpinFromFrequentFolder, path, PathType::Directory)
 }
 
 /****************************************************** Handle Quick Access ******************************************************/
@@ -254,13 +220,6 @@ pub(crate) fn unpin_frequent_folder_with_ps_script(path: &str) -> WincentResult<
 /// }
 /// ```
 pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
-    if !std::path::Path::new(path).is_file() {
-        return Err(WincentError::InvalidPath(format!(
-            "Not a valid file: {}",
-            path
-        )));
-    }
-
     add_file_to_recent_with_api(path)
 }
 
@@ -281,19 +240,6 @@ pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
 /// }
 /// ```
 pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
-    if !std::path::Path::new(path).is_file() {
-        return Err(WincentError::InvalidPath(format!(
-            "Not a valid file: {}",
-            path
-        )));
-    }
-
-    if !check_script_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "PowerShell script execution is not feasible".to_string(),
-        ));
-    }
-
     remove_recent_files_with_ps_script(path)
 }
 
@@ -319,20 +265,6 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// }   
 /// ```
 pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
-    if !std::path::Path::new(path).is_dir() {
-        return Err(WincentError::InvalidPath(format!(
-            "Not a valid directory: {}",
-            path
-        )));
-    }
-
-    if !check_script_feasible()? || !check_pinunpin_feasible()? {
-        return Err(WincentError::InvalidPath(format!(
-            "Not a valid directory: {}",
-            path
-        )));
-    }
-
     pin_frequent_folder_with_ps_script(path)
 }
 
@@ -358,19 +290,6 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 /// }
 /// ```
 pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
-    if !std::path::Path::new(path).is_dir() {
-        return Err(WincentError::InvalidPath(format!(
-            "Not a valid directory: {}",
-            path
-        )));
-    }
-
-    if !check_script_feasible()? || !check_pinunpin_feasible()? {
-        return Err(WincentError::UnsupportedOperation(
-            "Unpin operation is not feasible".to_string(),
-        ));
-    }
-
     unpin_frequent_folder_with_ps_script(path)
 }
 
