@@ -217,7 +217,10 @@ async fn add_file_to_recent(manager: &QuickAccessManager) -> WincentResult<()> {
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager.add_item(&path, QuickAccess::RecentFiles, false).await {
+    match manager
+        .add_item(&path, QuickAccess::RecentFiles, false)
+        .await
+    {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully added file: {}", path));
             Ok(())
@@ -250,7 +253,10 @@ async fn pin_folder_to_frequent(manager: &QuickAccessManager) -> WincentResult<(
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager.add_item(&path, QuickAccess::FrequentFolders, false).await {
+    match manager
+        .add_item(&path, QuickAccess::FrequentFolders, false)
+        .await
+    {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully pinned folder: {}", path));
             Ok(())

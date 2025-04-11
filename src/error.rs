@@ -67,7 +67,7 @@ pub enum WincentError {
 
     #[error("Item already exists in Quick Access: {0}")]
     AlreadyExists(String),
-    
+
     #[error("Item not found in Quick Access: {0}")]
     NotInRecent(String),
 }

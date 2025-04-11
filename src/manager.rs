@@ -215,7 +215,12 @@ impl QuickAccessManager {
     ///
     /// * `path` - Path to add
     /// * `qa_type` - Target Quick Access category
-    pub async fn add_item(&self, path: &str, qa_type: QuickAccess, force_update: bool) -> WincentResult<()> {
+    pub async fn add_item(
+        &self,
+        path: &str,
+        qa_type: QuickAccess,
+        force_update: bool,
+    ) -> WincentResult<()> {
         if self.check_item(path, qa_type.clone()).await? {
             return Err(WincentError::AlreadyExists(path.to_string()));
         }
@@ -237,8 +242,14 @@ impl QuickAccessManager {
             _ => unreachable!(),
         };
 
-        self.handle_operation(Operation::Add(script), path, qa_type, path_type, force_update)
-            .await
+        self.handle_operation(
+            Operation::Add(script),
+            path,
+            qa_type,
+            path_type,
+            force_update,
+        )
+        .await
     }
 
     /// Removes item from Quick Access
@@ -296,7 +307,9 @@ impl QuickAccessManager {
         }
         self.executor.clear_cache();
         if force_update {
-            self.executor.execute(PSScript::RefreshExplorer, None).await?;
+            self.executor
+                .execute(PSScript::RefreshExplorer, None)
+                .await?;
         }
         Ok(())
     }
@@ -411,7 +424,9 @@ mod tests {
 
         {
             let _ = manager.feasibility.get();
-            manager.empty_items(QuickAccess::FrequentFolders, false).await?;
+            manager
+                .empty_items(QuickAccess::FrequentFolders, false)
+                .await?;
         }
 
         Ok(())
