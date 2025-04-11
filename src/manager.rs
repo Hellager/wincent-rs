@@ -278,7 +278,7 @@ impl QuickAccessManager {
     /// # Arguments
     ///
     /// * `qa_type` - Target Quick Access category to clear
-    pub async fn empty_items(&self, qa_type: QuickAccess) -> WincentResult<()> {
+    pub async fn empty_items(&self, qa_type: QuickAccess, force_update: bool) -> WincentResult<()> {
         match qa_type {
             QuickAccess::RecentFiles => {
                 empty_recent_files_with_api()?;
@@ -290,11 +290,14 @@ impl QuickAccessManager {
                     .await?;
             }
             QuickAccess::All => {
-                Box::pin(self.empty_items(QuickAccess::RecentFiles)).await?;
-                Box::pin(self.empty_items(QuickAccess::FrequentFolders)).await?;
+                Box::pin(self.empty_items(QuickAccess::RecentFiles, force_update)).await?;
+                Box::pin(self.empty_items(QuickAccess::FrequentFolders, force_update)).await?;
             }
         }
         self.executor.clear_cache();
+        if force_update {
+            self.executor.execute(PSScript::RefreshExplorer, None).await?;
+        }
         Ok(())
     }
 
@@ -403,12 +406,12 @@ mod tests {
                 handle: true,
                 query: true,
             });
-            manager.empty_items(QuickAccess::RecentFiles).await?;
+            manager.empty_items(QuickAccess::RecentFiles, false).await?;
         }
 
         {
             let _ = manager.feasibility.get();
-            manager.empty_items(QuickAccess::FrequentFolders).await?;
+            manager.empty_items(QuickAccess::FrequentFolders, false).await?;
         }
 
         Ok(())
