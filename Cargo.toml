@@ -15,12 +15,8 @@ A library for handling windows quick access
 
 [dependencies]
 md5 = "0.7.0"
-sysinfo = "0.32.0"
-tempfile = "3.14.0"
-test-log = "0.2.16"
 thiserror = "2.0.9"
 tokio = { version = "1.44.1", features = ["rt-multi-thread", "time", "macros", "sync"] }
-winreg = "0.52.0"
 
 [dependencies.windows]
 version = "0.58.0"
@@ -39,6 +35,7 @@ features = [
 test-log = "0.2.16"
 serial_test = "3.2.0"
 filetime = "0.2"
+tempfile = "3.14.0"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-gnu"
