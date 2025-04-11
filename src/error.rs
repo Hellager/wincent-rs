@@ -64,6 +64,12 @@ pub enum WincentError {
 
     #[error("Operation timed out: {0}")]
     Timeout(String),
+
+    #[error("Item already exists in Quick Access: {0}")]
+    AlreadyExists(String),
+    
+    #[error("Item not found in Quick Access: {0}")]
+    NotInRecent(String),
 }
 
 impl From<windows::core::Error> for WincentError {

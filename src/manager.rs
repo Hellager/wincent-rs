@@ -211,6 +211,10 @@ impl QuickAccessManager {
     /// * `path` - Path to add
     /// * `qa_type` - Target Quick Access category
     pub async fn add_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+        if self.check_item(path, qa_type.clone()).await? {
+            return Err(WincentError::AlreadyExists(path.to_string()));
+        }
+
         let script = match qa_type {
             QuickAccess::RecentFiles => PSScript::AddRecentFile,
             QuickAccess::FrequentFolders => PSScript::PinToFrequentFolder,
@@ -239,6 +243,10 @@ impl QuickAccessManager {
     /// * `path` - Path to remove
     /// * `qa_type` - Target Quick Access category
     pub async fn remove_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+        if !self.check_item(path, qa_type.clone()).await? {
+            return Err(WincentError::NotInRecent(path.to_string()));
+        }
+        
         let script = match qa_type {
             QuickAccess::RecentFiles => PSScript::RemoveRecentFile,
             QuickAccess::FrequentFolders => PSScript::UnpinFromFrequentFolder,
