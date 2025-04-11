@@ -98,7 +98,7 @@ pub fn empty_recent_files() -> WincentResult<()> {
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Clear all frequent folders
-///     empty_frequent_folders()?;
+///     empty_frequent_folders(false)?;
 ///     println!("Frequent folders list has been cleared");
 ///     Ok(())
 /// }
@@ -106,7 +106,7 @@ pub fn empty_recent_files() -> WincentResult<()> {
 pub fn empty_frequent_folders(also_system_default: bool) -> WincentResult<()> {
     empty_user_folders_with_jumplist_file()?;
     if also_system_default {
-        empty_system_default_folders_with_script()?;        
+        empty_system_default_folders_with_script()?;
     }
     Ok(())
 }
@@ -124,7 +124,7 @@ pub fn empty_frequent_folders(also_system_default: bool) -> WincentResult<()> {
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Clear all Quick Access items
-///     empty_quick_access()?;
+///     empty_quick_access(false)?;
 ///     println!("Quick Access has been completely cleared");
 ///     Ok(())
 /// }
