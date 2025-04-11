@@ -14,7 +14,7 @@ use crate::{
     empty::{empty_normal_folders_with_jumplist_file, empty_recent_files_with_api},
     error::WincentError,
     handle::add_file_to_recent_with_api,
-    script_executor::CachedScriptExecutor,
+    script_executor::{CachedScriptExecutor, QuickAccessDataFiles},
     script_strategy::PSScript,
     utils::{validate_path, PathType},
     QuickAccess, WincentResult,
@@ -130,6 +130,7 @@ impl QuickAccessManager {
         path: &str,
         qa_type: QuickAccess,
         path_type: PathType,
+        force_update: bool,
     ) -> WincentResult<()> {
         validate_path(path, path_type)?;
 
@@ -142,6 +143,10 @@ impl QuickAccessManager {
             QuickAccess::RecentFiles => {
                 if matches!(operation, Operation::Add(_)) {
                     add_file_to_recent_with_api(path)?;
+                    if force_update {
+                        let data_files = QuickAccessDataFiles::new()?;
+                        data_files.remove_recent_file()?;
+                    }
                     Vec::new()
                 } else {
                     self.executor
@@ -210,7 +215,7 @@ impl QuickAccessManager {
     ///
     /// * `path` - Path to add
     /// * `qa_type` - Target Quick Access category
-    pub async fn add_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+    pub async fn add_item(&self, path: &str, qa_type: QuickAccess, force_update: bool) -> WincentResult<()> {
         if self.check_item(path, qa_type.clone()).await? {
             return Err(WincentError::AlreadyExists(path.to_string()));
         }
@@ -232,7 +237,7 @@ impl QuickAccessManager {
             _ => unreachable!(),
         };
 
-        self.handle_operation(Operation::Add(script), path, qa_type, path_type)
+        self.handle_operation(Operation::Add(script), path, qa_type, path_type, force_update)
             .await
     }
 
@@ -246,7 +251,7 @@ impl QuickAccessManager {
         if !self.check_item(path, qa_type.clone()).await? {
             return Err(WincentError::NotInRecent(path.to_string()));
         }
-        
+
         let script = match qa_type {
             QuickAccess::RecentFiles => PSScript::RemoveRecentFile,
             QuickAccess::FrequentFolders => PSScript::UnpinFromFrequentFolder,
@@ -264,7 +269,7 @@ impl QuickAccessManager {
             _ => unreachable!(),
         };
 
-        self.handle_operation(Operation::Remove(script), path, qa_type, path_type)
+        self.handle_operation(Operation::Remove(script), path, qa_type, path_type, false)
             .await
     }
 
@@ -368,7 +373,7 @@ mod tests {
                 query: true,
             });
             manager
-                .add_item(file_path, QuickAccess::RecentFiles)
+                .add_item(file_path, QuickAccess::RecentFiles, false)
                 .await?;
             manager
                 .remove_item(file_path, QuickAccess::RecentFiles)
@@ -378,7 +383,7 @@ mod tests {
         {
             let _ = manager.feasibility.get();
             manager
-                .add_item(file_path, QuickAccess::RecentFiles)
+                .add_item(file_path, QuickAccess::RecentFiles, false)
                 .await?;
             manager
                 .remove_item(file_path, QuickAccess::RecentFiles)

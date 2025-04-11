@@ -109,14 +109,14 @@ struct CacheEntry {
 }
 
 /// Windows Quick Access data file information
-struct QuickAccessDataFiles {
+pub(crate) struct QuickAccessDataFiles {
     recent_files_path: PathBuf,
     frequent_folders_path: PathBuf,
 }
 
 impl QuickAccessDataFiles {
     /// Retrieves Quick Access data file paths
-    fn new() -> WincentResult<Self> {
+    pub fn new() -> WincentResult<Self> {
         let recent_folder = get_windows_recent_folder()?;
         let automatic_dest_dir = Path::new(&recent_folder).join("AutomaticDestinations");
 
@@ -129,6 +129,20 @@ impl QuickAccessDataFiles {
             recent_files_path,
             frequent_folders_path,
         })
+    }
+
+    /// Unified file removal logic with proper error handling
+    fn remove_file(&self, path: &Path) -> WincentResult<()> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(WincentError::Io(e)),
+        }
+    }
+
+    /// Remove recent files data file (ignores if file doesn't exist)
+    pub fn remove_recent_file(&self) -> WincentResult<()> {
+        self.remove_file(&self.recent_files_path)
     }
 
     /// Retrieves modification time for recent files data
