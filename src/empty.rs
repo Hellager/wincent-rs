@@ -40,8 +40,8 @@ pub(crate) fn empty_recent_files_with_api() -> WincentResult<()> {
     Ok(())
 }
 
-/// Clears normal folders from Quick Access by removing the Windows jump list file.
-pub(crate) fn empty_normal_folders_with_jumplist_file() -> WincentResult<()> {
+/// Clears user folders from Quick Access by removing the Windows jump list file.
+pub(crate) fn empty_user_folders_with_jumplist_file() -> WincentResult<()> {
     let recent_folder = get_windows_recent_folder()?;
 
     let jumplist_file = std::path::Path::new(&recent_folder)
@@ -55,8 +55,8 @@ pub(crate) fn empty_normal_folders_with_jumplist_file() -> WincentResult<()> {
     Ok(())
 }
 
-/// Removes all pinned folders from Quick Access using PowerShell commands.
-pub(crate) fn empty_pinned_folders_with_script() -> WincentResult<()> {
+/// Clear system default folders from Quick Access using PowerShell commands.
+pub(crate) fn empty_system_default_folders_with_script() -> WincentResult<()> {
     let output = ScriptExecutor::execute_ps_script(PSScript::EmptyPinnedFolders, None)?;
     let _ = ScriptExecutor::parse_output_to_strings(output)?;
 
@@ -103,9 +103,11 @@ pub fn empty_recent_files() -> WincentResult<()> {
 ///     Ok(())
 /// }
 /// ```
-pub fn empty_frequent_folders() -> WincentResult<()> {
-    empty_normal_folders_with_jumplist_file()?;
-    empty_pinned_folders_with_script()?;
+pub fn empty_frequent_folders(also_system_default: bool) -> WincentResult<()> {
+    empty_user_folders_with_jumplist_file()?;
+    if also_system_default {
+        empty_system_default_folders_with_script()?;        
+    }
     Ok(())
 }
 
@@ -127,9 +129,9 @@ pub fn empty_frequent_folders() -> WincentResult<()> {
 ///     Ok(())
 /// }
 /// ```
-pub fn empty_quick_access() -> WincentResult<()> {
+pub fn empty_quick_access(also_system_default: bool) -> WincentResult<()> {
     empty_recent_files()?;
-    empty_frequent_folders()?;
+    empty_frequent_folders(also_system_default)?;
     Ok(())
 }
 
@@ -193,8 +195,8 @@ mod tests {
 
     #[test]
     #[ignore = "Modifies system state"]
-    fn test_empty_normal_folders() -> WincentResult<()> {
-        empty_normal_folders_with_jumplist_file()?;
+    fn test_empty_user_folders() -> WincentResult<()> {
+        empty_user_folders_with_jumplist_file()?;
         thread::sleep(Duration::from_secs(1));
 
         let output = ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?;
@@ -219,7 +221,7 @@ mod tests {
         let folders = ScriptExecutor::parse_output_to_strings(output)?;
         assert!(!folders.is_empty(), "Should have pinned folders");
 
-        empty_pinned_folders_with_script()?;
+        empty_system_default_folders_with_script()?;
         assert!(
             wait_for_folders_empty(5)?,
             "Pinned folders list should be empty"

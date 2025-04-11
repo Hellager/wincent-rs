@@ -11,12 +11,12 @@ fn main() -> WincentResult<()> {
 
     // Example 2: Clear frequent folders (both pinned and normal)
     println!("\nClearing frequent folders...");
-    empty_frequent_folders()?;
+    empty_frequent_folders(false)?;
     println!("Frequent folders cleared successfully");
 
     // Example 3: Clear everything in Quick Access
     println!("\nClearing entire Quick Access...");
-    empty_quick_access()?;
+    empty_quick_access(false)?;
     println!("Quick Access cleared successfully");
 
     // Example 4: Selective clearing with error handling

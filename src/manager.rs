@@ -11,7 +11,7 @@
 //! - Cached PowerShell script execution
 
 use crate::{
-    empty::{empty_normal_folders_with_jumplist_file, empty_recent_files_with_api},
+    empty::{empty_frequent_folders, empty_recent_files_with_api},
     error::WincentError,
     handle::add_file_to_recent_with_api,
     script_executor::{CachedScriptExecutor, QuickAccessDataFiles},
@@ -289,20 +289,20 @@ impl QuickAccessManager {
     /// # Arguments
     ///
     /// * `qa_type` - Target Quick Access category to clear
-    pub async fn empty_items(&self, qa_type: QuickAccess, force_update: bool) -> WincentResult<()> {
+    pub async fn empty_items(&self, qa_type: QuickAccess, force_update: bool, also_system_default: bool) -> WincentResult<()> {
         match qa_type {
             QuickAccess::RecentFiles => {
                 empty_recent_files_with_api()?;
             }
             QuickAccess::FrequentFolders => {
-                empty_normal_folders_with_jumplist_file()?;
+                empty_frequent_folders(also_system_default)?;
                 self.executor
                     .execute_with_timeout(PSScript::EmptyPinnedFolders, None, 10)
                     .await?;
             }
             QuickAccess::All => {
-                Box::pin(self.empty_items(QuickAccess::RecentFiles, force_update)).await?;
-                Box::pin(self.empty_items(QuickAccess::FrequentFolders, force_update)).await?;
+                Box::pin(self.empty_items(QuickAccess::RecentFiles, force_update, also_system_default)).await?;
+                Box::pin(self.empty_items(QuickAccess::FrequentFolders, force_update, also_system_default)).await?;
             }
         }
         self.executor.clear_cache();
@@ -419,13 +419,13 @@ mod tests {
                 handle: true,
                 query: true,
             });
-            manager.empty_items(QuickAccess::RecentFiles, false).await?;
+            manager.empty_items(QuickAccess::RecentFiles, false, false).await?;
         }
 
         {
             let _ = manager.feasibility.get();
             manager
-                .empty_items(QuickAccess::FrequentFolders, false)
+                .empty_items(QuickAccess::FrequentFolders, false, false)
                 .await?;
         }
 

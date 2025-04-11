@@ -400,7 +400,7 @@ async fn empty_items(manager: &QuickAccessManager, qa_type: QuickAccess) -> Winc
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager.empty_items(qa_type, false).await {
+    match manager.empty_items(qa_type, false, false).await {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully cleared {}", type_name));
             Ok(())

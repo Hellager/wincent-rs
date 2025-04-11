@@ -217,19 +217,10 @@ impl ScriptStrategy for EmptyPinnedFoldersStrategy {
             r#"
     {}
     {}
-    $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
-    if ($isWin11)
-    {{
-        $shell.Namespace('{}').Items() | ForEach-Object {{ $_.InvokeVerb('pintohome') }};
-    }}
-    else
-    {{
-        $shell.Namespace('{}').Items() | ForEach-Object {{ $_.InvokeVerb('unpinfromhome') }};
-    }}
+    $shell.Namespace('{}').Items() | ForEach-Object {{ $_.InvokeVerb('unpinfromhome') }};
 "#,
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
-            ShellNamespaces::FREQUENT_FOLDERS,
             ShellNamespaces::FREQUENT_FOLDERS,
         ))
     }
