@@ -1,6 +1,6 @@
 //! # wincent
 //!
-//! `wincent` is a Rust library for managing Windows Quick Access items, providing a safe and 
+//! `wincent` is a Rust library for managing Windows Quick Access items, providing a safe and
 //! efficient interface to interact with Windows Quick Access functionality.
 //!
 //! ## Key Features
