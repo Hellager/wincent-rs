@@ -89,8 +89,17 @@ enum Operation {
 impl QuickAccessManager {
     /// Initializes new Quick Access manager with default configuration
     ///
-    /// # Errors
-    /// Returns `WincentError` if script executor initialization fails
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn new() -> WincentResult<Self> {
         Ok(Self {
             executor: Arc::new(CachedScriptExecutor::new()),
@@ -101,12 +110,31 @@ impl QuickAccessManager {
 
     /// Checks system capability for Quick Access operations
     ///
-    /// In most case, no need to check feasibility
+    /// In most case, this is not needed
+    ///
+    /// # Arguments
+    ///
+    /// None
     ///
     /// # Returns
+    ///
     /// Tuple (query_feasible, handle_feasible) indicating:
-    /// - Ability to query Quick Access items
-    /// - Ability to modify Quick Access items
+    /// - query_feasible: Ability to query Quick Access items
+    /// - handle_feasible: Ability to modify Quick Access items
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     let (can_query, can_modify) = manager.check_feasible().await;
+    ///     println!("Can query: {}, Can modify: {}", can_query, can_modify);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn check_feasible(&self) -> (bool, bool) {
         let status = self
             .feasibility
@@ -143,6 +171,9 @@ impl QuickAccessManager {
             QuickAccess::RecentFiles => {
                 if matches!(operation, Operation::Add(_)) {
                     add_file_to_recent_with_api(path)?;
+                    // Add recent file may not show in the explorer recent files list
+                    // But it did will show in windows recent folder
+                    // So if we did need it show, we need force update the list
                     if force_update {
                         let data_files = QuickAccessDataFiles::new()?;
                         data_files.remove_recent_file()?;
@@ -182,11 +213,30 @@ impl QuickAccessManager {
     ///
     /// # Arguments
     ///
-    /// * `qa_type` - Target Quick Access category
+    /// * `qa_type` - Target Quick Access category (Recent Files, Frequent Folders, or All)
     ///
     /// # Returns
     ///
-    /// List of path strings
+    /// List of path strings representing items in the specified category
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     
+    ///     // Get all Quick Access items
+    ///     let all_items = manager.get_items(QuickAccess::All).await?;
+    ///     
+    ///     // Get only recent files
+    ///     let recent_files = manager.get_items(QuickAccess::RecentFiles).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
         let script_type = self.map_to_script_type(qa_type)?;
         self.executor
@@ -199,22 +249,63 @@ impl QuickAccessManager {
     /// # Arguments
     ///
     /// * `path` - Target path to check
-    /// * `qa_type` - Quick Access category to search
+    /// * `qa_type` - Quick Access category to search (Recent Files, Frequent Folders, or All)
     ///
     /// # Returns
     ///
-    /// `true` if item exists, `false` otherwise
+    /// `true` if item exists in the specified category, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     
+    ///     let exists = manager.check_item(
+    ///         "C:\\path\\to\\file.txt",
+    ///         QuickAccess::RecentFiles
+    ///     ).await?;
+    ///     
+    ///     println!("File exists in Recent Files: {}", exists);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn check_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<bool> {
         let items = self.get_items(qa_type).await?;
         Ok(items.iter().any(|item| item == path))
     }
 
-    /// Adds item to Quick Access
+    /// Adds an item to Quick Access
     ///
     /// # Arguments
     ///
-    /// * `path` - Path to add
-    /// * `qa_type` - Target Quick Access category
+    /// * `path` - Path to add to Quick Access
+    /// * `qa_type` - Target Quick Access category (Recent Files or Frequent Folders)
+    /// * `force_update` - Whether to force update Explorer display
+    ///     - For Recent Files, setting to true will force update the Explorer display list
+    ///     - For Frequent Folders, this parameter has no effect
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     
+    ///     // Add file to Recent Files
+    ///     manager.add_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles, true).await?;
+    ///     
+    ///     // Add folder to Frequent Folders
+    ///     manager.add_item("C:\\path\\to\\folder", QuickAccess::FrequentFolders, false).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn add_item(
         &self,
         path: &str,
@@ -258,6 +349,25 @@ impl QuickAccessManager {
     ///
     /// * `path` - Path to remove
     /// * `qa_type` - Target Quick Access category
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     
+    ///     // Remove file from Recent Files
+    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles).await?;
+    ///     
+    ///     // Remove folder from Frequent Folders
+    ///     manager.remove_item("C:\\path\\to\\folder", QuickAccess::FrequentFolders).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn remove_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
         if !self.check_item(path, qa_type.clone()).await? {
             return Err(WincentError::NotInRecent(path.to_string()));
@@ -289,10 +399,31 @@ impl QuickAccessManager {
     /// # Arguments
     ///
     /// * `qa_type` - Target Quick Access category to clear
+    /// * `force_refresh` - Whether to force refresh Explorer after clearing
+    /// * `also_system_default` - Whether to also clear system default items
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     
+    ///     // Clear recent files with Explorer refresh
+    ///     manager.empty_items(QuickAccess::RecentFiles, true, false).await?;
+    ///     
+    ///     // Clear all items including system defaults
+    ///     manager.empty_items(QuickAccess::All, true, true).await?;
+    ///     
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn empty_items(
         &self,
         qa_type: QuickAccess,
-        force_update: bool,
+        force_refresh: bool,
         also_system_default: bool,
     ) -> WincentResult<()> {
         match qa_type {
@@ -308,20 +439,20 @@ impl QuickAccessManager {
             QuickAccess::All => {
                 Box::pin(self.empty_items(
                     QuickAccess::RecentFiles,
-                    force_update,
+                    force_refresh,
                     also_system_default,
                 ))
                 .await?;
                 Box::pin(self.empty_items(
                     QuickAccess::FrequentFolders,
-                    force_update,
+                    force_refresh,
                     also_system_default,
                 ))
                 .await?;
             }
         }
         self.executor.clear_cache();
-        if force_update {
+        if force_refresh {
             self.executor
                 .execute(PSScript::RefreshExplorer, None)
                 .await?;
@@ -330,6 +461,19 @@ impl QuickAccessManager {
     }
 
     /// Clears internal cache
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///     manager.clear_cache();
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn clear_cache(&self) {
         self.executor.clear_cache();
     }
