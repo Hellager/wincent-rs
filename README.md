@@ -10,16 +10,26 @@ Read this in other languages: [English](README.md) | [中文](README.cn.md)
 
 ## Overview
 
-Wincent is a rust library for managing Windows quick access functionality, providing comprehensive control over your file system's quick access content.
+Wincent is a Rust library for managing Windows Quick Access functionality, providing comprehensive control over recent files and frequent folders with async support and robust error handling.
 
 ## Features
 
-- 🔍 Query Quick Access Contents
-- ➕ Add Items to Quick Access
-- 🗑️ Remove Specific Quick Access Entries
-- 🧹 Clear Quick Access Items
-- 👁️ Toggle Visibility of Quick Access Items
+- 🔍 Comprehensive Quick Access Management
+  - Query recent files and frequent folders
+  - Add/Remove items with force update options
+  - Clear categories with system default control
+  - Check item existence
 
+- 🛡️ Robust Operation Handling
+  - Operation timeout protection
+  - Cached script execution
+  - Comprehensive error handling
+
+- ⚡ Performance Optimizations
+  - Lazy initialization with OnceCell
+  - Script execution caching
+  - Batch operation support
+  - Force refresh control
 
 ## Installation
 
@@ -27,83 +37,82 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wincent = "0.1.1"
+wincent = "0.1.2"
 ```
-
-## Notes
-
-- The implementation of features is highly dependent on system APIs. Windows may tighten related permissions or calls for security reasons, which may lead to failure.
-- The personal system environment may differ from the testing environment, resulting in the functionality not working properly. The author has observed similar issues, likely due to certain software modifying related registry entries. The specific registry items have not been identified. Before use, you can call related functions to check if they are feasible, mainly concerning folder operations.
-- The visibility section will modify the registry, which may lead to unexpected results. The window layout is likely to be affected, so please use it with caution.
 
 ## Quick Start
 
-### Querying  Quick  Access  Contents
+### Basic Operations
 
 ```rust
-use wincent::{
-    feasible::{check_script_feasible, fix_script_feasible}, 
-    query::get_quick_access_items, 
-    error::WincentError
-};
+use wincent::predule::*;
 
-fn main() -> Result<(), WincentError> {
-    // Check if quick access is feasible
-    if !check_script_feasible()? {
-        println!("Fixing script execution policy...");
-        fix_script_feasible()?;
-    }
-
-    // List all current quick access items
-    let quick_access_items = get_quick_access_items()?;
-    for item in quick_access_items {
-        println!("Quick Access item: {}", item);
-    }
-
+#[tokio::main]
+async fn main() -> WincentResult<()> {
+    // Initialize manager
+    let manager = QuickAccessManager::new().await?;
+    
+    // Add file to Recent Files with force update
+    manager.add_item(
+        "C:\\path\\to\\file.txt",
+        QuickAccess::RecentFiles,
+        true
+    ).await?;
+    
+    // Query all items
+    let items = manager.get_items(QuickAccess::All).await?;
+    println!("Quick Access items: {:?}", items);
+    
     Ok(())
 }
 ```
 
-### Removing  a  Quick  Access  Entry
+### Advanced Usage
 
 ```rust
-use wincent::{
-    query::get_recent_files, 
-    handle::remove_from_recent_files, 
-    error::WincentError
-};
+use wincent::predule::*;
 
-fn main() -> Result<(), WincentError> {
-    // Remove sensitive files from recent items
-    let recent_files = get_recent_files()?;
-    for item in recent_files {
-        if item.contains("password") {
-            remove_from_recent_files(&item)?;
-        }
-    }
-
+#[tokio::main]
+async fn main() -> WincentResult<()> {
+    let manager = QuickAccessManager::new().await?;
+    
+    // Clear recent files with force refresh
+    manager.empty_items(
+        QuickAccess::RecentFiles,
+        true,  // force refresh
+        false  // preserve system defaults
+    ).await?;
+    
     Ok(())
 }
 ```
 
-### Toggling  Visibility
+## Best Practices
 
-```rust
-use wincent::{
-    visible::{is_recent_files_visiable, set_recent_files_visiable}, 
-    error::WincentError
-};
+- Use `force_update` when adding recent files for immediate visibility
+- Check operation feasibility only when necessary
+- Clear cache after bulk operations
+- Consider `also_system_default` carefully when clearing items
+- Handle timeouts appropriately in production environments
 
-fn main() -> Result<(), WincentError> {
-    let is_visible = is_recent_files_visiable()?;
-    println!("Recent files visibility: {}", is_visible);
+## System Requirements and Limitations
 
-    set_recent_files_visiable(!is_visible)?;
-    println!("Visibility toggled");
+- **API Dependencies**: The library relies on Windows system APIs for its core functionality. Due to Windows security policies and updates, certain operations may require elevated permissions or could be restricted.
 
-    Ok(())
-}
-```
+- **Environment Compatibility**: Different Windows environments (including versions, configurations, and installed software) may affect the library's functionality. In particular:
+  - Third-party software may modify relevant registry entries
+  - System security policies may restrict PowerShell script execution
+  - Windows Explorer integration might vary across different Windows versions
+
+- **Pre-flight Checks**: Before performing operations, especially for folder management, it's recommended to use the built-in feasibility checks:
+  ```rust
+  let (can_query, can_modify) = manager.check_feasible().await;
+  if !can_modify {
+      println!("Warning: System environment may restrict modification operations");
+  }
+  ```
+
+These limitations are inherent to Windows Quick Access functionality and not specific to this library. We provide comprehensive error handling and status checking mechanisms to help you handle these scenarios gracefully.
 
 ## Error Handling
 
