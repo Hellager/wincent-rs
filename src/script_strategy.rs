@@ -122,7 +122,7 @@ pub(crate) struct AddRecentFileStrategy;
 
 impl ScriptStrategy for AddRecentFileStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParemeter)?;
+        let path = parameter.ok_or(WincentError::MissingParameter)?;
         Ok(format!(
             r#"
     {}
@@ -141,7 +141,7 @@ pub(crate) struct RemoveRecentFileStrategy;
 
 impl ScriptStrategy for RemoveRecentFileStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParemeter)?;
+        let path = parameter.ok_or(WincentError::MissingParameter)?;
         Ok(format!(
             r#"
     {}
@@ -163,7 +163,7 @@ pub(crate) struct PinToFrequentFolderStrategy;
 
 impl ScriptStrategy for PinToFrequentFolderStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParemeter)?;
+        let path = parameter.ok_or(WincentError::MissingParameter)?;
         Ok(format!(
             r#"
     {}
@@ -182,7 +182,7 @@ pub(crate) struct UnpinFromFrequentFolderStrategy;
 
 impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParemeter)?;
+        let path = parameter.ok_or(WincentError::MissingParameter)?;
         Ok(format!(
             r#"
     {}

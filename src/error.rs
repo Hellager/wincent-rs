@@ -65,6 +65,16 @@ pub enum WincentError {
     #[error("Operation timed out: {0}")]
     Timeout(String),
 
+    #[error(
+        "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"
+    )]
+    PartialEmpty {
+        recent_files_cleared: bool,
+        frequent_folders_cleared: bool,
+        #[source]
+        source: Box<WincentError>,
+    },
+
     #[error("Item already exists in Quick Access: {0}")]
     AlreadyExists(String),
 
@@ -96,7 +106,7 @@ mod tests {
         let wincent_error = WincentError::from(io_error);
         assert!(matches!(wincent_error, WincentError::Io(_)));
 
-        let missing_param = WincentError::MissingParemeter;
+        let missing_param = WincentError::MissingParameter;
         assert!(format!("{}", missing_param).contains("Missing function parameter"));
 
         let invalid_path = WincentError::InvalidPath("test/path".to_string());
@@ -111,7 +121,17 @@ mod tests {
         let success: WincentResult<()> = Ok(());
         assert!(success.is_ok());
 
-        let failure: WincentResult<()> = Err(WincentError::MissingParemeter);
+        let failure: WincentResult<()> = Err(WincentError::MissingParameter);
         assert!(failure.is_err());
+
+        let partial_empty = WincentError::PartialEmpty {
+            recent_files_cleared: true,
+            frequent_folders_cleared: false,
+            source: Box::new(WincentError::ScriptFailed("failed to clear pinned folders".into())),
+        };
+        let rendered = format!("{}", partial_empty);
+        assert!(rendered.contains("recent_files_cleared: true"));
+        assert!(rendered.contains("frequent_folders_cleared: false"));
+        assert!(rendered.contains("failed to clear pinned folders"));
     }
 }

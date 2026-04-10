@@ -394,7 +394,93 @@ impl QuickAccessManager {
             .await
     }
 
+    async fn empty_all_items_internal(&self, also_system_default: bool) -> WincentResult<()> {
+        if let Err(source) = Box::pin(self.empty_items_internal(
+            QuickAccess::RecentFiles,
+            also_system_default,
+        ))
+        .await
+        {
+            return Err(WincentError::PartialEmpty {
+                recent_files_cleared: false,
+                frequent_folders_cleared: false,
+                source: Box::new(source),
+            });
+        }
+
+        if let Err(source) = Box::pin(self.empty_items_internal(
+            QuickAccess::FrequentFolders,
+            also_system_default,
+        ))
+        .await
+        {
+            return Err(WincentError::PartialEmpty {
+                recent_files_cleared: true,
+                frequent_folders_cleared: false,
+                source: Box::new(source),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn refresh_empty_items(&self, force_refresh: bool) -> WincentResult<()> {
+        if force_refresh {
+            self.executor
+                .execute(PSScript::RefreshExplorer, None)
+                .await?;
+        }
+        Ok(())
+    }
+
+    fn should_clear_cache_after_empty(result: &WincentResult<()>) -> bool {
+        match result {
+            Ok(()) => true,
+            Err(WincentError::PartialEmpty {
+                recent_files_cleared,
+                frequent_folders_cleared,
+                ..
+            }) => *recent_files_cleared || *frequent_folders_cleared,
+            Err(_) => false,
+        }
+    }
+
+    async fn empty_items_internal(
+        &self,
+        qa_type: QuickAccess,
+        also_system_default: bool,
+    ) -> WincentResult<()> {
+        match qa_type {
+            QuickAccess::RecentFiles => {
+                empty_recent_files_with_api()?;
+            }
+            QuickAccess::FrequentFolders => {
+                empty_frequent_folders(also_system_default)?;
+                // Regular frequent folders and pinned folders are backed by different behaviors in
+                // Windows Quick Access. The helper above clears regular entries, while pinned
+                // folders still require a dedicated PowerShell cleanup step.
+                self.executor
+                    .execute_with_timeout(PSScript::EmptyPinnedFolders, None, 10)
+                    .await?;
+            }
+            QuickAccess::All => {
+                self.empty_all_items_internal(also_system_default).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Clears Quick Access items
+    ///
+    /// Frequent folder cleanup is a two-step process:
+    /// 1. `empty_frequent_folders()` clears regular frequent folders.
+    /// 2. `PSScript::EmptyPinnedFolders` clears folders that were pinned in Quick Access.
+    ///
+    /// When clearing `QuickAccess::All`, the operation runs recent-files cleanup first and then
+    /// frequent-folders cleanup. If the second step fails after the first one has already
+    /// succeeded, this method returns `WincentError::PartialEmpty` so callers can detect the
+    /// partial-success state.
     ///
     /// # Arguments
     ///
@@ -426,38 +512,17 @@ impl QuickAccessManager {
         force_refresh: bool,
         also_system_default: bool,
     ) -> WincentResult<()> {
-        match qa_type {
-            QuickAccess::RecentFiles => {
-                empty_recent_files_with_api()?;
-            }
-            QuickAccess::FrequentFolders => {
-                empty_frequent_folders(also_system_default)?;
-                self.executor
-                    .execute_with_timeout(PSScript::EmptyPinnedFolders, None, 10)
-                    .await?;
-            }
-            QuickAccess::All => {
-                Box::pin(self.empty_items(
-                    QuickAccess::RecentFiles,
-                    force_refresh,
-                    also_system_default,
-                ))
-                .await?;
-                Box::pin(self.empty_items(
-                    QuickAccess::FrequentFolders,
-                    force_refresh,
-                    also_system_default,
-                ))
-                .await?;
-            }
+        let result = self.empty_items_internal(qa_type, also_system_default).await;
+
+        if Self::should_clear_cache_after_empty(&result) {
+            self.executor.clear_cache();
         }
-        self.executor.clear_cache();
-        if force_refresh {
-            self.executor
-                .execute(PSScript::RefreshExplorer, None)
-                .await?;
+
+        if result.is_ok() {
+            self.refresh_empty_items(force_refresh).await?;
         }
-        Ok(())
+
+        result
     }
 
     /// Clears internal cache
