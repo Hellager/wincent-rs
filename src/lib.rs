@@ -83,7 +83,7 @@ mod test_utils;
 mod utils;
 
 #[allow(unused)]
-pub mod predule {
+pub mod prelude {
     pub use crate::error::WincentError;
     pub use crate::manager::QuickAccessManager;
     pub use crate::{QuickAccess, WincentResult};

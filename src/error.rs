@@ -51,7 +51,7 @@ pub enum WincentError {
     UnknownScriptMethod(u32),
 
     #[error("Missing function parameter")]
-    MissingParemeter,
+    MissingParameter,
 
     #[error("Windows API error: {0}")]
     WindowsApi(i32),
