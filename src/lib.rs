@@ -87,6 +87,19 @@ pub mod prelude {
     pub use crate::error::WincentError;
     pub use crate::manager::QuickAccessManager;
     pub use crate::{QuickAccess, WincentResult};
+
+    // Commonly used query functions
+    pub use crate::query::{
+        get_frequent_folders,
+        get_quick_access_items,
+        get_recent_files,
+        is_frequent_folder_exact,
+        is_in_frequent_folders,
+        is_in_quick_access,
+        is_in_quick_access_exact,
+        is_in_recent_files,
+        is_recent_file_exact,
+    };
 }
 
 use crate::error::WincentError;

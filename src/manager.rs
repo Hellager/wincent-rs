@@ -244,7 +244,90 @@ impl QuickAccessManager {
             .await
     }
 
-    /// Checks item presence in Quick Access
+    /// Checks if an item exists in Quick Access with exact path matching
+    ///
+    /// This method performs exact path comparison. For partial/fuzzy matching,
+    /// use `contains_item()` instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Exact path to check
+    /// * `qa_type` - Quick Access category to search (Recent Files, Frequent Folders, or All)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the exact path exists in the specified category, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///
+    ///     // Exact match - must match full path
+    ///     let exists = manager.check_item_exact(
+    ///         "C:\\Users\\Documents\\file.txt",
+    ///         QuickAccess::RecentFiles
+    ///     ).await?;
+    ///
+    ///     println!("File exists: {}", exists);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn check_item_exact(&self, path: &str, qa_type: QuickAccess) -> WincentResult<bool> {
+        let items = self.get_items(qa_type).await?;
+        Ok(items.iter().any(|item| item == path))
+    }
+
+    /// Checks if any item in Quick Access contains the given keyword
+    ///
+    /// This method performs substring matching. For exact path matching,
+    /// use `check_item_exact()` instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `keyword` - Keyword or partial path to search for
+    /// * `qa_type` - Quick Access category to search (Recent Files, Frequent Folders, or All)
+    ///
+    /// # Returns
+    ///
+    /// `true` if any item contains the keyword, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::predule::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///
+    ///     // Fuzzy match - matches any item containing "Documents"
+    ///     let exists = manager.contains_item(
+    ///         "Documents",
+    ///         QuickAccess::RecentFiles
+    ///     ).await?;
+    ///
+    ///     // This will match paths like:
+    ///     // - "C:\\Users\\Documents\\file.txt"
+    ///     // - "D:\\My Documents\\report.pdf"
+    ///
+    ///     println!("Found items containing 'Documents': {}", exists);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn contains_item(&self, keyword: &str, qa_type: QuickAccess) -> WincentResult<bool> {
+        let items = self.get_items(qa_type).await?;
+        Ok(items.iter().any(|item| item.contains(keyword)))
+    }
+
+    /// Checks item presence in Quick Access (exact match)
+    ///
+    /// **Deprecated**: Use `check_item_exact()` for clarity. This method will be
+    /// removed in v0.2.0.
     ///
     /// # Arguments
     ///
@@ -273,9 +356,12 @@ impl QuickAccessManager {
     ///     Ok(())
     /// }
     /// ```
+    #[deprecated(
+        since = "0.1.3",
+        note = "Use `check_item_exact()` for exact matching or `contains_item()` for fuzzy matching. This method will be removed or redefined in v0.2.0."
+    )]
     pub async fn check_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<bool> {
-        let items = self.get_items(qa_type).await?;
-        Ok(items.iter().any(|item| item == path))
+        self.check_item_exact(path, qa_type).await
     }
 
     /// Adds an item to Quick Access
@@ -312,7 +398,7 @@ impl QuickAccessManager {
         qa_type: QuickAccess,
         force_update: bool,
     ) -> WincentResult<()> {
-        if self.check_item(path, qa_type.clone()).await? {
+        if self.check_item_exact(path, qa_type.clone()).await? {
             return Err(WincentError::AlreadyExists(path.to_string()));
         }
 
@@ -369,7 +455,7 @@ impl QuickAccessManager {
     /// }
     /// ```
     pub async fn remove_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
-        if !self.check_item(path, qa_type.clone()).await? {
+        if !self.check_item_exact(path, qa_type.clone()).await? {
             return Err(WincentError::NotInRecent(path.to_string()));
         }
 
@@ -586,12 +672,12 @@ mod tests {
         let items = manager.get_items(QuickAccess::All).await?;
 
         if let Some(item) = items.first() {
-            let exists = manager.check_item(item, QuickAccess::All).await?;
+            let exists = manager.check_item_exact(item, QuickAccess::All).await?;
             assert!(exists, "Item should exist in collection");
         }
 
         let non_existent = "Z:\\Invalid\\Path\\Test.txt";
-        let exists = manager.check_item(non_existent, QuickAccess::All).await?;
+        let exists = manager.check_item_exact(non_existent, QuickAccess::All).await?;
         assert!(!exists, "Non-existent item should not be present");
 
         Ok(())
@@ -654,6 +740,51 @@ mod tests {
                 .empty_items(QuickAccess::FrequentFolders, false, false)
                 .await?;
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_check_item_exact_vs_contains() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+        let items = manager.get_items(QuickAccess::All).await?;
+
+        if let Some(full_path) = items.first() {
+            // exact match with full path should succeed
+            let exact = manager
+                .check_item_exact(full_path, QuickAccess::All)
+                .await?;
+            assert!(exact, "check_item_exact should match full path");
+
+            // contains match with full path should also succeed
+            let fuzzy = manager.contains_item(full_path, QuickAccess::All).await?;
+            assert!(fuzzy, "contains_item should match full path");
+
+            // exact match with partial path should fail
+            if full_path.len() > 3 {
+                let partial = &full_path[..full_path.len() - 1];
+                let exact_partial = manager
+                    .check_item_exact(partial, QuickAccess::All)
+                    .await?;
+                assert!(
+                    !exact_partial,
+                    "check_item_exact should not match partial path"
+                );
+            }
+        }
+
+        // non-existent path should return false for both
+        let non_existent = "Z:\\Invalid\\Path\\Test.txt";
+        assert!(
+            !manager
+                .check_item_exact(non_existent, QuickAccess::All)
+                .await?
+        );
+        assert!(
+            !manager
+                .contains_item(non_existent, QuickAccess::All)
+                .await?
+        );
 
         Ok(())
     }

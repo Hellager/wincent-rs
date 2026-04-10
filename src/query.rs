@@ -115,23 +115,64 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 
 /****************************************************** Check Quick Access ******************************************************/
 
-/// Checks if a file path exists in the Windows Recent Files list.
+/// Checks if an exact file path exists in the Windows Recent Files list.
+///
+/// This function performs exact path comparison. For partial/fuzzy matching,
+/// use `is_in_recent_files()` instead.
 ///
 /// # Arguments
 ///
-/// * `keyword` - The file path or partial path to search for
+/// * `path` - The exact file path to search for
 ///
 /// # Returns
 ///
-/// Returns `true` if the file is found in the recent files list.
+/// Returns `true` if the exact path is found in the recent files list.
 ///
-/// # Example       
+/// # Example
+///
+/// ```rust
+/// use wincent::{query::is_recent_file_exact, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     // Exact match only
+///     let exists = is_recent_file_exact("C:\\Users\\Documents\\file.txt")?;
+///     if exists {
+///         println!("Exact file path found in recent files");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn is_recent_file_exact(path: &str) -> WincentResult<bool> {
+    let items = get_recent_files()?;
+    Ok(items.iter().any(|item| item == path))
+}
+
+/// Checks if a file path or keyword exists in the Windows Recent Files list.
+///
+/// **Note**: This function performs substring matching (fuzzy match). If you need
+/// exact path matching, use `is_recent_file_exact()` instead.
+///
+/// # Arguments
+///
+/// * `keyword` - The file path or partial path to search for (substring match)
+///
+/// # Returns
+///
+/// Returns `true` if any recent file path contains the keyword.
+///
+/// # Example
 ///
 /// ```rust
 /// use wincent::{query::is_in_recent_files, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
-///     let file_exists = is_in_recent_files("Documents\\report.docx")?;
+///     // Fuzzy match - matches any path containing "Documents"
+///     let file_exists = is_in_recent_files("Documents")?;
+///
+///     // This will match paths like:
+///     // - "C:\\Users\\Documents\\report.docx"
+///     // - "D:\\My Documents\\file.txt"
+///
 ///     if file_exists {
 ///         println!("File found in recent files");
 ///     }
@@ -144,22 +185,57 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
     Ok(items.iter().any(|item| item.contains(keyword)))
 }
 
-/// Checks if a folder path exists in the Windows Frequent Folders list.
+/// Checks if an exact folder path exists in the Windows Frequent Folders list.
+///
+/// This function performs exact path comparison. For partial/fuzzy matching,
+/// use `is_in_frequent_folders()` instead.
 ///
 /// # Arguments
 ///
-/// * `keyword` - The folder path or partial path to search for
+/// * `path` - The exact folder path to search for
 ///
 /// # Returns
 ///
-/// Returns `true` if the folder is found in the frequent folders list.
+/// Returns `true` if the exact path is found in the frequent folders list.
 ///
 /// # Example
-///     
+///
+/// ```rust
+/// use wincent::{query::is_frequent_folder_exact, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     let folder_exists = is_frequent_folder_exact("C:\\Users\\Documents")?;
+///     if folder_exists {
+///         println!("Exact folder path found in frequent folders list");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn is_frequent_folder_exact(path: &str) -> WincentResult<bool> {
+    let items = get_frequent_folders()?;
+    Ok(items.iter().any(|item| item == path))
+}
+
+/// Checks if a folder path or keyword exists in the Windows Frequent Folders list.
+///
+/// **Note**: This function performs substring matching (fuzzy match). If you need
+/// exact path matching, use `is_frequent_folder_exact()` instead.
+///
+/// # Arguments
+///
+/// * `keyword` - The folder path or partial path to search for (substring match)
+///
+/// # Returns
+///
+/// Returns `true` if any frequent folder path contains the keyword.
+///
+/// # Example
+///
 /// ```rust
 /// use wincent::{query::is_in_frequent_folders, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
+///     // Fuzzy match - matches any path containing "Projects"
 ///     let folder_exists = is_in_frequent_folders("Projects")?;
 ///     if folder_exists {
 ///         println!("Found folder in frequent folders list");
@@ -175,23 +251,57 @@ pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
     Ok(items.iter().any(|item| item.contains(keyword)))
 }
 
-/// Checks if a path exists in the Windows Quick Access list.
+/// Checks if an exact path exists in the Windows Quick Access list.
+///
+/// This function performs exact path comparison. For partial/fuzzy matching,
+/// use `is_in_quick_access()` instead.
 ///
 /// # Arguments
 ///
-/// * `keyword` - The path or partial path to search for
+/// * `path` - The exact path to search for
 ///
 /// # Returns
 ///
-/// Returns `true` if the path is found in either recent files or frequent folders.
+/// Returns `true` if the exact path is found in either recent files or frequent folders.
 ///
 /// # Example
-///     
+///
+/// ```rust
+/// use wincent::{query::is_in_quick_access_exact, error::WincentError};
+///
+/// fn main() -> Result<(), WincentError> {
+///     let exists = is_in_quick_access_exact("C:\\Users\\Documents\\file.txt")?;
+///     if exists {
+///         println!("Exact path found in Quick Access");
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
+    let items = get_quick_access_items()?;
+    Ok(items.iter().any(|item| item == path))
+}
+
+/// Checks if a path or keyword exists in the Windows Quick Access list.
+///
+/// **Note**: This function performs substring matching (fuzzy match). If you need
+/// exact path matching, use `is_in_quick_access_exact()` instead.
+///
+/// # Arguments
+///
+/// * `keyword` - The path or partial path to search for (substring match)
+///
+/// # Returns
+///
+/// Returns `true` if any path in recent files or frequent folders contains the keyword.
+///
+/// # Example
+///
 /// ```rust
 /// use wincent::{query::is_in_quick_access, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
-///     // Check for a specific file or folder
+///     // Fuzzy match - check for items containing "Documents"
 ///     if is_in_quick_access("Documents")? {
 ///         println!("Found item in Quick Access");
 ///     }
@@ -225,7 +335,7 @@ mod tests {
 
             for path in &files {
                 assert!(
-                    path.contains(":\\"),
+                    path.contains(":\\") || path.starts_with("\\\\"),
                     "Path should be a valid Windows path format: {}",
                     path
                 );
@@ -247,7 +357,7 @@ mod tests {
 
             for path in &folders {
                 assert!(
-                    path.contains(":\\"),
+                    path.contains(":\\") || path.starts_with("\\\\"),
                     "Path should be a valid Windows path format: {}",
                     path
                 );
@@ -269,12 +379,50 @@ mod tests {
 
             for path in &items {
                 assert!(
-                    path.contains(":\\"),
+                    path.contains(":\\") || path.starts_with("\\\\"),
                     "Path should be a valid Windows path format: {}",
                     path
                 );
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_vs_fuzzy_matching() -> WincentResult<()> {
+        let items = query_recent_with_ps_script(QuickAccess::All)?;
+
+        if let Some(full_path) = items.first() {
+            // exact match with full path should succeed
+            assert!(
+                is_in_quick_access_exact(full_path)?,
+                "exact match should find full path"
+            );
+            assert!(
+                is_in_quick_access(full_path)?,
+                "fuzzy match should also find full path"
+            );
+
+            // exact match with partial path should fail
+            if full_path.len() > 3 {
+                let partial = &full_path[..full_path.len() - 1];
+                assert!(
+                    !is_in_quick_access_exact(partial)?,
+                    "exact match should not find partial path"
+                );
+                // fuzzy match with partial path should succeed
+                assert!(
+                    is_in_quick_access(partial)?,
+                    "fuzzy match should find partial path"
+                );
+            }
+        }
+
+        // non-existent path should return false for both
+        let non_existent = "Z:\\Invalid\\Path\\Test.txt";
+        assert!(!is_in_quick_access_exact(non_existent)?);
+        assert!(!is_in_quick_access(non_existent)?);
 
         Ok(())
     }
