@@ -25,6 +25,8 @@ impl ScriptExecutor {
             None => ScriptStorage::get_script_path(script_type)?,
         };
 
+        let start = std::time::Instant::now();
+
         Command::new("powershell")
             .args([
                 "-ExecutionPolicy",
@@ -35,7 +37,35 @@ impl ScriptExecutor {
                 })?,
             ])
             .output()
-            .map_err(|e| WincentError::PowerShellExecution(e.to_string()))
+            .map_err(|e| {
+                use crate::error::{PowerShellError, PowerShellErrorKind};
+
+                // Capture IO error details
+                let io_error = Some(e.kind());
+                let os_error = e.raw_os_error();
+
+                // Determine error kind based on error type
+                let kind = if let Some(5) = os_error {
+                    PowerShellErrorKind::AccessDenied
+                } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    PowerShellErrorKind::AccessDenied
+                } else {
+                    PowerShellErrorKind::ExecutionFailed
+                };
+
+                WincentError::PowerShellExecution(PowerShellError {
+                    kind,
+                    script_type,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: e.to_string(),
+                    script_path: script_path.clone(),
+                    parameters: parameter.map(|s| s.to_string()),
+                    duration: Some(start.elapsed()),
+                    io_error,
+                    os_error,
+                })
+            })
     }
 
     /// Executes PowerShell script asynchronously
@@ -57,10 +87,33 @@ impl ScriptExecutor {
     }
 
     /// Parses script output into string collection
-    pub fn parse_output_to_strings(output: Output) -> WincentResult<Vec<String>> {
+    pub fn parse_output_to_strings(
+        output: Output,
+        script_type: PSScript,
+        script_path: PathBuf,
+        parameters: Option<String>,
+        duration: Duration,
+    ) -> WincentResult<Vec<String>> {
         if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr);
-            return Err(WincentError::PowerShellExecution(error.to_string()));
+            use crate::error::PowerShellError;
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+            // Infer error kind from stderr content
+            let kind = PowerShellError::infer_kind_from_stderr(&stderr);
+
+            return Err(WincentError::PowerShellExecution(PowerShellError {
+                kind,
+                script_type,
+                exit_code: output.status.code(),
+                stdout,
+                stderr,
+                script_path,
+                parameters,
+                duration: Some(duration),
+                io_error: None,
+                os_error: None,
+            }));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -80,14 +133,36 @@ impl ScriptExecutor {
         parameter: Option<String>,
         timeout_secs: u64,
     ) -> WincentResult<Output> {
-        let execution = Self::execute_ps_script_async(script_type, parameter);
+        let execution = Self::execute_ps_script_async(script_type, parameter.clone());
 
         match tokio::time::timeout(Duration::from_secs(timeout_secs), execution).await {
             Ok(result) => result,
-            Err(_) => Err(WincentError::Timeout(format!(
-                "Script execution timed out after {} seconds",
-                timeout_secs
-            ))),
+            Err(_) => {
+                use crate::error::{PowerShellError, PowerShellErrorKind};
+                use crate::script_storage::ScriptStorage;
+
+                // Get script path for error context
+                let script_path = if let Some(ref param) = parameter {
+                    ScriptStorage::get_dynamic_script_path(script_type, param)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                } else {
+                    ScriptStorage::get_script_path(script_type)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                };
+
+                Err(WincentError::PowerShellExecution(PowerShellError {
+                    kind: PowerShellErrorKind::Timeout,
+                    script_type,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: format!("Operation timed out after {} seconds", timeout_secs),
+                    script_path,
+                    parameters: parameter,
+                    duration: Some(Duration::from_secs(timeout_secs)),
+                    io_error: None,
+                    os_error: None,
+                }))
+            }
         }
     }
 }
@@ -208,8 +283,15 @@ impl CachedScriptExecutor {
     ) -> WincentResult<Vec<String>> {
         // Bypass cache for non-query operations
         if !Self::should_cache(script_type) {
-            let output = ScriptExecutor::execute_ps_script_async(script_type, parameter).await?;
-            return ScriptExecutor::parse_output_to_strings(output);
+            let start = std::time::Instant::now();
+            let script_path = if let Some(ref param) = parameter {
+                ScriptStorage::get_dynamic_script_path(script_type, param)?
+            } else {
+                ScriptStorage::get_script_path(script_type)?
+            };
+            let output = ScriptExecutor::execute_ps_script_async(script_type, parameter.clone()).await?;
+            let duration = start.elapsed();
+            return ScriptExecutor::parse_output_to_strings(output, script_type, script_path, parameter, duration);
         }
 
         let key = CacheKey {
@@ -233,8 +315,15 @@ impl CachedScriptExecutor {
         }
 
         // Cache miss: execute and store
-        let output = ScriptExecutor::execute_ps_script_async(script_type, parameter).await?;
-        let result = ScriptExecutor::parse_output_to_strings(output)?;
+        let start = std::time::Instant::now();
+        let script_path = if let Some(ref param) = parameter {
+            ScriptStorage::get_dynamic_script_path(script_type, param)?
+        } else {
+            ScriptStorage::get_script_path(script_type)?
+        };
+        let output = ScriptExecutor::execute_ps_script_async(script_type, parameter.clone()).await?;
+        let duration = start.elapsed();
+        let result = ScriptExecutor::parse_output_to_strings(output, script_type, script_path, parameter, duration)?;
 
         // Update cache
         {
@@ -261,15 +350,37 @@ impl CachedScriptExecutor {
     ) -> WincentResult<Vec<String>> {
         match tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            self.execute(script_type, parameter),
+            self.execute(script_type, parameter.clone()),
         )
         .await
         {
             Ok(result) => result,
-            Err(_) => Err(WincentError::Timeout(format!(
-                "Script execution timed out after {} seconds",
-                timeout_secs
-            ))),
+            Err(_) => {
+                use crate::error::{PowerShellError, PowerShellErrorKind};
+                use crate::script_storage::ScriptStorage;
+
+                // Get script path for error context
+                let script_path = if let Some(ref param) = parameter {
+                    ScriptStorage::get_dynamic_script_path(script_type, param)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                } else {
+                    ScriptStorage::get_script_path(script_type)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                };
+
+                Err(WincentError::PowerShellExecution(PowerShellError {
+                    kind: PowerShellErrorKind::Timeout,
+                    script_type,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: format!("Operation timed out after {} seconds", timeout_secs),
+                    script_path,
+                    parameters: parameter,
+                    duration: Some(Duration::from_secs(timeout_secs)),
+                    io_error: None,
+                    os_error: None,
+                }))
+            }
         }
     }
 
@@ -299,7 +410,14 @@ mod tests {
             stderr: Vec::new(),
         };
 
-        let result = ScriptExecutor::parse_output_to_strings(output).unwrap();
+        let result = ScriptExecutor::parse_output_to_strings(
+            output,
+            PSScript::QueryQuickAccess,
+            PathBuf::from("test.ps1"),
+            None,
+            Duration::from_millis(100),
+        )
+        .unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result[0], "Line1");
         assert_eq!(result[1], "Line2");
@@ -314,10 +432,19 @@ mod tests {
             stderr: "Error message".as_bytes().to_vec(),
         };
 
-        let result = ScriptExecutor::parse_output_to_strings(output);
+        let result = ScriptExecutor::parse_output_to_strings(
+            output,
+            PSScript::QueryQuickAccess,
+            PathBuf::from("test.ps1"),
+            None,
+            Duration::from_millis(100),
+        );
         assert!(result.is_err());
-        if let Err(WincentError::PowerShellExecution(msg)) = result {
-            assert_eq!(msg, "Error message");
+        if let Err(WincentError::PowerShellExecution(ps_err)) = result {
+            assert_eq!(ps_err.stderr, "Error message");
+            assert_eq!(ps_err.exit_code, Some(1));
+            assert_eq!(ps_err.script_type, PSScript::QueryQuickAccess);
+            assert_eq!(ps_err.kind, crate::error::PowerShellErrorKind::ExecutionFailed);
         } else {
             panic!("Expected PowerShellExecution error");
         }

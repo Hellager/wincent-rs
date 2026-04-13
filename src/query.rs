@@ -22,17 +22,24 @@ use crate::{
 
 /// Queries recent items from Quick Access using a PowerShell script.
 pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-    let output = match qa_type {
-        QuickAccess::All => ScriptExecutor::execute_ps_script(PSScript::QueryQuickAccess, None)?,
-        QuickAccess::RecentFiles => {
-            ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?
-        }
-        QuickAccess::FrequentFolders => {
-            ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?
-        }
+    let script_type = match qa_type {
+        QuickAccess::All => PSScript::QueryQuickAccess,
+        QuickAccess::RecentFiles => PSScript::QueryRecentFile,
+        QuickAccess::FrequentFolders => PSScript::QueryFrequentFolder,
     };
 
-    let data = ScriptExecutor::parse_output_to_strings(output)?;
+    let start = std::time::Instant::now();
+    let script_path = crate::script_storage::ScriptStorage::get_script_path(script_type)?;
+    let output = ScriptExecutor::execute_ps_script(script_type, None)?;
+    let duration = start.elapsed();
+
+    let data = ScriptExecutor::parse_output_to_strings(
+        output,
+        script_type,
+        script_path,
+        None,
+        duration,
+    )?;
 
     Ok(data)
 }

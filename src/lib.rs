@@ -77,15 +77,16 @@ pub mod handle;
 pub mod manager;
 pub mod query;
 pub mod script_executor;
+pub mod script_strategy;
 mod script_storage;
-mod script_strategy;
 mod test_utils;
 mod utils;
 
 #[allow(unused)]
 pub mod prelude {
-    pub use crate::error::WincentError;
+    pub use crate::error::{PowerShellError, PowerShellErrorKind, WincentError};
     pub use crate::manager::{BatchResult, QuickAccessManager, QuickAccessManagerBuilder};
+    pub use crate::script_strategy::PSScript;
     pub use crate::{QuickAccess, WincentResult};
 
     // Commonly used query functions

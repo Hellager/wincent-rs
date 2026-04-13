@@ -39,14 +39,38 @@ pub(crate) fn execute_script_with_validation(
 ) -> WincentResult<()> {
     validate_path(path, path_type)?;
 
+    let start = std::time::Instant::now();
+    let script_path = match path_type {
+        PathType::File | PathType::Directory => {
+            crate::script_storage::ScriptStorage::get_dynamic_script_path(script, path)?
+        }
+    };
     let output = ScriptExecutor::execute_ps_script(script, Some(path))?;
+    let duration = start.elapsed();
 
     match output.status.success() {
         true => Ok(()),
         false => {
-            let error = String::from_utf8(output.stderr)
+            use crate::error::PowerShellError;
+            let stderr = String::from_utf8(output.stderr)
                 .unwrap_or_else(|_| "Unable to parse script error output".to_string());
-            Err(WincentError::ScriptFailed(error))
+            let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+
+            // Infer error kind from stderr content
+            let kind = PowerShellError::infer_kind_from_stderr(&stderr);
+
+            Err(WincentError::PowerShellExecution(PowerShellError {
+                kind,
+                script_type: script,
+                exit_code: output.status.code(),
+                stdout,
+                stderr,
+                script_path,
+                parameters: Some(path.to_string()),
+                duration: Some(duration),
+                io_error: None,
+                os_error: None,
+            }))
         }
     }
 }

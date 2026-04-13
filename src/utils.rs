@@ -27,8 +27,17 @@ pub(crate) fn is_admin() -> bool {
 
 /// Refreshes the Windows Explorer window using a PowerShell script.
 pub(crate) fn refresh_explorer_window() -> WincentResult<()> {
+    let start = std::time::Instant::now();
+    let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::RefreshExplorer)?;
     let output = ScriptExecutor::execute_ps_script(PSScript::RefreshExplorer, None)?;
-    let _ = ScriptExecutor::parse_output_to_strings(output)?;
+    let duration = start.elapsed();
+    let _ = ScriptExecutor::parse_output_to_strings(
+        output,
+        PSScript::RefreshExplorer,
+        script_path,
+        None,
+        duration,
+    )?;
 
     Ok(())
 }

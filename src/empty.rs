@@ -57,8 +57,17 @@ pub(crate) fn empty_user_folders_with_jumplist_file() -> WincentResult<()> {
 
 /// Clear system default folders from Quick Access using PowerShell commands.
 pub(crate) fn empty_system_default_folders_with_script() -> WincentResult<()> {
+    let start = std::time::Instant::now();
+    let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::EmptyPinnedFolders)?;
     let output = ScriptExecutor::execute_ps_script(PSScript::EmptyPinnedFolders, None)?;
-    let _ = ScriptExecutor::parse_output_to_strings(output)?;
+    let duration = start.elapsed();
+    let _ = ScriptExecutor::parse_output_to_strings(
+        output,
+        PSScript::EmptyPinnedFolders,
+        script_path,
+        None,
+        duration,
+    )?;
 
     Ok(())
 }
@@ -145,8 +154,17 @@ mod tests {
 
     fn wait_for_files_empty(max_retries: u32) -> WincentResult<bool> {
         for _ in 0..max_retries {
+            let start = std::time::Instant::now();
+            let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::QueryRecentFile)?;
             let output = ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?;
-            let recent_files = ScriptExecutor::parse_output_to_strings(output)?;
+            let duration = start.elapsed();
+            let recent_files = ScriptExecutor::parse_output_to_strings(
+                output,
+                PSScript::QueryRecentFile,
+                script_path,
+                None,
+                duration,
+            )?;
             if recent_files.is_empty() {
                 return Ok(true);
             }
@@ -157,8 +175,17 @@ mod tests {
 
     fn wait_for_folders_empty(max_retries: u32) -> WincentResult<bool> {
         for _ in 0..max_retries {
+            let start = std::time::Instant::now();
+            let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::QueryFrequentFolder)?;
             let output = ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?;
-            let folders = ScriptExecutor::parse_output_to_strings(output)?;
+            let duration = start.elapsed();
+            let folders = ScriptExecutor::parse_output_to_strings(
+                output,
+                PSScript::QueryFrequentFolder,
+                script_path,
+                None,
+                duration,
+            )?;
             if folders.is_empty() {
                 return Ok(true);
             }
@@ -176,8 +203,17 @@ mod tests {
         add_file_to_recent_with_api(test_file.to_str().unwrap())?;
         thread::sleep(Duration::from_secs(1));
 
+        let start = std::time::Instant::now();
+        let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::QueryRecentFile)?;
         let output = ScriptExecutor::execute_ps_script(PSScript::QueryRecentFile, None)?;
-        let recent_files = ScriptExecutor::parse_output_to_strings(output)?;
+        let duration = start.elapsed();
+        let recent_files = ScriptExecutor::parse_output_to_strings(
+            output,
+            PSScript::QueryRecentFile,
+            script_path,
+            None,
+            duration,
+        )?;
         assert!(
             !recent_files.is_empty(),
             "File should have been added to recent list"
@@ -199,8 +235,17 @@ mod tests {
         empty_user_folders_with_jumplist_file()?;
         thread::sleep(Duration::from_secs(1));
 
+        let start = std::time::Instant::now();
+        let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::QueryFrequentFolder)?;
         let output = ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?;
-        let folders = ScriptExecutor::parse_output_to_strings(output)?;
+        let duration = start.elapsed();
+        let folders = ScriptExecutor::parse_output_to_strings(
+            output,
+            PSScript::QueryFrequentFolder,
+            script_path,
+            None,
+            duration,
+        )?;
         assert!(
             folders.is_empty(),
             "No recent files should exist after jump list cleanup"
@@ -217,8 +262,17 @@ mod tests {
         pin_frequent_folder_with_ps_script(test_dir.to_str().unwrap())?;
         thread::sleep(Duration::from_secs(1));
 
+        let start = std::time::Instant::now();
+        let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::QueryFrequentFolder)?;
         let output = ScriptExecutor::execute_ps_script(PSScript::QueryFrequentFolder, None)?;
-        let folders = ScriptExecutor::parse_output_to_strings(output)?;
+        let duration = start.elapsed();
+        let folders = ScriptExecutor::parse_output_to_strings(
+            output,
+            PSScript::QueryFrequentFolder,
+            script_path,
+            None,
+            duration,
+        )?;
         assert!(!folders.is_empty(), "Should have pinned folders");
 
         empty_system_default_folders_with_script()?;

@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 /// Enum representing PowerShell script operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum PSScript {
+pub enum PSScript {
     RefreshExplorer,
     QueryQuickAccess,
     QueryRecentFile,

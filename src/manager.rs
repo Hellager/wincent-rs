@@ -888,10 +888,7 @@ impl QuickAccessManager {
 
     /// Internal method to add item without refreshing Explorer
     async fn add_item_internal(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
-        if self.check_item_exact(path, qa_type.clone()).await? {
-            return Err(WincentError::AlreadyExists(path.to_string()));
-        }
-
+        // Validate qa_type first before any operations
         let script = match qa_type {
             QuickAccess::RecentFiles => PSScript::AddRecentFile,
             QuickAccess::FrequentFolders => PSScript::PinToFrequentFolder,
@@ -902,6 +899,10 @@ impl QuickAccessManager {
                 )))
             }
         };
+
+        if self.check_item_exact(path, qa_type.clone()).await? {
+            return Err(WincentError::AlreadyExists(path.to_string()));
+        }
 
         let path_type = match qa_type {
             QuickAccess::RecentFiles => PathType::File,
@@ -916,10 +917,7 @@ impl QuickAccessManager {
 
     /// Internal method to remove item
     async fn remove_item_internal(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
-        if !self.check_item_exact(path, qa_type.clone()).await? {
-            return Err(WincentError::NotInRecent(path.to_string()));
-        }
-
+        // Validate qa_type first before any operations
         let script = match qa_type {
             QuickAccess::RecentFiles => PSScript::RemoveRecentFile,
             QuickAccess::FrequentFolders => PSScript::UnpinFromFrequentFolder,
@@ -930,6 +928,10 @@ impl QuickAccessManager {
                 )))
             }
         };
+
+        if !self.check_item_exact(path, qa_type.clone()).await? {
+            return Err(WincentError::NotInRecent(path.to_string()));
+        }
 
         let path_type = match qa_type {
             QuickAccess::RecentFiles => PathType::File,
@@ -1470,6 +1472,25 @@ mod tests {
         ];
 
         let result = manager.add_items_batch(&items, false).await?;
+
+        assert!(!result.is_complete_success());
+        assert_eq!(result.succeeded.len(), 0);
+        assert_eq!(result.failed.len(), 1);
+        assert!(matches!(
+            result.failed[0].1,
+            WincentError::UnsupportedOperation(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_items_batch_with_invalid_type() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+        let items = vec![
+            ("C:\\test.txt".to_string(), QuickAccess::All), // Invalid type
+        ];
+
+        let result = manager.remove_items_batch(&items).await?;
 
         assert!(!result.is_complete_success());
         assert_eq!(result.succeeded.len(), 0);
