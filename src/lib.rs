@@ -85,7 +85,7 @@ mod utils;
 #[allow(unused)]
 pub mod prelude {
     pub use crate::error::WincentError;
-    pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
+    pub use crate::manager::{BatchResult, QuickAccessManager, QuickAccessManagerBuilder};
     pub use crate::{QuickAccess, WincentResult};
 
     // Commonly used query functions

@@ -23,6 +23,68 @@ use std::sync::Arc;
 use tokio::sync::OnceCell;
 use tokio::time::Duration;
 
+/// Result of a batch operation containing succeeded and failed items
+///
+/// # Example
+/// ```rust,no_run
+/// use wincent::prelude::*;
+///
+/// #[tokio::main]
+/// async fn main() -> WincentResult<()> {
+///     let manager = QuickAccessManager::new().await?;
+///
+///     let items = vec![
+///         ("C:\\file1.txt".to_string(), QuickAccess::RecentFiles),
+///         ("C:\\file2.txt".to_string(), QuickAccess::RecentFiles),
+///     ];
+///
+///     let result = manager.add_items_batch(&items, true).await?;
+///
+///     println!("Success rate: {:.1}%", result.success_rate() * 100.0);
+///
+///     if !result.is_complete_success() {
+///         for (path, error) in &result.failed {
+///             eprintln!("Failed: {} - {}", path, error);
+///         }
+///     }
+///
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug)]
+pub struct BatchResult {
+    /// Successfully processed items
+    pub succeeded: Vec<String>,
+    /// Failed items with error details
+    pub failed: Vec<(String, WincentError)>,
+}
+
+impl BatchResult {
+    /// Returns true if all operations succeeded
+    pub fn is_complete_success(&self) -> bool {
+        self.failed.is_empty()
+    }
+
+    /// Returns true if at least one operation succeeded
+    pub fn has_partial_success(&self) -> bool {
+        !self.succeeded.is_empty()
+    }
+
+    /// Returns the success rate (0.0 to 1.0)
+    pub fn success_rate(&self) -> f64 {
+        let total = self.succeeded.len() + self.failed.len();
+        if total == 0 {
+            return 1.0;
+        }
+        self.succeeded.len() as f64 / total as f64
+    }
+
+    /// Returns the total number of operations
+    pub fn total(&self) -> usize {
+        self.succeeded.len() + self.failed.len()
+    }
+}
+
 /// Represents system capability status for Quick Access operations
 #[derive(Debug)]
 struct FeasibilityStatus {
@@ -683,6 +745,202 @@ impl QuickAccessManager {
             .await
     }
 
+    /// Adds multiple items to Quick Access in batch
+    ///
+    /// This method is more efficient than calling `add_item()` multiple times:
+    /// - Reduces PowerShell process overhead
+    /// - Refreshes Explorer only once at the end
+    /// - Continues on errors and reports all results
+    ///
+    /// # Arguments
+    ///
+    /// * `items` - List of (path, QuickAccess type) tuples to add
+    /// * `force_update` - Whether to refresh Explorer after all operations
+    ///
+    /// # Returns
+    ///
+    /// Returns `BatchResult` containing succeeded and failed items
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///
+    ///     let items = vec![
+    ///         ("C:\\file1.txt".to_string(), QuickAccess::RecentFiles),
+    ///         ("C:\\file2.txt".to_string(), QuickAccess::RecentFiles),
+    ///         ("C:\\folder1".to_string(), QuickAccess::FrequentFolders),
+    ///     ];
+    ///
+    ///     let result = manager.add_items_batch(&items, true).await?;
+    ///
+    ///     println!("Succeeded: {}", result.succeeded.len());
+    ///     println!("Failed: {}", result.failed.len());
+    ///     println!("Success rate: {:.1}%", result.success_rate() * 100.0);
+    ///
+    ///     // Handle failures
+    ///     for (path, error) in &result.failed {
+    ///         eprintln!("Failed to add {}: {}", path, error);
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn add_items_batch(
+        &self,
+        items: &[(String, QuickAccess)],
+        force_update: bool,
+    ) -> WincentResult<BatchResult> {
+        let mut succeeded = Vec::new();
+        let mut failed = Vec::new();
+
+        // Process each item, continuing on errors
+        for (path, qa_type) in items {
+            match self.add_item_internal(path, qa_type.clone()).await {
+                Ok(_) => succeeded.push(path.clone()),
+                Err(e) => failed.push((path.clone(), e)),
+            }
+        }
+
+        // Refresh Explorer once at the end if requested and at least one succeeded
+        if force_update && !succeeded.is_empty() {
+            if let Err(e) = crate::utils::refresh_explorer_window() {
+                // Refresh failure is not critical, just log it
+                eprintln!("Warning: Failed to refresh Explorer: {}", e);
+            }
+        }
+
+        // Clear cache after batch operation
+        if !succeeded.is_empty() {
+            self.clear_cache();
+        }
+
+        Ok(BatchResult { succeeded, failed })
+    }
+
+    /// Removes multiple items from Quick Access in batch
+    ///
+    /// This method is more efficient than calling `remove_item()` multiple times
+    /// by processing all items and reporting results together.
+    ///
+    /// # Arguments
+    ///
+    /// * `items` - List of (path, QuickAccess type) tuples to remove
+    ///
+    /// # Returns
+    ///
+    /// Returns `BatchResult` containing succeeded and failed items
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::new().await?;
+    ///
+    ///     let items = vec![
+    ///         ("C:\\file1.txt".to_string(), QuickAccess::RecentFiles),
+    ///         ("C:\\file2.txt".to_string(), QuickAccess::RecentFiles),
+    ///     ];
+    ///
+    ///     let result = manager.remove_items_batch(&items).await?;
+    ///
+    ///     if result.is_complete_success() {
+    ///         println!("All items removed successfully");
+    ///     } else {
+    ///         println!("Partial success: {}/{} removed",
+    ///             result.succeeded.len(),
+    ///             items.len()
+    ///         );
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn remove_items_batch(
+        &self,
+        items: &[(String, QuickAccess)],
+    ) -> WincentResult<BatchResult> {
+        let mut succeeded = Vec::new();
+        let mut failed = Vec::new();
+
+        // Process each item, continuing on errors
+        for (path, qa_type) in items {
+            match self.remove_item_internal(path, qa_type.clone()).await {
+                Ok(_) => succeeded.push(path.clone()),
+                Err(e) => failed.push((path.clone(), e)),
+            }
+        }
+
+        // Clear cache after batch operation
+        if !succeeded.is_empty() {
+            self.clear_cache();
+        }
+
+        Ok(BatchResult { succeeded, failed })
+    }
+
+    /// Internal method to add item without refreshing Explorer
+    async fn add_item_internal(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+        if self.check_item_exact(path, qa_type.clone()).await? {
+            return Err(WincentError::AlreadyExists(path.to_string()));
+        }
+
+        let script = match qa_type {
+            QuickAccess::RecentFiles => PSScript::AddRecentFile,
+            QuickAccess::FrequentFolders => PSScript::PinToFrequentFolder,
+            _ => {
+                return Err(WincentError::UnsupportedOperation(format!(
+                    "Unsupported add operation for {:?}",
+                    qa_type
+                )))
+            }
+        };
+
+        let path_type = match qa_type {
+            QuickAccess::RecentFiles => PathType::File,
+            QuickAccess::FrequentFolders => PathType::Directory,
+            _ => unreachable!(),
+        };
+
+        // Always pass false for force_update in internal method
+        self.handle_operation(Operation::Add(script), path, qa_type, path_type, false)
+            .await
+    }
+
+    /// Internal method to remove item
+    async fn remove_item_internal(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+        if !self.check_item_exact(path, qa_type.clone()).await? {
+            return Err(WincentError::NotInRecent(path.to_string()));
+        }
+
+        let script = match qa_type {
+            QuickAccess::RecentFiles => PSScript::RemoveRecentFile,
+            QuickAccess::FrequentFolders => PSScript::UnpinFromFrequentFolder,
+            _ => {
+                return Err(WincentError::UnsupportedOperation(format!(
+                    "Unsupported remove operation for {:?}",
+                    qa_type
+                )))
+            }
+        };
+
+        let path_type = match qa_type {
+            QuickAccess::RecentFiles => PathType::File,
+            QuickAccess::FrequentFolders => PathType::Directory,
+            _ => unreachable!(),
+        };
+
+        self.handle_operation(Operation::Remove(script), path, qa_type, path_type, false)
+            .await
+    }
+
     async fn empty_all_items_internal(&self, also_system_default: bool) -> WincentResult<()> {
         if let Err(source) = Box::pin(self.empty_items_internal(
             QuickAccess::RecentFiles,
@@ -1112,6 +1370,252 @@ mod tests {
         // Verify the manager actually works
         let _items = manager.get_items(QuickAccess::All).await?;
         // If we get here without error, the query succeeded
+        Ok(())
+    }
+
+    // Batch operations tests
+    #[tokio::test]
+    async fn test_batch_result_methods() {
+        let result = BatchResult {
+            succeeded: vec!["file1.txt".to_string(), "file2.txt".to_string()],
+            failed: vec![(
+                "file3.txt".to_string(),
+                WincentError::NotInRecent("file3.txt".to_string()),
+            )],
+        };
+
+        assert_eq!(result.total(), 3);
+        assert_eq!(result.succeeded.len(), 2);
+        assert_eq!(result.failed.len(), 1);
+        assert!(!result.is_complete_success());
+        assert!(result.has_partial_success());
+        assert!((result.success_rate() - 0.666).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_batch_result_complete_success() {
+        let result = BatchResult {
+            succeeded: vec!["file1.txt".to_string(), "file2.txt".to_string()],
+            failed: vec![],
+        };
+
+        assert!(result.is_complete_success());
+        assert!(result.has_partial_success());
+        assert_eq!(result.success_rate(), 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_batch_result_complete_failure() {
+        let result = BatchResult {
+            succeeded: vec![],
+            failed: vec![
+                (
+                    "file1.txt".to_string(),
+                    WincentError::NotInRecent("file1.txt".to_string()),
+                ),
+                (
+                    "file2.txt".to_string(),
+                    WincentError::NotInRecent("file2.txt".to_string()),
+                ),
+            ],
+        };
+
+        assert!(!result.is_complete_success());
+        assert!(!result.has_partial_success());
+        assert_eq!(result.success_rate(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_batch_result_empty() {
+        let result = BatchResult {
+            succeeded: vec![],
+            failed: vec![],
+        };
+
+        assert!(result.is_complete_success());
+        assert!(!result.has_partial_success());
+        assert_eq!(result.success_rate(), 1.0);
+        assert_eq!(result.total(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_add_items_batch_empty() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+        let items: Vec<(String, QuickAccess)> = vec![];
+
+        let result = manager.add_items_batch(&items, false).await?;
+
+        assert!(result.is_complete_success());
+        assert_eq!(result.total(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_items_batch_empty() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+        let items: Vec<(String, QuickAccess)> = vec![];
+
+        let result = manager.remove_items_batch(&items).await?;
+
+        assert!(result.is_complete_success());
+        assert_eq!(result.total(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_items_batch_with_invalid_type() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+        let items = vec![
+            ("C:\\test.txt".to_string(), QuickAccess::All), // Invalid type
+        ];
+
+        let result = manager.add_items_batch(&items, false).await?;
+
+        assert!(!result.is_complete_success());
+        assert_eq!(result.succeeded.len(), 0);
+        assert_eq!(result.failed.len(), 1);
+        assert!(matches!(
+            result.failed[0].1,
+            WincentError::UnsupportedOperation(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Modifies system state"]
+    async fn test_add_items_batch_actual() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+
+        // Create temporary files
+        let temp_file1 = tempfile::Builder::new()
+            .prefix("wincent-batch-test-1-")
+            .suffix(".txt")
+            .tempfile()?;
+        let temp_file2 = tempfile::Builder::new()
+            .prefix("wincent-batch-test-2-")
+            .suffix(".txt")
+            .tempfile()?;
+
+        let file1_path = temp_file1.path().to_str().unwrap().to_string();
+        let file2_path = temp_file2.path().to_str().unwrap().to_string();
+
+        let items = vec![
+            (file1_path.clone(), QuickAccess::RecentFiles),
+            (file2_path.clone(), QuickAccess::RecentFiles),
+        ];
+
+        // Add items in batch
+        let result = manager.add_items_batch(&items, false).await?;
+
+        assert_eq!(result.succeeded.len(), 2);
+        assert_eq!(result.failed.len(), 0);
+        assert!(result.is_complete_success());
+
+        // Verify items were added
+        assert!(
+            manager
+                .check_item_exact(&file1_path, QuickAccess::RecentFiles)
+                .await?
+        );
+        assert!(
+            manager
+                .check_item_exact(&file2_path, QuickAccess::RecentFiles)
+                .await?
+        );
+
+        // Clean up
+        let _ = manager.remove_items_batch(&items).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Modifies system state"]
+    async fn test_remove_items_batch_actual() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+
+        // Create temporary files
+        let temp_file1 = tempfile::Builder::new()
+            .prefix("wincent-batch-test-1-")
+            .suffix(".txt")
+            .tempfile()?;
+        let temp_file2 = tempfile::Builder::new()
+            .prefix("wincent-batch-test-2-")
+            .suffix(".txt")
+            .tempfile()?;
+
+        let file1_path = temp_file1.path().to_str().unwrap().to_string();
+        let file2_path = temp_file2.path().to_str().unwrap().to_string();
+
+        // Add items first
+        manager
+            .add_item(&file1_path, QuickAccess::RecentFiles, false)
+            .await?;
+        manager
+            .add_item(&file2_path, QuickAccess::RecentFiles, false)
+            .await?;
+
+        let items = vec![
+            (file1_path.clone(), QuickAccess::RecentFiles),
+            (file2_path.clone(), QuickAccess::RecentFiles),
+        ];
+
+        // Remove items in batch
+        let result = manager.remove_items_batch(&items).await?;
+
+        assert_eq!(result.succeeded.len(), 2);
+        assert_eq!(result.failed.len(), 0);
+        assert!(result.is_complete_success());
+
+        // Verify items were removed
+        assert!(
+            !manager
+                .check_item_exact(&file1_path, QuickAccess::RecentFiles)
+                .await?
+        );
+        assert!(
+            !manager
+                .check_item_exact(&file2_path, QuickAccess::RecentFiles)
+                .await?
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Modifies system state"]
+    async fn test_batch_operations_partial_failure() -> WincentResult<()> {
+        let manager = QuickAccessManager::new().await?;
+
+        // Create one valid temporary file
+        let temp_file = tempfile::Builder::new()
+            .prefix("wincent-batch-test-")
+            .suffix(".txt")
+            .tempfile()?;
+        let valid_path = temp_file.path().to_str().unwrap().to_string();
+
+        let items = vec![
+            (valid_path.clone(), QuickAccess::RecentFiles),
+            (
+                "Z:\\NonExistent\\File.txt".to_string(),
+                QuickAccess::RecentFiles,
+            ),
+        ];
+
+        // Add items - one should succeed, one should fail
+        let result = manager.add_items_batch(&items, false).await?;
+
+        assert!(result.has_partial_success());
+        assert!(!result.is_complete_success());
+        assert_eq!(result.succeeded.len(), 1);
+        assert_eq!(result.failed.len(), 1);
+        assert!((result.success_rate() - 0.5).abs() < 0.01);
+
+        // Clean up the successful one
+        let _ = manager
+            .remove_item(&valid_path, QuickAccess::RecentFiles)
+            .await;
+
         Ok(())
     }
 }
