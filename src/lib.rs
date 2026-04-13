@@ -24,7 +24,7 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use wincent::predule::*;
+//! use wincent::prelude::*;
 //!
 //! #[tokio::main]
 //! async fn main() -> WincentResult<()> {
@@ -76,7 +76,7 @@ pub mod feasible;
 pub mod handle;
 pub mod manager;
 pub mod query;
-mod script_executor;
+pub mod script_executor;
 mod script_storage;
 mod script_strategy;
 mod test_utils;
@@ -85,7 +85,7 @@ mod utils;
 #[allow(unused)]
 pub mod prelude {
     pub use crate::error::WincentError;
-    pub use crate::manager::QuickAccessManager;
+    pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
     pub use crate::{QuickAccess, WincentResult};
 
     // Commonly used query functions

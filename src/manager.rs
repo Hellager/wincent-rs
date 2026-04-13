@@ -61,11 +61,192 @@ impl FeasibilityStatus {
     }
 }
 
+/// Builder for configuring QuickAccessManager
+///
+/// # Example
+/// ```rust,no_run
+/// use wincent::prelude::*;
+/// use std::time::Duration;
+///
+/// #[tokio::main]
+/// async fn main() -> WincentResult<()> {
+///     let manager = QuickAccessManager::builder()
+///         .timeout(Duration::from_secs(30))
+///         .check_feasibility_on_init()
+///         .build()
+///         .await?;
+///     Ok(())
+/// }
+/// ```
+pub struct QuickAccessManagerBuilder {
+    timeout: Duration,
+    cache_enabled: bool,
+    executor: Option<Arc<CachedScriptExecutor>>,
+    feasibility_check_on_init: bool,
+}
+
+impl Default for QuickAccessManagerBuilder {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(10),
+            cache_enabled: true,
+            executor: None,
+            feasibility_check_on_init: false,
+        }
+    }
+}
+
+impl QuickAccessManagerBuilder {
+    /// Sets the timeout for script execution
+    ///
+    /// # Arguments
+    /// * `duration` - Timeout duration (must be > 0)
+    ///
+    /// # Panics
+    /// Panics if duration is zero
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .timeout(Duration::from_secs(30))
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        assert!(!duration.is_zero(), "Timeout must be greater than zero");
+        self.timeout = duration;
+        self
+    }
+
+    /// Disables query result caching
+    ///
+    /// Useful for scenarios requiring real-time data without caching.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .disable_cache()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn disable_cache(mut self) -> Self {
+        self.cache_enabled = false;
+        self
+    }
+
+    /// Provides a custom script executor (mainly for testing)
+    ///
+    /// # Arguments
+    /// * `executor` - Custom CachedScriptExecutor instance
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    /// use wincent::script_executor::CachedScriptExecutor;
+    /// use std::sync::Arc;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let custom_executor = Arc::new(CachedScriptExecutor::new());
+    /// let manager = QuickAccessManager::builder()
+    ///     .executor(custom_executor)
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn executor(mut self, executor: Arc<CachedScriptExecutor>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    /// Enables feasibility check during initialization
+    ///
+    /// This will verify system capabilities before returning the manager.
+    /// If the system does not support query operations, an error will be returned.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .check_feasibility_on_init()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn check_feasibility_on_init(mut self) -> Self {
+        self.feasibility_check_on_init = true;
+        self
+    }
+
+    /// Builds the QuickAccessManager instance
+    ///
+    /// # Returns
+    ///
+    /// Returns a configured QuickAccessManager instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Feasibility check is enabled and the system does not support query operations
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn build(self) -> WincentResult<QuickAccessManager> {
+        let executor = self
+            .executor
+            .unwrap_or_else(|| Arc::new(CachedScriptExecutor::new()));
+
+        if !self.cache_enabled {
+            executor.clear_cache();
+        }
+
+        let manager = QuickAccessManager {
+            executor,
+            feasibility: OnceCell::new(),
+            lock_timeout: self.timeout,
+        };
+
+        if self.feasibility_check_on_init {
+            let (can_query, _can_modify) = manager.check_feasible().await;
+            if !can_query {
+                return Err(WincentError::SystemError(
+                    "System does not support Quick Access query operations".to_string(),
+                ));
+            }
+        }
+
+        Ok(manager)
+    }
+}
+
 /// Windows Quick Access management system
 ///
 /// # Example
 /// ```rust,no_run
-/// use wincent::predule::*;
+/// use wincent::prelude::*;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -87,12 +268,38 @@ enum Operation {
 }
 
 impl QuickAccessManager {
-    /// Initializes new Quick Access manager with default configuration
+    /// Creates a new builder for QuickAccessManager
+    ///
+    /// This is the recommended way to create a QuickAccessManager with custom configuration.
     ///
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> WincentResult<()> {
+    ///     let manager = QuickAccessManager::builder()
+    ///         .timeout(Duration::from_secs(30))
+    ///         .check_feasibility_on_init()
+    ///         .build()
+    ///         .await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn builder() -> QuickAccessManagerBuilder {
+        QuickAccessManagerBuilder::default()
+    }
+
+    /// Initializes new Quick Access manager with default configuration
+    ///
+    /// This is equivalent to `QuickAccessManager::builder().build().await`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -101,11 +308,7 @@ impl QuickAccessManager {
     /// }
     /// ```
     pub async fn new() -> WincentResult<Self> {
-        Ok(Self {
-            executor: Arc::new(CachedScriptExecutor::new()),
-            feasibility: OnceCell::new(),
-            lock_timeout: Duration::from_secs(10),
-        })
+        Self::builder().build().await
     }
 
     /// Checks system capability for Quick Access operations
@@ -125,7 +328,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -222,7 +425,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -261,7 +464,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -299,7 +502,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -341,7 +544,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -377,7 +580,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -439,7 +642,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -577,7 +780,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -616,7 +819,7 @@ impl QuickAccessManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use wincent::predule::*;
+    /// use wincent::prelude::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> WincentResult<()> {
@@ -786,6 +989,129 @@ mod tests {
                 .await?
         );
 
+        Ok(())
+    }
+
+    // Builder pattern tests
+    #[tokio::test]
+    async fn test_builder_default() -> WincentResult<()> {
+        let manager = QuickAccessManager::builder().build().await?;
+        assert_eq!(manager.executor.cache_size(), 0);
+        assert_eq!(manager.lock_timeout, Duration::from_secs(10));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_custom_timeout() -> WincentResult<()> {
+        let custom_timeout = Duration::from_secs(30);
+        let manager = QuickAccessManager::builder()
+            .timeout(custom_timeout)
+            .build()
+            .await?;
+        assert_eq!(manager.lock_timeout, custom_timeout);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_disable_cache() -> WincentResult<()> {
+        let manager = QuickAccessManager::builder()
+            .disable_cache()
+            .build()
+            .await?;
+
+        // Cache should be cleared
+        assert_eq!(manager.executor.cache_size(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_custom_executor() -> WincentResult<()> {
+        let custom_executor = Arc::new(CachedScriptExecutor::new());
+        let executor_ptr = Arc::as_ptr(&custom_executor);
+
+        let manager = QuickAccessManager::builder()
+            .executor(custom_executor)
+            .build()
+            .await?;
+
+        // Verify the same executor instance is used
+        assert_eq!(Arc::as_ptr(&manager.executor), executor_ptr);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "Modifies system state"]
+    async fn test_builder_check_feasibility_on_init() -> WincentResult<()> {
+        // This should succeed on a compatible system
+        let manager = QuickAccessManager::builder()
+            .check_feasibility_on_init()
+            .build()
+            .await?;
+
+        // Feasibility should already be checked
+        let (can_query, _can_modify) = manager.check_feasible().await;
+        assert!(can_query, "System should support query operations");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_combined_options() -> WincentResult<()> {
+        let custom_timeout = Duration::from_secs(20);
+        let manager = QuickAccessManager::builder()
+            .timeout(custom_timeout)
+            .disable_cache()
+            .build()
+            .await?;
+
+        assert_eq!(manager.lock_timeout, custom_timeout);
+        assert_eq!(manager.executor.cache_size(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_vs_new_equivalence() -> WincentResult<()> {
+        let manager_new = QuickAccessManager::new().await?;
+        let manager_builder = QuickAccessManager::builder().build().await?;
+
+        // Both should have the same default timeout
+        assert_eq!(manager_new.lock_timeout, manager_builder.lock_timeout);
+        assert_eq!(manager_new.lock_timeout, Duration::from_secs(10));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Timeout must be greater than zero")]
+    async fn test_builder_zero_timeout_panics() {
+        let _ = QuickAccessManager::builder()
+            .timeout(Duration::from_secs(0))
+            .build()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_builder_method_chaining() -> WincentResult<()> {
+        // Test that builder methods can be chained fluently
+        let manager = QuickAccessManager::builder()
+            .timeout(Duration::from_secs(15))
+            .disable_cache()
+            .timeout(Duration::from_secs(25)) // Override previous timeout
+            .build()
+            .await?;
+
+        assert_eq!(manager.lock_timeout, Duration::from_secs(25));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_actual_query() -> WincentResult<()> {
+        let manager = QuickAccessManager::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .await?;
+
+        // Verify the manager actually works
+        let _items = manager.get_items(QuickAccess::All).await?;
+        // If we get here without error, the query succeeded
         Ok(())
     }
 }

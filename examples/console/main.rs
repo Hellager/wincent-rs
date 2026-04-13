@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use wincent::{
     error::WincentError,
-    predule::{QuickAccess, QuickAccessManager, WincentResult},
+    prelude::{QuickAccess, QuickAccessManager, WincentResult},
 };
 
 // Console color codes

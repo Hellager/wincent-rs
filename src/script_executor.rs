@@ -93,7 +93,7 @@ impl ScriptExecutor {
 }
 
 /// Cached script executor with automatic invalidation
-pub(crate) struct CachedScriptExecutor {
+pub struct CachedScriptExecutor {
     cache: Arc<Mutex<HashMap<CacheKey, CacheEntry>>>,
 }
 
@@ -201,7 +201,7 @@ impl CachedScriptExecutor {
     }
 
     /// Executes script with cache management
-    pub async fn execute(
+    pub(crate) async fn execute(
         &self,
         script_type: PSScript,
         parameter: Option<String>,
@@ -253,7 +253,7 @@ impl CachedScriptExecutor {
 
     /// Executes script with timeout protection
     #[allow(dead_code)]
-    pub async fn execute_with_timeout(
+    pub(crate) async fn execute_with_timeout(
         &self,
         script_type: PSScript,
         parameter: Option<String>,
@@ -277,6 +277,12 @@ impl CachedScriptExecutor {
     pub fn clear_cache(&self) {
         let mut cache = self.cache.lock().unwrap();
         cache.clear();
+    }
+
+    /// Returns the number of cached entries
+    pub fn cache_size(&self) -> usize {
+        let cache = self.cache.lock().unwrap();
+        cache.len()
     }
 }
 
