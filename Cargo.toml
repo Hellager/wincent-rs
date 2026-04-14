@@ -17,6 +17,7 @@ A library for handling windows quick access
 md5 = "0.7.0"
 thiserror = "2.0.9"
 tokio = { version = "1.44.1", features = ["rt-multi-thread", "time", "macros", "sync"] }
+rand = "0.8"
 
 [dependencies.windows]
 version = "0.58.0"

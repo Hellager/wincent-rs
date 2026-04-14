@@ -76,6 +76,7 @@ pub mod feasible;
 pub mod handle;
 pub mod manager;
 pub mod query;
+pub mod retry;
 pub mod script_executor;
 pub mod script_strategy;
 mod script_storage;
@@ -86,6 +87,7 @@ mod utils;
 pub mod prelude {
     pub use crate::error::{PowerShellError, PowerShellErrorKind, WincentError};
     pub use crate::manager::{BatchResult, QuickAccessManager, QuickAccessManagerBuilder};
+    pub use crate::retry::RetryPolicy;
     pub use crate::script_strategy::PSScript;
     pub use crate::{QuickAccess, WincentResult};
 

@@ -14,6 +14,7 @@ use crate::{
     empty::{empty_frequent_folders, empty_recent_files_with_api},
     error::WincentError,
     handle::add_file_to_recent_with_api,
+    retry::RetryPolicy,
     script_executor::{CachedScriptExecutor, QuickAccessDataFiles},
     script_strategy::PSScript,
     utils::{validate_path, PathType},
@@ -93,13 +94,26 @@ struct FeasibilityStatus {
 }
 
 impl FeasibilityStatus {
-    async fn check(executor: &Arc<CachedScriptExecutor>, timeout_duration: Duration) -> Self {
-        let query_feasible =
-            Self::check_feasibility(executor, PSScript::CheckQueryFeasible, timeout_duration).await;
+    async fn check(
+        executor: &Arc<CachedScriptExecutor>,
+        timeout_duration: Duration,
+        retry_policy: &RetryPolicy,
+    ) -> Self {
+        let query_feasible = Self::check_feasibility(
+            executor,
+            PSScript::CheckQueryFeasible,
+            timeout_duration,
+            retry_policy,
+        )
+        .await;
 
-        let handle_feasible =
-            Self::check_feasibility(executor, PSScript::CheckPinUnpinFeasible, timeout_duration)
-                .await;
+        let handle_feasible = Self::check_feasibility(
+            executor,
+            PSScript::CheckPinUnpinFeasible,
+            timeout_duration,
+            retry_policy,
+        )
+        .await;
 
         Self {
             query: query_feasible,
@@ -111,14 +125,16 @@ impl FeasibilityStatus {
         executor: &Arc<CachedScriptExecutor>,
         script: PSScript,
         timeout_duration: Duration,
+        retry_policy: &RetryPolicy,
     ) -> bool {
-        let check_result =
-            tokio::time::timeout(timeout_duration, executor.execute(script, None)).await;
+        // Use retry mechanism for feasibility checks
+        let check_result = executor
+            .execute_with_retry_and_timeout(script, None, timeout_duration, retry_policy)
+            .await;
 
         match check_result {
-            Ok(Ok(_)) => true,
-            Ok(Err(_)) => false, // Execution failed
-            Err(_) => false,     // Timeout occurred
+            Ok(_) => true,
+            Err(_) => false, // Execution failed (after retries)
         }
     }
 }
@@ -145,6 +161,7 @@ pub struct QuickAccessManagerBuilder {
     cache_enabled: bool,
     executor: Option<Arc<CachedScriptExecutor>>,
     feasibility_check_on_init: bool,
+    retry_policy: RetryPolicy,
 }
 
 impl Default for QuickAccessManagerBuilder {
@@ -154,6 +171,7 @@ impl Default for QuickAccessManagerBuilder {
             cache_enabled: true,
             executor: None,
             feasibility_check_on_init: false,
+            retry_policy: RetryPolicy::default(),
         }
     }
 }
@@ -254,6 +272,85 @@ impl QuickAccessManagerBuilder {
         self
     }
 
+    /// Sets the retry policy for transient error handling
+    ///
+    /// # Arguments
+    /// * `policy` - Retry policy configuration
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .retry_policy(RetryPolicy::aggressive())
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = policy;
+        self
+    }
+
+    /// Disables retry mechanism
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .no_retry()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn no_retry(mut self) -> Self {
+        self.retry_policy = RetryPolicy::no_retry();
+        self
+    }
+
+    /// Uses fast retry policy (2 retries, short delays)
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .fast_retry()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn fast_retry(mut self) -> Self {
+        self.retry_policy = RetryPolicy::fast();
+        self
+    }
+
+    /// Uses aggressive retry policy (5 retries, longer delays)
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::builder()
+    ///     .aggressive_retry()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn aggressive_retry(mut self) -> Self {
+        self.retry_policy = RetryPolicy::aggressive();
+        self
+    }
+
     /// Builds the QuickAccessManager instance
     ///
     /// # Returns
@@ -287,8 +384,9 @@ impl QuickAccessManagerBuilder {
 
         let manager = QuickAccessManager {
             executor,
-            feasibility: OnceCell::new(),
+            feasibility: Arc::new(OnceCell::new()),
             lock_timeout: self.timeout,
+            retry_policy: self.retry_policy,
         };
 
         if self.feasibility_check_on_init {
@@ -319,8 +417,9 @@ impl QuickAccessManagerBuilder {
 /// ```
 pub struct QuickAccessManager {
     executor: Arc<CachedScriptExecutor>,
-    feasibility: OnceCell<FeasibilityStatus>,
+    feasibility: Arc<OnceCell<FeasibilityStatus>>,
     lock_timeout: Duration,
+    retry_policy: RetryPolicy,
 }
 
 #[derive(Debug)]
@@ -401,12 +500,53 @@ impl QuickAccessManager {
     /// }
     /// ```
     pub async fn check_feasible(&self) -> (bool, bool) {
+        // Use get_or_init for concurrent-safe single initialization
         let status = self
             .feasibility
-            .get_or_init(|| FeasibilityStatus::check(&self.executor, self.lock_timeout))
+            .get_or_init(|| async {
+                FeasibilityStatus::check(&self.executor, self.lock_timeout, &self.retry_policy).await
+            })
             .await;
 
         (status.query, status.handle)
+    }
+
+    /// Gets the current retry policy
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new().await?;
+    /// let policy = manager.retry_policy();
+    /// println!("Max attempts: {}", policy.max_attempts);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn retry_policy(&self) -> &RetryPolicy {
+        &self.retry_policy
+    }
+
+    /// Sets a new retry policy
+    ///
+    /// This will invalidate any cached feasibility check results, so the next
+    /// call to `check_feasible()` will re-run the checks with the new policy.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// let mut manager = QuickAccessManager::new().await?;
+    /// manager.set_retry_policy(RetryPolicy::aggressive());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_retry_policy(&mut self, policy: RetryPolicy) {
+        self.retry_policy = policy;
+        // Invalidate cached feasibility check results by replacing the entire Arc
+        self.feasibility = Arc::new(OnceCell::new());
     }
 
     fn map_to_script_type(&self, qa_type: QuickAccess) -> WincentResult<PSScript> {
@@ -446,13 +586,23 @@ impl QuickAccessManager {
                     Vec::new()
                 } else {
                     self.executor
-                        .execute_with_timeout(script, Some(path.to_string()), 10)
+                        .execute_with_retry_and_timeout(
+                            script,
+                            Some(path.to_string()),
+                            self.lock_timeout,
+                            &self.retry_policy,
+                        )
                         .await?
                 }
             }
             QuickAccess::FrequentFolders => {
                 self.executor
-                    .execute_with_timeout(script, Some(path.to_string()), 10)
+                    .execute_with_retry_and_timeout(
+                        script,
+                        Some(path.to_string()),
+                        self.lock_timeout,
+                        &self.retry_policy,
+                    )
                     .await?
             }
             _ => {
@@ -505,7 +655,12 @@ impl QuickAccessManager {
     pub async fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
         let script_type = self.map_to_script_type(qa_type)?;
         self.executor
-            .execute_with_timeout(script_type, None, 10)
+            .execute_with_retry_and_timeout(
+                script_type,
+                None,
+                self.lock_timeout,
+                &self.retry_policy,
+            )
             .await
     }
 
@@ -1009,7 +1164,12 @@ impl QuickAccessManager {
                 // Windows Quick Access. The helper above clears regular entries, while pinned
                 // folders still require a dedicated PowerShell cleanup step.
                 self.executor
-                    .execute_with_timeout(PSScript::EmptyPinnedFolders, None, 10)
+                    .execute_with_retry_and_timeout(
+                        PSScript::EmptyPinnedFolders,
+                        None,
+                        self.lock_timeout,
+                        &self.retry_policy,
+                    )
                     .await?;
             }
             QuickAccess::All => {
@@ -1111,20 +1271,20 @@ mod tests {
     async fn test_item_retrieval() -> WincentResult<()> {
         let manager = QuickAccessManager::new().await?;
 
-        {
-            let _ = manager.feasibility.set(FeasibilityStatus {
-                handle: true,
-                query: true,
-            });
-            let items = manager.get_items(QuickAccess::All).await?;
-            println!("Items with feasibility=true: {}", items.len());
-        }
+        // Pre-populate feasibility cache
+        manager.feasibility.set(FeasibilityStatus {
+            handle: true,
+            query: true,
+        }).ok();
 
-        {
-            let _ = manager.feasibility.get();
-            let items = manager.get_items(QuickAccess::All).await?;
-            println!("Items with feasibility=None: {}", items.len());
-        }
+        let items = manager.get_items(QuickAccess::All).await?;
+        println!("Items with feasibility=true: {}", items.len());
+
+        // Verify cache is populated
+        assert!(manager.feasibility.get().is_some());
+
+        let items = manager.get_items(QuickAccess::All).await?;
+        println!("Items with feasibility cached: {}", items.len());
 
         Ok(())
     }
@@ -1156,28 +1316,28 @@ mod tests {
             .tempfile()?;
         let file_path = temp_file.path().to_str().unwrap();
 
-        {
-            let _ = manager.feasibility.set(FeasibilityStatus {
-                handle: true,
-                query: true,
-            });
-            manager
-                .add_item(file_path, QuickAccess::RecentFiles, false)
-                .await?;
-            manager
-                .remove_item(file_path, QuickAccess::RecentFiles)
-                .await?;
-        }
+        // Pre-populate feasibility cache
+        manager.feasibility.set(FeasibilityStatus {
+            handle: true,
+            query: true,
+        }).ok();
 
-        {
-            let _ = manager.feasibility.get();
-            manager
-                .add_item(file_path, QuickAccess::RecentFiles, false)
-                .await?;
-            manager
-                .remove_item(file_path, QuickAccess::RecentFiles)
-                .await?;
-        }
+        manager
+            .add_item(file_path, QuickAccess::RecentFiles, false)
+            .await?;
+        manager
+            .remove_item(file_path, QuickAccess::RecentFiles)
+            .await?;
+
+        // Verify cache is still populated
+        assert!(manager.feasibility.get().is_some());
+
+        manager
+            .add_item(file_path, QuickAccess::RecentFiles, false)
+            .await?;
+        manager
+            .remove_item(file_path, QuickAccess::RecentFiles)
+            .await?;
 
         Ok(())
     }
@@ -1187,22 +1347,22 @@ mod tests {
     async fn test_empty_operations() -> WincentResult<()> {
         let manager = QuickAccessManager::new().await?;
 
-        {
-            let _ = manager.feasibility.set(FeasibilityStatus {
-                handle: true,
-                query: true,
-            });
-            manager
-                .empty_items(QuickAccess::RecentFiles, false, false)
-                .await?;
-        }
+        // Pre-populate feasibility cache
+        manager.feasibility.set(FeasibilityStatus {
+            handle: true,
+            query: true,
+        }).ok();
 
-        {
-            let _ = manager.feasibility.get();
-            manager
-                .empty_items(QuickAccess::FrequentFolders, false, false)
-                .await?;
-        }
+        manager
+            .empty_items(QuickAccess::RecentFiles, false, false)
+            .await?;
+
+        // Verify cache is still populated
+        assert!(manager.feasibility.get().is_some());
+
+        manager
+            .empty_items(QuickAccess::FrequentFolders, false, false)
+            .await?;
 
         Ok(())
     }

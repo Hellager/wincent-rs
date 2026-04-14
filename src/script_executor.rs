@@ -1,4 +1,5 @@
 use crate::error::WincentError;
+use crate::retry::RetryPolicy;
 use crate::script_storage::ScriptStorage;
 use crate::script_strategy::PSScript;
 use crate::utils::get_windows_recent_folder;
@@ -159,6 +160,156 @@ impl ScriptExecutor {
                     script_path,
                     parameters: parameter,
                     duration: Some(Duration::from_secs(timeout_secs)),
+                    io_error: None,
+                    os_error: None,
+                }))
+            }
+        }
+    }
+
+    /// Executes PowerShell script with retry mechanism
+    ///
+    /// Automatically retries transient errors according to the provided retry policy.
+    /// Only errors identified as transient (via `PowerShellError::is_transient()`)
+    /// will be retried. Permanent errors fail immediately.
+    ///
+    /// # Arguments
+    /// * `script_type` - Type of PowerShell script to execute
+    /// * `parameter` - Optional parameter for the script
+    /// * `policy` - Retry policy configuration
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// // Retry is automatically handled by QuickAccessManager
+    /// let manager = QuickAccessManager::builder()
+    ///     .retry_policy(RetryPolicy::default())
+    ///     .build()
+    ///     .await?;
+    ///
+    /// // Operations will automatically retry on transient errors
+    /// let items = manager.get_items(QuickAccess::RecentFiles).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_with_retry(
+        script_type: PSScript,
+        parameter: Option<String>,
+        policy: &RetryPolicy,
+    ) -> WincentResult<Output> {
+        let mut last_error = None;
+
+        for attempt in 0..=policy.max_attempts {
+            // First attempt has no delay, subsequent retries do
+            if attempt > 0 {
+                let delay = policy.calculate_delay(attempt - 1);
+                tokio::time::sleep(delay).await;
+            }
+
+            match Self::execute_ps_script_async(script_type, parameter.clone()).await {
+                Ok(output) => {
+                    // Success - log if this was a retry
+                    if attempt > 0 {
+                        eprintln!(
+                            "[wincent] Script execution succeeded after {} retries: {:?}",
+                            attempt, script_type
+                        );
+                    }
+                    return Ok(output);
+                }
+                Err(WincentError::PowerShellExecution(err)) => {
+                    // Check if error is transient and we have retries left
+                    if !err.is_transient() || attempt >= policy.max_attempts {
+                        // Permanent error or out of retries - fail immediately
+                        return Err(WincentError::PowerShellExecution(err));
+                    }
+
+                    // Transient error with retries remaining - log and continue
+                    eprintln!(
+                        "[wincent] Transient error on attempt {}/{}: {:?} - {}",
+                        attempt + 1,
+                        policy.max_attempts + 1,
+                        script_type,
+                        err.stderr
+                    );
+
+                    last_error = Some(err);
+                }
+                Err(e) => {
+                    // Other error types - fail immediately
+                    return Err(e);
+                }
+            }
+        }
+
+        // All retries exhausted - return last error
+        Err(WincentError::PowerShellExecution(
+            last_error.expect("Should have at least one error after exhausting retries")
+        ))
+    }
+
+    /// Executes PowerShell script with both retry and timeout protection
+    ///
+    /// Combines retry logic with timeout protection. The timeout applies to the
+    /// entire retry sequence, not individual attempts.
+    ///
+    /// # Arguments
+    /// * `script_type` - Type of PowerShell script to execute
+    /// * `parameter` - Optional parameter for the script
+    /// * `timeout` - Maximum duration for all retry attempts combined
+    /// * `retry_policy` - Retry policy configuration
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> WincentResult<()> {
+    /// // Retry and timeout are automatically handled by QuickAccessManager
+    /// let manager = QuickAccessManager::builder()
+    ///     .retry_policy(RetryPolicy::default())
+    ///     .timeout(Duration::from_secs(30))
+    ///     .build()
+    ///     .await?;
+    ///
+    /// // Operations will retry on transient errors and timeout after 30s
+    /// let items = manager.get_items(QuickAccess::RecentFiles).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_with_retry_and_timeout(
+        script_type: PSScript,
+        parameter: Option<String>,
+        timeout: Duration,
+        retry_policy: &RetryPolicy,
+    ) -> WincentResult<Output> {
+        let execution = Self::execute_with_retry(script_type, parameter.clone(), retry_policy);
+
+        match tokio::time::timeout(timeout, execution).await {
+            Ok(result) => result,
+            Err(_) => {
+                use crate::error::{PowerShellError, PowerShellErrorKind};
+                use crate::script_storage::ScriptStorage;
+
+                let script_path = if let Some(ref param) = parameter {
+                    ScriptStorage::get_dynamic_script_path(script_type, param)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                } else {
+                    ScriptStorage::get_script_path(script_type)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                };
+
+                Err(WincentError::PowerShellExecution(PowerShellError {
+                    kind: PowerShellErrorKind::Timeout,
+                    script_type,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: format!("Operation timed out after {:?}", timeout),
+                    script_path,
+                    parameters: parameter,
+                    duration: Some(timeout),
                     io_error: None,
                     os_error: None,
                 }))
@@ -377,6 +528,124 @@ impl CachedScriptExecutor {
                     script_path,
                     parameters: parameter,
                     duration: Some(Duration::from_secs(timeout_secs)),
+                    io_error: None,
+                    os_error: None,
+                }))
+            }
+        }
+    }
+
+    /// Executes script with retry and timeout protection (returns Vec<String>)
+    ///
+    /// Combines retry logic with timeout protection and caching.
+    /// For cached operations, the cache is checked first. For non-cached operations,
+    /// uses the retry mechanism from ScriptExecutor.
+    ///
+    /// # Arguments
+    /// * `script_type` - Type of PowerShell script to execute
+    /// * `parameter` - Optional parameter for the script
+    /// * `timeout` - Maximum duration for all retry attempts combined
+    /// * `retry_policy` - Retry policy configuration
+    pub(crate) async fn execute_with_retry_and_timeout(
+        &self,
+        script_type: PSScript,
+        parameter: Option<String>,
+        timeout: Duration,
+        retry_policy: &RetryPolicy,
+    ) -> WincentResult<Vec<String>> {
+        // For non-cached operations, use ScriptExecutor's retry logic directly
+        if !Self::should_cache(script_type) {
+            let output = ScriptExecutor::execute_with_retry_and_timeout(
+                script_type,
+                parameter.clone(),
+                timeout,
+                retry_policy,
+            )
+            .await?;
+
+            let start = std::time::Instant::now();
+            let script_path = if let Some(ref param) = parameter {
+                ScriptStorage::get_dynamic_script_path(script_type, param)?
+            } else {
+                ScriptStorage::get_script_path(script_type)?
+            };
+            let duration = start.elapsed();
+            return ScriptExecutor::parse_output_to_strings(
+                output,
+                script_type,
+                script_path,
+                parameter,
+                duration,
+            );
+        }
+
+        // For cached operations, wrap entire retry sequence with timeout
+        let retry_future = async {
+            let mut last_error = None;
+
+            for attempt in 0..=retry_policy.max_attempts {
+                if attempt > 0 {
+                    let delay = retry_policy.calculate_delay(attempt - 1);
+                    tokio::time::sleep(delay).await;
+                }
+
+                // Try execution (without individual timeout)
+                match self.execute(script_type, parameter.clone()).await {
+                    Ok(data) => {
+                        if attempt > 0 {
+                            eprintln!(
+                                "[wincent] Cached execution succeeded after {} retries: {:?}",
+                                attempt, script_type
+                            );
+                        }
+                        return Ok(data);
+                    }
+                    Err(WincentError::PowerShellExecution(err)) => {
+                        if !err.is_transient() || attempt >= retry_policy.max_attempts {
+                            return Err(WincentError::PowerShellExecution(err));
+                        }
+
+                        eprintln!(
+                            "[wincent] Transient error on attempt {}/{}: {:?}",
+                            attempt + 1,
+                            retry_policy.max_attempts + 1,
+                            script_type
+                        );
+
+                        last_error = Some(err);
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+
+            Err(WincentError::PowerShellExecution(
+                last_error.expect("Should have at least one error after exhausting retries"),
+            ))
+        };
+
+        // Apply timeout to entire retry sequence
+        match tokio::time::timeout(timeout, retry_future).await {
+            Ok(result) => result,
+            Err(_) => {
+                // Timeout error
+                use crate::error::{PowerShellError, PowerShellErrorKind};
+                let script_path = if let Some(ref param) = parameter {
+                    ScriptStorage::get_dynamic_script_path(script_type, param)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                } else {
+                    ScriptStorage::get_script_path(script_type)
+                        .unwrap_or_else(|_| PathBuf::from("unknown"))
+                };
+
+                Err(WincentError::PowerShellExecution(PowerShellError {
+                    kind: PowerShellErrorKind::Timeout,
+                    script_type,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: format!("Operation timed out after {:?}", timeout),
+                    script_path,
+                    parameters: parameter,
+                    duration: Some(timeout),
                     io_error: None,
                     os_error: None,
                 }))
