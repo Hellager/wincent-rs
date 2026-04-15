@@ -48,13 +48,23 @@ pub(crate) fn refresh_explorer_window() -> WincentResult<()> {
 /// Directly calls Shell.Application COM interface to refresh all Explorer windows.
 /// This is much faster than spawning a PowerShell process.
 ///
-/// Only refreshes actual File Explorer windows by filtering based on window type.
+/// Refreshes all Explorer windows including Quick Access, This PC, and file system views.
 fn refresh_explorer_native() -> WincentResult<()> {
     unsafe {
-        // Initialize COM
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|e| WincentError::SystemError(format!("Failed to initialize COM: {}", e)))?;
+        // Initialize COM (handle already-initialized case)
+        let com_initialized = match CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
+            Ok(_) => true,
+            Err(e) => {
+                // RPC_E_CHANGED_MODE (0x80010106) means COM is already initialized in this thread
+                // with a different apartment model - we can still proceed
+                const RPC_E_CHANGED_MODE: i32 = -2147417850_i32; // 0x80010106
+                if e.code().0 == RPC_E_CHANGED_MODE {
+                    false // Don't uninitialize later
+                } else {
+                    return Err(WincentError::SystemError(format!("Failed to initialize COM: {}", e)));
+                }
+            }
+        };
 
         let result = (|| -> WincentResult<()> {
             // Create Shell.Application object
@@ -65,32 +75,48 @@ fn refresh_explorer_native() -> WincentResult<()> {
             let count = shell_windows.Count()
                 .map_err(|e| WincentError::SystemError(format!("Failed to get window count: {}", e)))?;
 
+            let mut refreshed_count = 0;
+            let mut total_explorer_windows = 0;
+
             // Refresh each Explorer window
             for i in 0..count {
                 if let Ok(dispatch) = shell_windows.Item(&i.into()) {
                     // Try to get IWebBrowser2 interface
                     if let Ok(web_browser) = dispatch.cast::<IWebBrowser2>() {
-                        // Filter: only refresh File Explorer windows with file:/// protocol
+                        // Check if this is an Explorer window
                         if let Ok(location) = web_browser.LocationURL() {
                             let url = location.to_string();
-                            // Only refresh File Explorer windows (file:/// protocol)
-                            // Skip browser windows (http://, https://)
-                            // Skip shell: protocol and empty URLs for safety
-                            if url.starts_with("file:///") {
-                                let _ = web_browser.Refresh(); // Ignore individual window failures
+
+                            // Refresh all Explorer windows:
+                            // - file:/// for file system views
+                            // - shell::: for Quick Access, This PC, etc.
+                            // Skip only browser windows (http://, https://)
+                            if url.starts_with("file:///") || url.starts_with("shell:::") {
+                                total_explorer_windows += 1;
+                                if web_browser.Refresh().is_ok() {
+                                    refreshed_count += 1;
+                                }
                             }
                         }
-                        // If LocationURL() fails, skip this window (conservative approach)
-                        // We cannot reliably determine if it's an Explorer window
                     }
                 }
+            }
+
+            // If we found Explorer windows but couldn't refresh any, return error
+            // to trigger PowerShell fallback
+            if total_explorer_windows > 0 && refreshed_count == 0 {
+                return Err(WincentError::SystemError(
+                    format!("Found {} Explorer windows but failed to refresh any", total_explorer_windows)
+                ));
             }
 
             Ok(())
         })();
 
-        // Always uninitialize COM
-        CoUninitialize();
+        // Only uninitialize COM if we initialized it
+        if com_initialized {
+            CoUninitialize();
+        }
 
         result
     }
