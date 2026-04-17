@@ -24,10 +24,13 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::{Folder, FolderItem, FolderItems, IShellDispatch, Shell};
 
-struct ComGuard;
+/// Shell namespace for frequent folders
+pub(crate) const FREQUENT_FOLDERS_NAMESPACE: &str = "shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}";
+
+pub(crate) struct ComGuard;
 
 impl ComGuard {
-    fn initialize() -> WincentResult<Self> {
+    pub(crate) fn initialize() -> WincentResult<Self> {
         unsafe {
             CoInitializeEx(None, COINIT_APARTMENTTHREADED)
                 .ok()
@@ -85,7 +88,7 @@ fn should_keep_item(item: &FolderItem, filter: &QueryFilter) -> bool {
     }
 }
 
-fn item_path(item: &FolderItem) -> Option<String> {
+pub(crate) fn item_path(item: &FolderItem) -> Option<String> {
     unsafe {
         item.Path().ok().and_then(|path| {
             let value = path.to_string();
@@ -98,7 +101,7 @@ fn item_path(item: &FolderItem) -> Option<String> {
     }
 }
 
-fn folder_items(folder: &Folder) -> WincentResult<FolderItems> {
+pub(crate) fn folder_items(folder: &Folder) -> WincentResult<FolderItems> {
     unsafe {
         folder.Items().map_err(|e| {
             WincentError::SystemError(format!("Failed to enumerate Quick Access items: {}", e))
@@ -106,7 +109,7 @@ fn folder_items(folder: &Folder) -> WincentResult<FolderItems> {
     }
 }
 
-fn shell_dispatch() -> WincentResult<IShellDispatch> {
+pub(crate) fn shell_dispatch() -> WincentResult<IShellDispatch> {
     unsafe {
         CoCreateInstance(&Shell, None, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER).map_err(|e| {
             WincentError::SystemError(format!("Failed to create Shell COM object: {}", e))
@@ -114,7 +117,7 @@ fn shell_dispatch() -> WincentResult<IShellDispatch> {
     }
 }
 
-fn shell_folder(namespace: &str) -> WincentResult<Folder> {
+pub(crate) fn shell_folder(namespace: &str) -> WincentResult<Folder> {
     let shell = shell_dispatch()?;
     let variant = VARIANT::from(namespace);
 
@@ -128,7 +131,7 @@ fn shell_folder(namespace: &str) -> WincentResult<Folder> {
     }
 }
 
-fn query_recent_with_native_api(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let _com = ComGuard::initialize()?;
     let (namespace, filter) = query_namespace_for(qa_type);
     let folder = shell_folder(namespace)?;
@@ -161,7 +164,7 @@ fn query_recent_with_native_api(qa_type: QuickAccess) -> WincentResult<Vec<Strin
 }
 
 /// Queries recent items from Quick Access using PowerShell scripts (for comparison/fallback).
-fn query_recent_with_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     use crate::script_executor::ScriptExecutor;
     use crate::script_storage::ScriptStorage;
     use crate::script_strategy::PSScript;
@@ -180,9 +183,17 @@ fn query_recent_with_powershell(qa_type: QuickAccess) -> WincentResult<Vec<Strin
     ScriptExecutor::parse_output_to_strings(output, script_type, script_path, None, duration)
 }
 
-/// Queries recent items from Quick Access using the native Shell COM API.
-pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-    query_recent_with_native_api(qa_type)
+/// Queries recent items from Quick Access using the native Shell COM API or PowerShell fallback.
+///
+/// This function attempts to query using native COM API first, falling back to PowerShell if COM fails.
+/// The native approach is significantly faster (~10-50ms vs ~200-500ms).
+pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+    // Try native COM first (fast path)
+    let qa_type_clone = qa_type.clone();
+    query_recent_native(qa_type).or_else(|_| {
+        // Fallback to PowerShell if COM fails (compatibility)
+        query_recent_powershell(qa_type_clone)
+    })
 }
 
 /****************************************************** Query Quick Access ******************************************************/
@@ -207,7 +218,7 @@ pub(crate) fn query_recent_with_ps_script(qa_type: QuickAccess) -> WincentResult
 /// }
 /// ```
 pub fn get_recent_files() -> WincentResult<Vec<String>> {
-    query_recent_with_ps_script(QuickAccess::RecentFiles)
+    query_recent(QuickAccess::RecentFiles)
 }
 
 /// Gets a list of frequent folders from Windows Quick Access.
@@ -230,7 +241,7 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 /// }
 /// ```
 pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
-    query_recent_with_ps_script(QuickAccess::FrequentFolders)
+    query_recent(QuickAccess::FrequentFolders)
 }
 
 /// Gets a list of all items from Windows Quick Access, including both recent files and frequent folders.
@@ -258,7 +269,7 @@ pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
 /// }
 /// ```
 pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
-    query_recent_with_ps_script(QuickAccess::All)
+    query_recent(QuickAccess::All)
 }
 
 /****************************************************** Check Quick Access ******************************************************/
@@ -473,7 +484,7 @@ mod tests {
 
     #[test]
     fn test_query_recent_files() -> WincentResult<()> {
-        let files = query_recent_with_ps_script(QuickAccess::RecentFiles)?;
+        let files = query_recent(QuickAccess::RecentFiles)?;
 
         if !files.is_empty() {
             assert!(
@@ -495,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_query_frequent_folders() -> WincentResult<()> {
-        let folders = query_recent_with_ps_script(QuickAccess::FrequentFolders)?;
+        let folders = query_recent(QuickAccess::FrequentFolders)?;
 
         if !folders.is_empty() {
             assert!(
@@ -517,7 +528,7 @@ mod tests {
 
     #[test_log::test]
     fn test_query_quick_access() -> WincentResult<()> {
-        let items = query_recent_with_ps_script(QuickAccess::All)?;
+        let items = query_recent(QuickAccess::All)?;
 
         if !items.is_empty() {
             assert!(
@@ -539,7 +550,7 @@ mod tests {
 
     #[test]
     fn test_exact_vs_fuzzy_matching() -> WincentResult<()> {
-        let items = query_recent_with_ps_script(QuickAccess::All)?;
+        let items = query_recent(QuickAccess::All)?;
 
         if let Some(full_path) = items.first() {
             // exact match with full path should succeed
@@ -577,8 +588,8 @@ mod tests {
 
     #[test]
     fn test_native_vs_powershell_results_recent_files() -> WincentResult<()> {
-        let native_results = query_recent_with_native_api(QuickAccess::RecentFiles)?;
-        let powershell_results = query_recent_with_powershell(QuickAccess::RecentFiles)?;
+        let native_results = query_recent_native(QuickAccess::RecentFiles)?;
+        let powershell_results = query_recent_powershell(QuickAccess::RecentFiles)?;
 
         println!("\n=== Native API vs PowerShell Results Comparison (Recent Files) ===");
         println!("Native API returned {} items", native_results.len());
@@ -616,8 +627,8 @@ mod tests {
 
     #[test]
     fn test_native_vs_powershell_results_frequent_folders() -> WincentResult<()> {
-        let native_results = query_recent_with_native_api(QuickAccess::FrequentFolders)?;
-        let powershell_results = query_recent_with_powershell(QuickAccess::FrequentFolders)?;
+        let native_results = query_recent_native(QuickAccess::FrequentFolders)?;
+        let powershell_results = query_recent_powershell(QuickAccess::FrequentFolders)?;
 
         println!("\n=== Native API vs PowerShell Results Comparison (Frequent Folders) ===");
         println!("Native API returned {} items", native_results.len());
@@ -652,8 +663,8 @@ mod tests {
 
     #[test]
     fn test_native_vs_powershell_results_all() -> WincentResult<()> {
-        let native_results = query_recent_with_native_api(QuickAccess::All)?;
-        let powershell_results = query_recent_with_powershell(QuickAccess::All)?;
+        let native_results = query_recent_native(QuickAccess::All)?;
+        let powershell_results = query_recent_powershell(QuickAccess::All)?;
 
         println!("\n=== Native API vs PowerShell Results Comparison (All Items) ===");
         println!("Native API returned {} items", native_results.len());
@@ -696,12 +707,12 @@ mod tests {
         // Test Recent Files
         println!("Testing Recent Files Query:");
         let start = Instant::now();
-        let native_files = query_recent_with_native_api(QuickAccess::RecentFiles)?;
+        let native_files = query_recent_native(QuickAccess::RecentFiles)?;
         let native_duration = start.elapsed();
         println!("  Native API: {:?} ({} items)", native_duration, native_files.len());
 
         let start = Instant::now();
-        let ps_files = query_recent_with_powershell(QuickAccess::RecentFiles)?;
+        let ps_files = query_recent_powershell(QuickAccess::RecentFiles)?;
         let ps_duration = start.elapsed();
         println!("  PowerShell: {:?} ({} items)", ps_duration, ps_files.len());
 
@@ -712,12 +723,12 @@ mod tests {
         // Test Frequent Folders
         println!("Testing Frequent Folders Query:");
         let start = Instant::now();
-        let native_folders = query_recent_with_native_api(QuickAccess::FrequentFolders)?;
+        let native_folders = query_recent_native(QuickAccess::FrequentFolders)?;
         let native_duration = start.elapsed();
         println!("  Native API: {:?} ({} items)", native_duration, native_folders.len());
 
         let start = Instant::now();
-        let ps_folders = query_recent_with_powershell(QuickAccess::FrequentFolders)?;
+        let ps_folders = query_recent_powershell(QuickAccess::FrequentFolders)?;
         let ps_duration = start.elapsed();
         println!("  PowerShell: {:?} ({} items)", ps_duration, ps_folders.len());
 
@@ -728,12 +739,12 @@ mod tests {
         // Test All Items
         println!("Testing All Quick Access Items Query:");
         let start = Instant::now();
-        let native_all = query_recent_with_native_api(QuickAccess::All)?;
+        let native_all = query_recent_native(QuickAccess::All)?;
         let native_duration = start.elapsed();
         println!("  Native API: {:?} ({} items)", native_duration, native_all.len());
 
         let start = Instant::now();
-        let ps_all = query_recent_with_powershell(QuickAccess::All)?;
+        let ps_all = query_recent_powershell(QuickAccess::All)?;
         let ps_duration = start.elapsed();
         println!("  PowerShell: {:?} ({} items)", ps_duration, ps_all.len());
 
@@ -749,7 +760,7 @@ mod tests {
 
         for i in 1..=10 {
             let start = Instant::now();
-            let _ = query_recent_with_native_api(QuickAccess::All)?;
+            let _ = query_recent_native(QuickAccess::All)?;
             let native_time = start.elapsed();
             native_times.push(native_time);
 

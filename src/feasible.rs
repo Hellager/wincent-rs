@@ -18,17 +18,28 @@
 use crate::{script_executor::ScriptExecutor, script_strategy::PSScript, WincentResult};
 
 /// Checks if PowerShell query commands are available and executable.
-pub(crate) fn check_query_feasible_with_script() -> WincentResult<bool> {
+pub(crate) fn check_query_feasible_powershell() -> WincentResult<bool> {
     let output = ScriptExecutor::execute_ps_script(PSScript::CheckQueryFeasible, None)?;
 
     Ok(output.status.success())
 }
 
 /// Checks if PowerShell pin/unpin commands are available and executable.
-pub(crate) fn check_pinunpin_feasible_with_script() -> WincentResult<bool> {
+pub(crate) fn check_pinunpin_feasible_powershell() -> WincentResult<bool> {
     let output = ScriptExecutor::execute_ps_script(PSScript::CheckPinUnpinFeasible, None)?;
 
     Ok(output.status.success())
+}
+
+/// Checks if pin/unpin operations are feasible using native COM API
+pub(crate) fn check_pinunpin_feasible_native() -> WincentResult<bool> {
+    use crate::query::ComGuard;
+
+    // Try to initialize COM
+    match ComGuard::initialize() {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
 }
 
 /****************************************************** Feature Feasible ******************************************************/
@@ -54,10 +65,12 @@ pub(crate) fn check_pinunpin_feasible_with_script() -> WincentResult<bool> {
 /// }
 /// ```
 pub fn check_query_feasible() -> WincentResult<bool> {
-    check_query_feasible_with_script()
+    check_query_feasible_powershell()
 }
 
 /// Checks if pin/unpin operations are feasible on the current system.
+///
+/// This function attempts to check using native COM API first, falling back to PowerShell if COM fails.
 ///
 /// # Returns
 ///
@@ -78,7 +91,11 @@ pub fn check_query_feasible() -> WincentResult<bool> {
 /// }
 /// ```
 pub fn check_pinunpin_feasible() -> WincentResult<bool> {
-    check_pinunpin_feasible_with_script()
+    // Try native COM first (fast path)
+    check_pinunpin_feasible_native().or_else(|_| {
+        // Fallback to PowerShell if COM fails (compatibility)
+        check_pinunpin_feasible_powershell()
+    })
 }
 
 #[cfg(test)]
@@ -86,8 +103,8 @@ mod tests {
     use super::*;
 
     #[test_log::test]
-    fn test_check_query_feasible_with_script() -> WincentResult<()> {
-        let result = check_query_feasible_with_script()?;
+    fn test_check_query_feasible_powershell() -> WincentResult<()> {
+        let result = check_query_feasible_powershell()?;
 
         println!("Query feasibility check result: {}", result);
 
@@ -96,10 +113,20 @@ mod tests {
 
     #[test_log::test]
     #[ignore = "Modifies system state"]
-    fn test_check_pinunpin_feasible_with_script() -> WincentResult<()> {
-        let result = check_pinunpin_feasible_with_script()?;
+    fn test_check_pinunpin_feasible_powershell() -> WincentResult<()> {
+        let result = check_pinunpin_feasible_powershell()?;
 
         println!("Pin/Unpin feasibility check result: {}", result);
+
+        Ok(())
+    }
+
+    #[test_log::test]
+    fn test_check_pinunpin_feasible_native() -> WincentResult<()> {
+        let result = check_pinunpin_feasible_native()?;
+
+        println!("Pin/Unpin native feasibility check result: {}", result);
+        assert!(result, "Native COM API should be available on Windows");
 
         Ok(())
     }
