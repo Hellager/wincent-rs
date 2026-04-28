@@ -3,6 +3,14 @@ use crate::WincentResult;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+/// Escapes a string for use inside PowerShell single-quoted strings.
+///
+/// In PowerShell, the only character that needs escaping within `'...'` is the
+/// single-quote itself, which is escaped by doubling it (`''`).
+fn escape_ps_single_quoted(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 /// Enum representing PowerShell script operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PSScript {
@@ -122,7 +130,7 @@ pub(crate) struct AddRecentFileStrategy;
 
 impl ScriptStrategy for AddRecentFileStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParameter)?;
+        let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
         Ok(format!(
             r#"
     {}
@@ -141,7 +149,7 @@ pub(crate) struct RemoveRecentFileStrategy;
 
 impl ScriptStrategy for RemoveRecentFileStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParameter)?;
+        let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
         Ok(format!(
             r#"
     {}
@@ -163,7 +171,7 @@ pub(crate) struct PinToFrequentFolderStrategy;
 
 impl ScriptStrategy for PinToFrequentFolderStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParameter)?;
+        let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
         Ok(format!(
             r#"
     {}
@@ -182,7 +190,7 @@ pub(crate) struct UnpinFromFrequentFolderStrategy;
 
 impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
     fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = parameter.ok_or(WincentError::MissingParameter)?;
+        let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
         Ok(format!(
             r#"
     {}
@@ -419,6 +427,8 @@ mod tests {
             ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
                 .unwrap();
         assert!(script.contains("pintohome"));
+        assert!(script.contains(path));
+        assert!(script.contains(BaseScriptStrategy::shell_com_object()));
     }
 
     #[test]
@@ -428,6 +438,9 @@ mod tests {
             ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
                 .unwrap();
         assert!(script.contains("unpinfromhome"));
+        // Win11 branch must also be present
+        assert!(script.contains("pintohome"));
+        assert!(script.contains(ShellNamespaces::FREQUENT_FOLDERS));
     }
 
     #[test]
@@ -436,6 +449,8 @@ mod tests {
         let script =
             ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path)).unwrap();
         assert!(script.contains("remove"));
+        assert!(script.contains(ShellNamespaces::QUICK_ACCESS));
+        assert!(script.contains(path));
     }
 
     #[test]
@@ -443,6 +458,8 @@ mod tests {
         let script =
             ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None).unwrap();
         assert!(script.contains(ShellNamespaces::QUICK_ACCESS));
+        assert!(script.contains("WaitForExit"));
+        assert!(script.contains("timeout"));
     }
 
     #[test]
@@ -450,70 +467,181 @@ mod tests {
         let script =
             ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None).unwrap();
         assert!(script.contains("pintohome"));
+        assert!(script.contains("unpinfromhome"));
+        assert!(script.contains(ShellNamespaces::FREQUENT_FOLDERS));
+        assert!(script.contains("WaitForExit"));
     }
 
     #[test]
     fn test_script_content_validity() {
         let path = "C:\\Users\\User\\Documents";
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::RefreshExplorer, None)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::QueryQuickAccess, None)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::QueryRecentFile, None)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::QueryFrequentFolder, None)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path))
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
-                .unwrap()
-                .is_empty()
-        );
-        assert!(!ScriptStrategyFactory::generate_script(
+
+        // RefreshExplorer: must call Refresh() on open windows
+        let refresh = ScriptStrategyFactory::generate_script(PSScript::RefreshExplorer, None)
+            .unwrap();
+        assert!(refresh.contains("Refresh()"));
+        assert!(refresh.contains("Windows()"));
+
+        // QueryQuickAccess: must enumerate Quick Access namespace
+        let qqa = ScriptStrategyFactory::generate_script(PSScript::QueryQuickAccess, None)
+            .unwrap();
+        assert!(qqa.contains(ShellNamespaces::QUICK_ACCESS));
+        assert!(qqa.contains("$_.Path"));
+
+        // QueryRecentFile: must filter IsFolder == false
+        let qrf = ScriptStrategyFactory::generate_script(PSScript::QueryRecentFile, None)
+            .unwrap();
+        assert!(qrf.contains("IsFolder -eq $false"));
+        assert!(qrf.contains(ShellNamespaces::QUICK_ACCESS));
+
+        // QueryFrequentFolder: must enumerate FrequentFolders namespace
+        let qff = ScriptStrategyFactory::generate_script(PSScript::QueryFrequentFolder, None)
+            .unwrap();
+        assert!(qff.contains(ShellNamespaces::FREQUENT_FOLDERS));
+        assert!(qff.contains("$_.Path"));
+
+        // AddRecentFile: must Write-Output the path
+        let arf = ScriptStrategyFactory::generate_script(PSScript::AddRecentFile, Some(path))
+            .unwrap();
+        assert!(arf.contains("Write-Output"));
+        assert!(arf.contains(path));
+
+        // RemoveRecentFile: must invoke 'remove' verb
+        let rrf = ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path))
+            .unwrap();
+        assert!(rrf.contains("'remove'"));
+        assert!(rrf.contains(ShellNamespaces::QUICK_ACCESS));
+
+        // PinToFrequentFolder: must invoke 'pintohome' on path namespace self
+        let pin = ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
+            .unwrap();
+        assert!(pin.contains("pintohome"));
+
+        // UnpinFromFrequentFolder: must have both Win10 and Win11 branches
+        let unpin = ScriptStrategyFactory::generate_script(
             PSScript::UnpinFromFrequentFolder,
-            Some(path)
+            Some(path),
         )
-        .unwrap()
-        .is_empty());
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            !ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None)
-                .unwrap()
-                .is_empty()
-        );
+        .unwrap();
+        assert!(unpin.contains("unpinfromhome"));
+        assert!(unpin.contains("pintohome"));
+
+        // EmptyPinnedFolders: must invoke 'unpinfromhome' on every item in FrequentFolders
+        let epf = ScriptStrategyFactory::generate_script(PSScript::EmptyPinnedFolders, None)
+            .unwrap();
+        assert!(epf.contains("unpinfromhome"));
+        assert!(epf.contains(ShellNamespaces::FREQUENT_FOLDERS));
+        assert!(epf.contains("ForEach-Object"));
+
+        // Feasibility scripts must reference timeout and subprocess management
+        let cqf = ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None)
+            .unwrap();
+        assert!(cqf.contains("WaitForExit"));
+
+        let cpf = ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None)
+            .unwrap();
+        assert!(cpf.contains("WaitForExit"));
     }
 
     #[test]
-    #[should_panic(expected = "not implemented")]
-    fn test_nonexistent_strategy_error_handling() {
-        struct MockStrategy;
-        impl ScriptStrategy for MockStrategy {
-            fn generate(&self, _: Option<&str>) -> WincentResult<String> {
-                unimplemented!("not implemented");
-            }
+    fn test_missing_parameter_error() {
+        // Scripts that require a path parameter must return MissingParameter when called
+        // with None, not panic or produce empty output.
+        let requires_param = [
+            PSScript::AddRecentFile,
+            PSScript::RemoveRecentFile,
+            PSScript::PinToFrequentFolder,
+            PSScript::UnpinFromFrequentFolder,
+        ];
+        for script_type in &requires_param {
+            let result = ScriptStrategyFactory::generate_script(*script_type, None);
+            assert!(
+                matches!(result, Err(crate::error::WincentError::MissingParameter)),
+                "{:?} with None parameter should return MissingParameter, got {:?}",
+                script_type, result
+            );
+        }
+    }
+
+    /// Verifies that `ScriptStrategyFactory::get_strategy` successfully returns a
+    /// strategy for every `PSScript` variant, and that `generate_script` on each
+    /// no-parameter variant produces non-empty output.  This replaces the previous
+    /// mock-panic test which exercised no real factory behaviour.
+    #[test]
+    fn test_factory_covers_all_variants() {
+        let no_param_variants = [
+            PSScript::RefreshExplorer,
+            PSScript::QueryQuickAccess,
+            PSScript::QueryRecentFile,
+            PSScript::QueryFrequentFolder,
+            PSScript::EmptyPinnedFolders,
+            PSScript::CheckQueryFeasible,
+            PSScript::CheckPinUnpinFeasible,
+        ];
+        for variant in &no_param_variants {
+            let strategy = ScriptStrategyFactory::get_strategy(*variant)
+                .unwrap_or_else(|e| panic!("{:?}: get_strategy failed: {:?}", variant, e));
+            let script = strategy
+                .generate(None)
+                .unwrap_or_else(|e| panic!("{:?}: generate(None) failed: {:?}", variant, e));
+            assert!(!script.is_empty(), "{:?}: generated script is empty", variant);
         }
 
-        let mock = Box::new(MockStrategy);
-        let _ = mock.generate(None);
+        let path = "C:\\Users\\User\\Documents";
+        let param_variants = [
+            PSScript::AddRecentFile,
+            PSScript::RemoveRecentFile,
+            PSScript::PinToFrequentFolder,
+            PSScript::UnpinFromFrequentFolder,
+        ];
+        for variant in &param_variants {
+            let strategy = ScriptStrategyFactory::get_strategy(*variant)
+                .unwrap_or_else(|e| panic!("{:?}: get_strategy failed: {:?}", variant, e));
+            let script = strategy
+                .generate(Some(path))
+                .unwrap_or_else(|e| panic!("{:?}: generate(Some(path)) failed: {:?}", variant, e));
+            assert!(!script.is_empty(), "{:?}: generated script is empty", variant);
+        }
+    }
+
+    #[test]
+    fn test_apostrophe_path_escaping() {
+        let path = "C:\\Users\\O'Brien\\Documents";
+        let escaped_path = "C:\\Users\\O''Brien\\Documents";
+        let cases = [
+            (PSScript::AddRecentFile,           format!("Write-Output '{}'", escaped_path)),
+            (PSScript::RemoveRecentFile,         format!("$_.Path -eq '{}'", escaped_path)),
+            (PSScript::PinToFrequentFolder,      format!("$shell.Namespace('{}').Self.InvokeVerb('pintohome')", escaped_path)),
+            (PSScript::UnpinFromFrequentFolder,  format!("$_.Path -eq '{}'", escaped_path)),
+        ];
+        for (script_type, expected_fragment) in &cases {
+            let script = ScriptStrategyFactory::generate_script(*script_type, Some(path))
+                .unwrap_or_else(|_| panic!("{:?} generation failed", script_type));
+            assert!(
+                script.contains(expected_fragment.as_str()),
+                "{:?}: expected fragment not found in script.\nExpected: {}\nScript: {}",
+                script_type, expected_fragment, script
+            );
+            assert!(
+                !script.contains("O'Brien"),
+                "{:?}: raw unescaped apostrophe found in script",
+                script_type
+            );
+        }
+
+        // UnpinFromFrequentFolder also contains a Win11 branch that calls pintohome with
+        // the escaped path. Verify that branch is correctly escaped too.
+        let unpin_script =
+            ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
+                .expect("UnpinFromFrequentFolder generation failed");
+        let win11_fragment = format!(
+            "$shell.Namespace('{}').Self.InvokeVerb('pintohome')",
+            escaped_path
+        );
+        assert!(
+            unpin_script.contains(&win11_fragment),
+            "UnpinFromFrequentFolder Win11 branch: expected fragment not found.\nExpected: {}\nScript: {}",
+            win11_fragment, unpin_script
+        );
     }
 }

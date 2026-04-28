@@ -2,7 +2,7 @@ use crate::error::WincentError;
 use crate::script_strategy::{PSScript, ScriptStrategyFactory};
 use crate::WincentResult;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -45,13 +45,11 @@ impl ScriptStorage {
 
     fn parse_script_version(file_name: &str) -> Option<String> {
         let base_name = file_name.strip_suffix(".ps1")?;
-
-        let parts: Vec<&str> = base_name.split('_').collect();
-        if parts.len() >= 2 {
-            Some(parts[1].to_string())
-        } else {
-            None
-        }
+        base_name
+            .split('_')
+            .rev()
+            .find(|t| t.contains('.'))
+            .map(|s| s.to_string())
     }
 
     /// Cleans up expired scripts (older than 24 hours)
@@ -75,9 +73,9 @@ impl ScriptStorage {
                     }
                     if !should_remove {
                         if let Ok(metadata) = entry.metadata() {
-                            if let Ok(created) = metadata.created() {
+                            if let Ok(modified) = metadata.modified() {
                                 should_remove =
-                                    now.duration_since(created).unwrap_or(Duration::ZERO)
+                                    now.duration_since(modified).unwrap_or(Duration::ZERO)
                                         > expiry_duration;
                             }
                         }
@@ -96,6 +94,16 @@ impl ScriptStorage {
     fn hash_parameter(parameter: &str) -> String {
         let digest = md5::compute(parameter.as_bytes());
         format!("{:x}", digest)[..8].to_string() // Take first 8 hexadecimal chars
+    }
+
+    /// Reads a script file and strips the leading UTF-8 BOM (if present), returning
+    /// the raw script text. Returns `None` if the file cannot be read.
+    fn read_script_content(path: &Path) -> Option<String> {
+        let mut bytes = Vec::new();
+        File::open(path).ok()?.read_to_end(&mut bytes).ok()?;
+        // Strip 3-byte UTF-8 BOM written by create_script_file
+        let content_bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        String::from_utf8(content_bytes.to_vec()).ok()
     }
 
     /// Creates script file with proper encoding
@@ -121,9 +129,16 @@ impl ScriptStorage {
         let script_name = format!("{:?}_{}.ps1", script_type, Self::SCRIPT_VERSION);
         let script_path = static_dir.join(script_name);
 
-        // Create script if missing
-        if !script_path.exists() {
-            let content = ScriptStrategyFactory::generate_script(script_type, None)?;
+        let content = ScriptStrategyFactory::generate_script(script_type, None)?;
+
+        // Write when missing or when on-disk content differs from freshly generated content.
+        // This ensures that script format changes (e.g. escaping fixes) are propagated to
+        // callers even when the same-version script file already exists on disk.
+        let needs_write = match Self::read_script_content(&script_path) {
+            Some(existing) => existing != content,
+            None => true,
+        };
+        if needs_write {
             Self::create_script_file(&script_path, &content)?;
         }
 
@@ -145,9 +160,14 @@ impl ScriptStorage {
         );
         let script_path = dynamic_dir.join(script_name);
 
-        // Create script if missing
-        if !script_path.exists() {
-            let content = ScriptStrategyFactory::generate_script(script_type, Some(parameter))?;
+        let content = ScriptStrategyFactory::generate_script(script_type, Some(parameter))?;
+
+        // Write when missing or when on-disk content differs from freshly generated content.
+        let needs_write = match Self::read_script_content(&script_path) {
+            Some(existing) => existing != content,
+            None => true,
+        };
+        if needs_write {
             Self::create_script_file(&script_path, &content)?;
         }
 
@@ -159,7 +179,7 @@ impl ScriptStorage {
 mod tests {
     use super::*;
     use filetime::{set_file_mtime, FileTime};
-    use std::fs;
+    use std::fs::{self, File};
     use std::time::SystemTime;
 
     fn current_version() -> String {
@@ -175,6 +195,17 @@ mod tests {
 
         assert_eq!(
             ScriptStorage::parse_script_version("PinToFrequent_0.5.2_abcd1234.ps1"),
+            Some("0.5.2".into())
+        );
+
+        // Script-type names that themselves contain underscores
+        assert_eq!(
+            ScriptStorage::parse_script_version("Some_Script_0.5.2.ps1"),
+            Some("0.5.2".into())
+        );
+
+        assert_eq!(
+            ScriptStorage::parse_script_version("Some_Script_0.5.2_abcd1234.ps1"),
             Some("0.5.2".into())
         );
 
@@ -278,6 +309,74 @@ mod tests {
             !expired_current_ver.exists(),
             "Expired file should be removed regardless of version"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cleanup_mtime_branch_current_version() -> WincentResult<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let ver = env!("CARGO_PKG_VERSION");
+        let file = temp_dir
+            .path()
+            .join(format!("Script_{}.ps1", ver));
+        File::create(&file)?;
+        // Set mtime to 25 hours ago so it is expired
+        let expired_time = SystemTime::now() - Duration::from_secs(25 * 3600);
+        set_file_mtime(&file, FileTime::from_system_time(expired_time))?;
+        ScriptStorage::cleanup_expired_scripts(temp_dir.path())?;
+        assert!(
+            !file.exists(),
+            "File with current version but expired mtime should be removed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_static_script_overwrites_stale_content() -> WincentResult<()> {
+        // get_script_path must overwrite an existing file whose content differs from
+        // the freshly generated script (e.g. after a format/escaping fix in a new build
+        // that kept the same semver).
+        let result = ScriptStorage::get_script_path(PSScript::RefreshExplorer)?;
+        // Overwrite the file with obviously wrong content (simulates stale cache).
+        fs::write(&result, b"stale content")?;
+        // Calling get_script_path again must detect the mismatch and regenerate.
+        let result2 = ScriptStorage::get_script_path(PSScript::RefreshExplorer)?;
+        assert_eq!(result, result2);
+        let on_disk = ScriptStorage::read_script_content(&result2)
+            .expect("should be able to read regenerated script");
+        // The regenerated content must exactly match what the strategy produces —
+        // not just contain a keyword. This catches the case where stale content
+        // happens to include the substring but is otherwise wrong.
+        let expected =
+            ScriptStrategyFactory::generate_script(PSScript::RefreshExplorer, None).unwrap();
+        assert_eq!(
+            on_disk, expected,
+            "regenerated script must exactly match the current strategy output"
+        );
+        // Clean up
+        let _ = fs::remove_file(result2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_script_overwrites_stale_content() -> WincentResult<()> {
+        let param = "C:\\Test\\StaleCheck";
+        let result = ScriptStorage::get_dynamic_script_path(PSScript::PinToFrequentFolder, param)?;
+        fs::write(&result, b"stale content")?;
+        let result2 = ScriptStorage::get_dynamic_script_path(PSScript::PinToFrequentFolder, param)?;
+        assert_eq!(result, result2);
+        let on_disk = ScriptStorage::read_script_content(&result2)
+            .expect("should be able to read regenerated script");
+        let expected = ScriptStrategyFactory::generate_script(
+            PSScript::PinToFrequentFolder,
+            Some(param),
+        )
+        .unwrap();
+        assert_eq!(
+            on_disk, expected,
+            "regenerated dynamic script must exactly match the current strategy output"
+        );
+        let _ = fs::remove_file(result2);
         Ok(())
     }
 }

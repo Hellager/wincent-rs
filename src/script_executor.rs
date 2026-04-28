@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 use tokio::task;
 
@@ -173,6 +173,10 @@ impl ScriptExecutor {
     /// Only errors identified as transient (via `PowerShellError::is_transient()`)
     /// will be retried. Permanent errors fail immediately.
     ///
+    /// Parsing the script output (`parse_output_to_strings`) is performed inside
+    /// the retry loop so that non-zero exit codes — which manifest as transient COM
+    /// lock failures in real-world use — are also subject to retry.
+    ///
     /// # Arguments
     /// * `script_type` - Type of PowerShell script to execute
     /// * `parameter` - Optional parameter for the script
@@ -198,62 +202,87 @@ impl ScriptExecutor {
         script_type: PSScript,
         parameter: Option<String>,
         policy: &RetryPolicy,
-    ) -> WincentResult<Output> {
+    ) -> WincentResult<Vec<String>> {
+        Self::execute_with_retry_inner(script_type, parameter, policy).await
+    }
+
+    /// Inner implementation driven by `execute_with_retry`. Every transient-error
+    /// decision is delegated to `apply_retry_decision`, the same function used by the
+    /// test helper `retry_with_callback`; structural sharing prevents silent drift.
+    async fn execute_with_retry_inner(
+        script_type: PSScript,
+        parameter: Option<String>,
+        policy: &RetryPolicy,
+    ) -> WincentResult<Vec<String>> {
         let mut last_error = None;
 
         for attempt in 0..=policy.max_attempts {
-            // First attempt has no delay, subsequent retries do
             if attempt > 0 {
                 let delay = policy.calculate_delay(attempt - 1);
                 tokio::time::sleep(delay).await;
             }
 
-            match Self::execute_ps_script_async(script_type, parameter.clone()).await {
-                Ok(output) => {
-                    // Success - log if this was a retry
+            let script_path = if let Some(ref p) = parameter {
+                ScriptStorage::get_dynamic_script_path(script_type, p)?
+            } else {
+                ScriptStorage::get_script_path(script_type)?
+            };
+            let start = std::time::Instant::now();
+
+            // --- spawn-error decision (transient spawn failures) ---
+            let raw_output = match Self::execute_ps_script_async(script_type, parameter.clone()).await {
+                Err(e) => {
+                    match apply_retry_decision(Err(e), attempt, policy.max_attempts)? {
+                        RetryAction::Retry(err) => {
+                            eprintln!(
+                                "[wincent] Transient spawn error on attempt {}/{}: {:?} - {}",
+                                attempt + 1, policy.max_attempts + 1, script_type, err.stderr
+                            );
+                            last_error = Some(err);
+                            continue;
+                        }
+                        RetryAction::Done(_) => unreachable!(),
+                    }
+                }
+                Ok(output) => output,
+            };
+
+            // --- parse-error decision (non-zero exit / transient COM errors) ---
+            let duration = start.elapsed();
+            let parse_result = Self::parse_output_to_strings(
+                raw_output, script_type, script_path, parameter.clone(), duration,
+            );
+            match apply_retry_decision(parse_result, attempt, policy.max_attempts)? {
+                RetryAction::Done(result) => {
                     if attempt > 0 {
                         eprintln!(
                             "[wincent] Script execution succeeded after {} retries: {:?}",
                             attempt, script_type
                         );
                     }
-                    return Ok(output);
+                    return Ok(result);
                 }
-                Err(WincentError::PowerShellExecution(err)) => {
-                    // Check if error is transient and we have retries left
-                    if !err.is_transient() || attempt >= policy.max_attempts {
-                        // Permanent error or out of retries - fail immediately
-                        return Err(WincentError::PowerShellExecution(err));
-                    }
-
-                    // Transient error with retries remaining - log and continue
+                RetryAction::Retry(err) => {
                     eprintln!(
-                        "[wincent] Transient error on attempt {}/{}: {:?} - {}",
-                        attempt + 1,
-                        policy.max_attempts + 1,
-                        script_type,
-                        err.stderr
+                        "[wincent] Transient exit-code error on attempt {}/{}: {:?} - {}",
+                        attempt + 1, policy.max_attempts + 1, script_type, err.stderr
                     );
-
                     last_error = Some(err);
-                }
-                Err(e) => {
-                    // Other error types - fail immediately
-                    return Err(e);
                 }
             }
         }
 
-        // All retries exhausted - return last error
         Err(WincentError::PowerShellExecution(
-            last_error.expect("Should have at least one error after exhausting retries")
+            last_error.expect("Should have at least one error after exhausting retries"),
         ))
     }
 
     /// Executes PowerShell script with both retry and timeout protection
     ///
     /// Combines retry logic with timeout protection. The timeout applies to the
-    /// entire retry sequence, not individual attempts.
+    /// entire retry sequence, not individual attempts. Output parsing is performed
+    /// inside the retry loop (via `execute_with_retry`), so non-zero exit codes
+    /// are also subject to the retry policy.
     ///
     /// # Arguments
     /// * `script_type` - Type of PowerShell script to execute
@@ -284,7 +313,7 @@ impl ScriptExecutor {
         parameter: Option<String>,
         timeout: Duration,
         retry_policy: &RetryPolicy,
-    ) -> WincentResult<Output> {
+    ) -> WincentResult<Vec<String>> {
         let execution = Self::execute_with_retry(script_type, parameter.clone(), retry_policy);
 
         match tokio::time::timeout(timeout, execution).await {
@@ -320,7 +349,7 @@ impl ScriptExecutor {
 
 /// Cached script executor with automatic invalidation
 pub struct CachedScriptExecutor {
-    cache: Arc<Mutex<HashMap<CacheKey, CacheEntry>>>,
+    cache: Mutex<HashMap<CacheKey, CacheEntry>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -414,7 +443,7 @@ impl QuickAccessDataFiles {
 impl CachedScriptExecutor {
     pub fn new() -> Self {
         Self {
-            cache: Arc::new(Mutex::new(HashMap::new())),
+            cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -555,28 +584,13 @@ impl CachedScriptExecutor {
     ) -> WincentResult<Vec<String>> {
         // For non-cached operations, use ScriptExecutor's retry logic directly
         if !Self::should_cache(script_type) {
-            let output = ScriptExecutor::execute_with_retry_and_timeout(
+            return ScriptExecutor::execute_with_retry_and_timeout(
                 script_type,
                 parameter.clone(),
                 timeout,
                 retry_policy,
             )
-            .await?;
-
-            let start = std::time::Instant::now();
-            let script_path = if let Some(ref param) = parameter {
-                ScriptStorage::get_dynamic_script_path(script_type, param)?
-            } else {
-                ScriptStorage::get_script_path(script_type)?
-            };
-            let duration = start.elapsed();
-            return ScriptExecutor::parse_output_to_strings(
-                output,
-                script_type,
-                script_path,
-                parameter,
-                duration,
-            );
+            .await;
         }
 
         // For cached operations, wrap entire retry sequence with timeout
@@ -664,6 +678,70 @@ impl CachedScriptExecutor {
         let cache = self.cache.lock().unwrap();
         cache.len()
     }
+}
+
+/// Applies the standard transient-error retry decision for one attempt result.
+///
+/// This is the **single authoritative copy** of the retry decision logic shared by
+/// both `execute_with_retry_inner` (production async loop) and `retry_with_callback`
+/// (test injection helper).  Both callers pass each attempt's `WincentResult` here;
+/// the return value tells them what to do next:
+///
+/// - `Ok(RetryAction::Done(v))`: return `Ok(v)` immediately.
+/// - `Ok(RetryAction::Retry(err))`: store `err` as `last_error` and continue the loop.
+/// - `Err(e)`: return `Err(e)` immediately (permanent or non-PowerShell error).
+pub(crate) enum RetryAction {
+    Done(Vec<String>),
+    Retry(crate::error::PowerShellError),
+}
+
+pub(crate) fn apply_retry_decision(
+    result: WincentResult<Vec<String>>,
+    attempt: u32,
+    max_attempts: u32,
+) -> WincentResult<RetryAction> {
+    match result {
+        Ok(v) => Ok(RetryAction::Done(v)),
+        Err(WincentError::PowerShellExecution(err)) => {
+            if !err.is_transient() || attempt >= max_attempts {
+                Err(WincentError::PowerShellExecution(err))
+            } else {
+                Ok(RetryAction::Retry(err))
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Test-only helper: drives the retry/backoff loop by calling `attempt_fn` on each
+/// attempt, delegating every transient-error decision to `apply_retry_decision`.
+///
+/// Because `apply_retry_decision` is shared with `execute_with_retry_inner`, tests
+/// that drive `retry_with_callback` exercise the **same decision code** that runs in
+/// production; drift between the two is structurally prevented.
+#[cfg(test)]
+pub(crate) async fn retry_with_callback<F>(
+    mut attempt_fn: F,
+    policy: &RetryPolicy,
+) -> WincentResult<Vec<String>>
+where
+    F: FnMut() -> WincentResult<Vec<String>>,
+{
+    let mut last_error = None;
+
+    for attempt in 0..=policy.max_attempts {
+        if attempt > 0 {
+            tokio::time::sleep(policy.calculate_delay(attempt - 1)).await;
+        }
+        match apply_retry_decision(attempt_fn(), attempt, policy.max_attempts)? {
+            RetryAction::Done(v) => return Ok(v),
+            RetryAction::Retry(err) => last_error = Some(err),
+        }
+    }
+
+    Err(WincentError::PowerShellExecution(
+        last_error.expect("at least one error after exhausting retries"),
+    ))
 }
 
 #[cfg(test)]
@@ -804,5 +882,130 @@ mod tests {
         assert!(cache_map.is_empty());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_non_zero_exit_produces_transient_retryable_error() {
+        use std::os::windows::process::ExitStatusExt;
+
+        // Non-zero exit with a "locked" message in stderr — is_transient() must be true
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(1),
+            stdout: Vec::new(),
+            stderr: b"Shell namespace file is locked by another process".to_vec(),
+        };
+
+        let result = ScriptExecutor::parse_output_to_strings(
+            output,
+            PSScript::QueryQuickAccess,
+            PathBuf::from("test.ps1"),
+            None,
+            Duration::from_millis(10),
+        );
+
+        assert!(result.is_err(), "Non-zero exit should produce an error");
+        if let Err(WincentError::PowerShellExecution(err)) = result {
+            assert!(
+                err.is_transient(),
+                "Error with 'locked' in stderr should be transient, got kind={:?} stderr={:?}",
+                err.kind,
+                err.stderr
+            );
+        } else {
+            panic!("Expected PowerShellExecution error");
+        }
+    }
+
+    /// Verifies the retry path used for transient parse errors.
+    ///
+    /// `test_non_zero_exit_produces_transient_retryable_error` confirms that a
+    /// non-zero exit with a "locked" stderr is classified as transient. This test
+    /// drives `retry_with_callback`, which shares `apply_retry_decision` with the
+    /// production retry loop, to verify retry count, success-after-retry, and
+    /// permanent-error short-circuit behavior.
+    #[tokio::test]
+    async fn test_retry_loop_fires_on_transient_parse_error() {
+        use crate::error::{PowerShellError, PowerShellErrorKind};
+        use std::sync::{Arc, Mutex};
+
+        let call_count = Arc::new(Mutex::new(0u32));
+        let call_count_clone = call_count.clone();
+
+        let policy = RetryPolicy {
+            max_attempts: 2,
+            initial_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(5),
+            backoff_factor: 1.0,
+            jitter: false,
+        };
+
+        // Drive retry_with_callback; its transient-error decision logic is shared
+        // with execute_with_retry_inner through apply_retry_decision.
+        let result = super::retry_with_callback(
+            move || {
+                let mut count = call_count_clone.lock().unwrap();
+                *count += 1;
+                let current = *count;
+
+                if current <= 2 {
+                    // Simulate what parse_output_to_strings produces on a non-zero exit
+                    // with a transient "locked" stderr (verified by
+                    // test_non_zero_exit_produces_transient_retryable_error).
+                    Err(WincentError::PowerShellExecution(PowerShellError {
+                        kind: PowerShellErrorKind::ExecutionFailed,
+                        script_type: PSScript::QueryQuickAccess,
+                        exit_code: Some(1),
+                        stdout: String::new(),
+                        stderr: "Shell namespace file is locked by another process".to_string(),
+                        script_path: PathBuf::from("test.ps1"),
+                        parameters: None,
+                        duration: None,
+                        io_error: None,
+                        os_error: None,
+                    }))
+                } else {
+                    Ok(vec!["item1".to_string()])
+                }
+            },
+            &policy,
+        )
+        .await;
+
+        let final_count = *call_count.lock().unwrap();
+        assert_eq!(
+            final_count, 3,
+            "retry loop must fire 3 times (2 transient failures + 1 success)"
+        );
+        assert!(result.is_ok(), "result should be Ok after successful retry");
+        assert_eq!(result.unwrap(), vec!["item1".to_string()]);
+
+        // Also confirm that permanent errors (non-transient) stop the loop immediately.
+        let stop_count = Arc::new(Mutex::new(0u32));
+        let stop_count_clone = stop_count.clone();
+        let permanent_result = super::retry_with_callback(
+            move || {
+                *stop_count_clone.lock().unwrap() += 1;
+                Err(WincentError::PowerShellExecution(PowerShellError {
+                    kind: PowerShellErrorKind::ExecutionFailed,
+                    script_type: PSScript::QueryQuickAccess,
+                    exit_code: Some(1),
+                    stdout: String::new(),
+                    stderr: "Access is denied.".to_string(), // non-transient
+                    script_path: PathBuf::from("test.ps1"),
+                    parameters: None,
+                    duration: None,
+                    io_error: None,
+                    os_error: None,
+                }))
+            },
+            &policy,
+        )
+        .await;
+
+        assert_eq!(
+            *stop_count.lock().unwrap(), 1,
+            "permanent error must stop retry loop after first attempt"
+        );
+        assert!(permanent_result.is_err());
     }
 }
