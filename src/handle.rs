@@ -23,163 +23,16 @@ use crate::{
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
     script_executor::ScriptExecutor,
     script_strategy::PSScript,
-    utils::{validate_path, PathType},
+    utils::{paths_equal, validate_path, PathType},
     WincentResult,
 };
 use std::ffi::OsString;
 use std::os::windows::prelude::*;
-use std::path::Path;
 use windows::core::{Interface, VARIANT};
 use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Lightweight path normalization without I/O operations
-///
-/// This function performs fast path normalization without accessing the file system.
-/// It's used as the first stage in path comparison for performance optimization.
-///
-/// # Transformations
-///
-/// - **Case normalization**: Converts to lowercase (Windows is case-insensitive)
-/// - **Slash normalization**: Converts forward slashes to backslashes
-/// - **Trailing slash removal**: Removes trailing backslash (except for root paths like "C:\")
-///
-/// # Arguments
-///
-/// * `path` - The path string to normalize
-///
-/// # Returns
-///
-/// A normalized path string suitable for fast comparison
-///
-/// # Example
-///
-/// ```ignore
-/// assert_eq!(normalize_path_lightweight("C:/Users/Test/"), "c:\\users\\test");
-/// assert_eq!(normalize_path_lightweight("C:\\"), "c:\\"); // Root preserved
-/// ```
-fn normalize_path_lightweight(path: &str) -> String {
-    let mut result = path.to_lowercase().replace('/', "\\");
-
-    // Remove trailing backslash unless it's a root path (e.g., "C:\")
-    if result.len() > 3 && result.ends_with('\\') {
-        result.pop();
-    }
-
-    result
-}
-
-/// Normalizes a Windows path for comparison with canonicalization
-///
-/// This function performs comprehensive path normalization including file system
-/// operations to resolve symlinks, relative paths, and other indirections.
-///
-/// # Transformations
-///
-/// - **Canonicalization**: Resolves symlinks, relative paths (e.g., "..", "."), and junction points
-/// - **Case normalization**: Converts to lowercase (Windows is case-insensitive)
-/// - **Slash normalization**: Converts forward slashes to backslashes
-/// - **Trailing slash removal**: Removes trailing backslash (except for root paths)
-///
-/// # Fallback Behavior
-///
-/// If canonicalization fails (e.g., path doesn't exist), falls back to basic
-/// string normalization without I/O operations.
-///
-/// # Arguments
-///
-/// * `path` - The path string to normalize
-///
-/// # Returns
-///
-/// A normalized path string suitable for accurate comparison
-///
-/// # Performance Note
-///
-/// This function performs I/O operations and is slower than `normalize_path_lightweight()`.
-/// Use it only when canonicalization is needed (e.g., for symlinks or relative paths).
-fn normalize_path_for_comparison(path: &str) -> String {
-    let path_obj = Path::new(path);
-
-    // Try to canonicalize (resolves symlinks, relative paths, etc.)
-    // If it fails, fall back to basic normalization
-    let normalized = if let Ok(canonical) = path_obj.canonicalize() {
-        canonical.to_string_lossy().to_string()
-    } else {
-        path.to_string()
-    };
-
-    // Convert to lowercase for case-insensitive comparison
-    // Remove trailing backslash/slash (unless it's a root like "C:\")
-    let mut result = normalized.to_lowercase().replace('/', "\\");
-
-    // Remove trailing backslash unless it's a root path
-    if result.len() > 3 && result.ends_with('\\') {
-        result.pop();
-    }
-
-    result
-}
-
-/// Checks if two paths are equivalent on Windows using two-stage comparison
-///
-/// This function implements an optimized two-stage path comparison strategy:
-///
-/// # Stage 1: Lightweight Comparison (Fast Path)
-///
-/// Performs string-based normalization without I/O operations:
-/// - Case normalization (lowercase)
-/// - Slash normalization (forward to backslash)
-/// - Trailing slash removal
-///
-/// If paths match at this stage, returns `true` immediately (~microseconds).
-///
-/// # Stage 2: Canonicalization (Slow Path)
-///
-/// Only executed if Stage 1 fails. Performs file system operations to resolve:
-/// - Symlinks and junction points
-/// - Relative paths (e.g., "..", ".")
-/// - Different representations of the same path
-///
-/// This stage involves I/O and is slower (~milliseconds).
-///
-/// # Arguments
-///
-/// * `path1` - First path to compare
-/// * `path2` - Second path to compare
-///
-/// # Returns
-///
-/// `true` if the paths refer to the same location, `false` otherwise
-///
-/// # Performance
-///
-/// - Best case (Stage 1 match): ~1-10 microseconds
-/// - Worst case (Stage 2 needed): ~1-10 milliseconds
-///
-/// # Example
-///
-/// ```ignore
-/// assert!(paths_equal("C:\\Users\\Test", "c:\\users\\test")); // Stage 1
-/// assert!(paths_equal("C:\\Users\\Test", "C:/Users/Test"));   // Stage 1
-/// assert!(paths_equal("C:\\Users\\Test", "C:\\Users\\Test\\")); // Stage 1
-/// // Symlinks would require Stage 2
-/// ```
-fn paths_equal(path1: &str, path2: &str) -> bool {
-    // Stage 1: Fast lightweight comparison (no I/O)
-    let light1 = normalize_path_lightweight(path1);
-    let light2 = normalize_path_lightweight(path2);
-
-    if light1 == light2 {
-        return true;
-    }
-
-    // Stage 2: Canonicalize for symlinks, relative paths, etc.
-    // Only if lightweight comparison failed
-    normalize_path_for_comparison(path1) == normalize_path_for_comparison(path2)
-}
 
 /// Invokes a Shell verb directly on a folder using Folder.Self pattern
 ///
@@ -357,6 +210,13 @@ fn find_and_invoke_verb(path: &str, verb: &str, timeout: std::time::Duration) ->
 /// - [`pin_frequent_folder()`] - Public wrapper with PowerShell fallback
 /// - [`invoke_verb_on_self()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
+    // Pre-check: if the folder is already pinned, return Ok(()) immediately.
+    // On Windows 11 "pintohome" acts as a toggle — calling it on an already-pinned
+    // folder would silently unpin it, violating the documented no-op contract.
+    if is_in_frequent_folders_native(path, timeout)? {
+        return Ok(());
+    }
+
     invoke_verb_on_self(path, "pintohome", timeout)
 }
 
@@ -1110,7 +970,10 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// - **Asynchronous Processing**: The folder may not appear immediately in Quick Access.
 ///   Windows Shell processes these updates asynchronously.
-/// - **Deduplication**: Pinning an already-pinned folder is a no-op (no error).
+/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op — an
+///   explicit pre-check queries the Frequent Folders namespace before invoking the Shell
+///   verb, preventing the Windows 11 `pintohome`-toggle problem where calling the verb
+///   on an already-pinned folder would silently unpin it.
 /// - **Case Insensitive**: Path matching is case-insensitive on Windows.
 /// - **Automatic Tracking**: Windows automatically tracks folder access frequency.
 ///   Pinning a folder makes it permanently visible in Quick Access.

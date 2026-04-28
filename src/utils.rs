@@ -4,6 +4,59 @@ use crate::{
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
+
+/// Lightweight path normalization without I/O operations.
+///
+/// Converts to lowercase, replaces forward slashes with backslashes, and strips
+/// a trailing backslash (except for root paths like `"C:\"`).
+pub(crate) fn normalize_path_lightweight(path: &str) -> String {
+    let mut result = path.to_lowercase().replace('/', "\\");
+
+    // Remove trailing backslash unless it's a root path (e.g., "C:\")
+    if result.len() > 3 && result.ends_with('\\') {
+        result.pop();
+    }
+
+    result
+}
+
+/// Normalizes a Windows path for comparison, using canonicalization when available.
+///
+/// Falls back to [`normalize_path_lightweight`] if `Path::canonicalize` fails
+/// (e.g. path doesn't exist on disk).
+pub(crate) fn normalize_path_for_comparison(path: &str) -> String {
+    let path_obj = Path::new(path);
+
+    let normalized = if let Ok(canonical) = path_obj.canonicalize() {
+        canonical.to_string_lossy().to_string()
+    } else {
+        path.to_string()
+    };
+
+    let mut result = normalized.to_lowercase().replace('/', "\\");
+
+    if result.len() > 3 && result.ends_with('\\') {
+        result.pop();
+    }
+
+    result
+}
+
+/// Checks whether two Windows paths refer to the same location.
+///
+/// Uses a two-stage strategy:
+/// 1. Fast lightweight string comparison (no I/O).
+/// 2. Canonicalization-based comparison (resolves symlinks / relative paths).
+pub(crate) fn paths_equal(path1: &str, path2: &str) -> bool {
+    let light1 = normalize_path_lightweight(path1);
+    let light2 = normalize_path_lightweight(path2);
+
+    if light1 == light2 {
+        return true;
+    }
+
+    normalize_path_for_comparison(path1) == normalize_path_for_comparison(path2)
+}
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{BOOL, HANDLE};
 use windows::Win32::System::Com::{
