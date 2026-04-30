@@ -477,38 +477,36 @@ mod tests {
         let path = "C:\\Users\\User\\Documents";
 
         // RefreshExplorer: must call Refresh() on open windows
-        let refresh = ScriptStrategyFactory::generate_script(PSScript::RefreshExplorer, None)
-            .unwrap();
+        let refresh =
+            ScriptStrategyFactory::generate_script(PSScript::RefreshExplorer, None).unwrap();
         assert!(refresh.contains("Refresh()"));
         assert!(refresh.contains("Windows()"));
 
         // QueryQuickAccess: must enumerate Quick Access namespace
-        let qqa = ScriptStrategyFactory::generate_script(PSScript::QueryQuickAccess, None)
-            .unwrap();
+        let qqa = ScriptStrategyFactory::generate_script(PSScript::QueryQuickAccess, None).unwrap();
         assert!(qqa.contains(ShellNamespaces::QUICK_ACCESS));
         assert!(qqa.contains("$_.Path"));
 
         // QueryRecentFile: must filter IsFolder == false
-        let qrf = ScriptStrategyFactory::generate_script(PSScript::QueryRecentFile, None)
-            .unwrap();
+        let qrf = ScriptStrategyFactory::generate_script(PSScript::QueryRecentFile, None).unwrap();
         assert!(qrf.contains("IsFolder -eq $false"));
         assert!(qrf.contains(ShellNamespaces::QUICK_ACCESS));
 
         // QueryFrequentFolder: must enumerate FrequentFolders namespace
-        let qff = ScriptStrategyFactory::generate_script(PSScript::QueryFrequentFolder, None)
-            .unwrap();
+        let qff =
+            ScriptStrategyFactory::generate_script(PSScript::QueryFrequentFolder, None).unwrap();
         assert!(qff.contains(ShellNamespaces::FREQUENT_FOLDERS));
         assert!(qff.contains("$_.Path"));
 
         // AddRecentFile: must Write-Output the path
-        let arf = ScriptStrategyFactory::generate_script(PSScript::AddRecentFile, Some(path))
-            .unwrap();
+        let arf =
+            ScriptStrategyFactory::generate_script(PSScript::AddRecentFile, Some(path)).unwrap();
         assert!(arf.contains("Write-Output"));
         assert!(arf.contains(path));
 
         // RemoveRecentFile: must invoke 'remove' verb
-        let rrf = ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path))
-            .unwrap();
+        let rrf =
+            ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path)).unwrap();
         assert!(rrf.contains("'remove'"));
         assert!(rrf.contains(ShellNamespaces::QUICK_ACCESS));
 
@@ -518,28 +516,26 @@ mod tests {
         assert!(pin.contains("pintohome"));
 
         // UnpinFromFrequentFolder: must have both Win10 and Win11 branches
-        let unpin = ScriptStrategyFactory::generate_script(
-            PSScript::UnpinFromFrequentFolder,
-            Some(path),
-        )
-        .unwrap();
+        let unpin =
+            ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
+                .unwrap();
         assert!(unpin.contains("unpinfromhome"));
         assert!(unpin.contains("pintohome"));
 
         // EmptyPinnedFolders: must invoke 'unpinfromhome' on every item in FrequentFolders
-        let epf = ScriptStrategyFactory::generate_script(PSScript::EmptyPinnedFolders, None)
-            .unwrap();
+        let epf =
+            ScriptStrategyFactory::generate_script(PSScript::EmptyPinnedFolders, None).unwrap();
         assert!(epf.contains("unpinfromhome"));
         assert!(epf.contains(ShellNamespaces::FREQUENT_FOLDERS));
         assert!(epf.contains("ForEach-Object"));
 
         // Feasibility scripts must reference timeout and subprocess management
-        let cqf = ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None)
-            .unwrap();
+        let cqf =
+            ScriptStrategyFactory::generate_script(PSScript::CheckQueryFeasible, None).unwrap();
         assert!(cqf.contains("WaitForExit"));
 
-        let cpf = ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None)
-            .unwrap();
+        let cpf =
+            ScriptStrategyFactory::generate_script(PSScript::CheckPinUnpinFeasible, None).unwrap();
         assert!(cpf.contains("WaitForExit"));
     }
 
@@ -558,7 +554,8 @@ mod tests {
             assert!(
                 matches!(result, Err(crate::error::WincentError::MissingParameter)),
                 "{:?} with None parameter should return MissingParameter, got {:?}",
-                script_type, result
+                script_type,
+                result
             );
         }
     }
@@ -584,7 +581,11 @@ mod tests {
             let script = strategy
                 .generate(None)
                 .unwrap_or_else(|e| panic!("{:?}: generate(None) failed: {:?}", variant, e));
-            assert!(!script.is_empty(), "{:?}: generated script is empty", variant);
+            assert!(
+                !script.is_empty(),
+                "{:?}: generated script is empty",
+                variant
+            );
         }
 
         let path = "C:\\Users\\User\\Documents";
@@ -600,7 +601,11 @@ mod tests {
             let script = strategy
                 .generate(Some(path))
                 .unwrap_or_else(|e| panic!("{:?}: generate(Some(path)) failed: {:?}", variant, e));
-            assert!(!script.is_empty(), "{:?}: generated script is empty", variant);
+            assert!(
+                !script.is_empty(),
+                "{:?}: generated script is empty",
+                variant
+            );
         }
     }
 
@@ -609,10 +614,25 @@ mod tests {
         let path = "C:\\Users\\O'Brien\\Documents";
         let escaped_path = "C:\\Users\\O''Brien\\Documents";
         let cases = [
-            (PSScript::AddRecentFile,           format!("Write-Output '{}'", escaped_path)),
-            (PSScript::RemoveRecentFile,         format!("$_.Path -eq '{}'", escaped_path)),
-            (PSScript::PinToFrequentFolder,      format!("$shell.Namespace('{}').Self.InvokeVerb('pintohome')", escaped_path)),
-            (PSScript::UnpinFromFrequentFolder,  format!("$_.Path -eq '{}'", escaped_path)),
+            (
+                PSScript::AddRecentFile,
+                format!("Write-Output '{}'", escaped_path),
+            ),
+            (
+                PSScript::RemoveRecentFile,
+                format!("$_.Path -eq '{}'", escaped_path),
+            ),
+            (
+                PSScript::PinToFrequentFolder,
+                format!(
+                    "$shell.Namespace('{}').Self.InvokeVerb('pintohome')",
+                    escaped_path
+                ),
+            ),
+            (
+                PSScript::UnpinFromFrequentFolder,
+                format!("$_.Path -eq '{}'", escaped_path),
+            ),
         ];
         for (script_type, expected_fragment) in &cases {
             let script = ScriptStrategyFactory::generate_script(*script_type, Some(path))
@@ -620,7 +640,9 @@ mod tests {
             assert!(
                 script.contains(expected_fragment.as_str()),
                 "{:?}: expected fragment not found in script.\nExpected: {}\nScript: {}",
-                script_type, expected_fragment, script
+                script_type,
+                expected_fragment,
+                script
             );
             assert!(
                 !script.contains("O'Brien"),

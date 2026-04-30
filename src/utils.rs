@@ -57,19 +57,20 @@ pub(crate) fn paths_equal(path1: &str, path2: &str) -> bool {
 
     normalize_path_for_comparison(path1) == normalize_path_for_comparison(path2)
 }
+use windows::core::Interface;
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{BOOL, HANDLE};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED,
-    CoTaskMemFree,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_LOCAL_SERVER,
+    COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Diagnostics::Debug::VER_PLATFORM_WIN32_NT;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOEXW;
 use windows::Win32::UI::Shell::IsUserAnAdmin;
 use windows::Win32::UI::Shell::{
-    FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG, IShellWindows, IWebBrowser2, ShellWindows,
+    FOLDERID_Recent, IShellWindows, IWebBrowser2, SHGetKnownFolderPath, ShellWindows,
+    KNOWN_FOLDER_FLAG,
 };
-use windows::core::Interface;
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PathType {
@@ -114,19 +115,25 @@ fn refresh_explorer_native() -> WincentResult<()> {
                 if e.code().0 == RPC_E_CHANGED_MODE {
                     false // Don't uninitialize later
                 } else {
-                    return Err(WincentError::SystemError(format!("Failed to initialize COM: {}", e)));
+                    return Err(WincentError::SystemError(format!(
+                        "Failed to initialize COM: {}",
+                        e
+                    )));
                 }
             }
         };
 
         let result = (|| -> WincentResult<()> {
             // Create Shell.Application object
-            let shell_windows: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_LOCAL_SERVER)
-                .map_err(|e| WincentError::SystemError(format!("Failed to create ShellWindows: {}", e)))?;
+            let shell_windows: IShellWindows =
+                CoCreateInstance(&ShellWindows, None, CLSCTX_LOCAL_SERVER).map_err(|e| {
+                    WincentError::SystemError(format!("Failed to create ShellWindows: {}", e))
+                })?;
 
             // Get window count
-            let count = shell_windows.Count()
-                .map_err(|e| WincentError::SystemError(format!("Failed to get window count: {}", e)))?;
+            let count = shell_windows.Count().map_err(|e| {
+                WincentError::SystemError(format!("Failed to get window count: {}", e))
+            })?;
 
             let mut refreshed_count = 0;
             let mut total_explorer_windows = 0;
@@ -158,9 +165,10 @@ fn refresh_explorer_native() -> WincentResult<()> {
             // If we found Explorer windows but couldn't refresh any, return error
             // to trigger PowerShell fallback
             if total_explorer_windows > 0 && refreshed_count == 0 {
-                return Err(WincentError::SystemError(
-                    format!("Found {} Explorer windows but failed to refresh any", total_explorer_windows)
-                ));
+                return Err(WincentError::SystemError(format!(
+                    "Found {} Explorer windows but failed to refresh any",
+                    total_explorer_windows
+                )));
             }
 
             Ok(())
@@ -180,7 +188,8 @@ fn refresh_explorer_native() -> WincentResult<()> {
 /// This is the original implementation, kept as a fallback for compatibility.
 fn refresh_explorer_powershell() -> WincentResult<()> {
     let start = std::time::Instant::now();
-    let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::RefreshExplorer)?;
+    let script_path =
+        crate::script_storage::ScriptStorage::get_script_path(PSScript::RefreshExplorer)?;
     let output = ScriptExecutor::execute_ps_script(PSScript::RefreshExplorer, None)?;
     let duration = start.elapsed();
     let _ = ScriptExecutor::parse_output_to_strings(
@@ -358,8 +367,8 @@ mod utils_test {
     #[test]
     fn test_validate_path_file() -> WincentResult<()> {
         // Create temporary file
-        let temp_file = tempfile::NamedTempFile::new()
-            .map_err(|e| WincentError::SystemError(e.to_string()))?;
+        let temp_file =
+            tempfile::NamedTempFile::new().map_err(|e| WincentError::SystemError(e.to_string()))?;
         let path = temp_file.path().to_str().unwrap();
 
         // Should succeed as file
@@ -376,8 +385,7 @@ mod utils_test {
 
     #[test]
     fn test_validate_path_directory() -> WincentResult<()> {
-        let temp_dir = tempfile::tempdir()
-            .map_err(|e| WincentError::SystemError(e.to_string()))?;
+        let temp_dir = tempfile::tempdir().map_err(|e| WincentError::SystemError(e.to_string()))?;
         let path = temp_dir.path().to_str().unwrap();
 
         // Should succeed as directory
@@ -410,7 +418,10 @@ mod utils_test {
         assert!(result.is_err(), "Non-existent path should fail validation");
 
         if let Err(WincentError::InvalidPath(msg)) = result {
-            assert!(msg.contains("does not exist"), "Error should mention path doesn't exist");
+            assert!(
+                msg.contains("does not exist"),
+                "Error should mention path doesn't exist"
+            );
         } else {
             panic!("Expected InvalidPath error");
         }
@@ -429,10 +440,12 @@ mod utils_test {
         assert!(result.is_err(), "Directory should not validate as file");
 
         if let Err(WincentError::InvalidPath(msg)) = result {
-            assert!(msg.contains("Not a valid file"), "Error should mention type mismatch");
+            assert!(
+                msg.contains("Not a valid file"),
+                "Error should mention type mismatch"
+            );
         }
 
         Ok(())
     }
 }
-

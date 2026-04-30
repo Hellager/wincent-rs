@@ -316,9 +316,7 @@ mod tests {
     fn test_cleanup_mtime_branch_current_version() -> WincentResult<()> {
         let temp_dir = tempfile::tempdir()?;
         let ver = env!("CARGO_PKG_VERSION");
-        let file = temp_dir
-            .path()
-            .join(format!("Script_{}.ps1", ver));
+        let file = temp_dir.path().join(format!("Script_{}.ps1", ver));
         File::create(&file)?;
         // Set mtime to 25 hours ago so it is expired
         let expired_time = SystemTime::now() - Duration::from_secs(25 * 3600);
@@ -367,11 +365,9 @@ mod tests {
         assert_eq!(result, result2);
         let on_disk = ScriptStorage::read_script_content(&result2)
             .expect("should be able to read regenerated script");
-        let expected = ScriptStrategyFactory::generate_script(
-            PSScript::PinToFrequentFolder,
-            Some(param),
-        )
-        .unwrap();
+        let expected =
+            ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(param))
+                .unwrap();
         assert_eq!(
             on_disk, expected,
             "regenerated dynamic script must exactly match the current strategy output"

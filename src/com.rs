@@ -2,8 +2,8 @@
 //!
 //! Provides unified COM initialization classification logic and RAII lifetime management.
 
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::core::HRESULT;
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 /// Raw result classification for COM initialization
 #[derive(Debug, PartialEq)]
@@ -47,15 +47,12 @@ impl ComGuard {
     /// - `Err(ComInitStatus)`: initialization failed
     pub(crate) fn try_initialize() -> Result<Self, ComInitStatus> {
         unsafe {
-            let hr = CoInitializeEx(
-                Some(std::ptr::null_mut()),
-                COINIT_APARTMENTTHREADED,
-            );
+            let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_APARTMENTTHREADED);
 
             match classify_coinit_result(hr) {
-                ComInitStatus::Success | ComInitStatus::AlreadyInitialized => {
-                    Ok(Self { should_uninitialize: true })
-                }
+                ComInitStatus::Success | ComInitStatus::AlreadyInitialized => Ok(Self {
+                    should_uninitialize: true,
+                }),
                 other => Err(other),
             }
         }
@@ -79,10 +76,7 @@ mod tests {
 
     #[test]
     fn test_classify_s_ok() {
-        assert_eq!(
-            classify_coinit_result(HRESULT(0)),
-            ComInitStatus::Success
-        );
+        assert_eq!(classify_coinit_result(HRESULT(0)), ComInitStatus::Success);
     }
 
     #[test]

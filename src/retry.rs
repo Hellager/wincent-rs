@@ -188,8 +188,8 @@ impl RetryPolicy {
     /// ```
     pub fn calculate_delay(&self, attempt: u32) -> Duration {
         // Calculate base delay with exponential backoff
-        let base_delay = self.initial_delay.as_secs_f64()
-            * self.backoff_factor.powi(attempt as i32);
+        let base_delay =
+            self.initial_delay.as_secs_f64() * self.backoff_factor.powi(attempt as i32);
 
         // Cap at max_delay
         let delay = base_delay.min(self.max_delay.as_secs_f64());
@@ -291,9 +291,7 @@ mod tests {
         };
 
         // Generate multiple delays and verify they vary
-        let delays: Vec<Duration> = (0..10)
-            .map(|_| policy.calculate_delay(1))
-            .collect();
+        let delays: Vec<Duration> = (0..10).map(|_| policy.calculate_delay(1)).collect();
 
         // With jitter, not all delays should be identical
         let all_same = delays.windows(2).all(|w| w[0] == w[1]);
@@ -302,7 +300,11 @@ mod tests {
         // All delays should be within ±25% of base delay (200ms)
         for delay in delays {
             let millis = delay.as_millis();
-            assert!(millis >= 150 && millis <= 250, "Delay {} out of expected range", millis);
+            assert!(
+                millis >= 150 && millis <= 250,
+                "Delay {} out of expected range",
+                millis
+            );
         }
     }
 

@@ -16,19 +16,18 @@
 //! - Contains user-specific activity data
 //! - Maximum 20 items per category (Windows default)
 
-use crate::{error::WincentError, QuickAccess, WincentResult};
 use crate::com::{ComGuard, ComInitStatus};
+use crate::{error::WincentError, QuickAccess, WincentResult};
 use windows::core::VARIANT;
-use windows::Win32::System::Com::{
-    CoCreateInstance, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER,
-};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER};
 use windows::Win32::UI::Shell::{Folder, FolderItem, FolderItems, IShellDispatch, Shell};
 
 /// Shell namespace GUID for frequent folders in Windows Quick Access
 ///
 /// This GUID corresponds to the "Frequent Folders" virtual folder in Windows Explorer.
 /// It provides access to folders that Windows tracks as frequently accessed by the user.
-pub(crate) const FREQUENT_FOLDERS_NAMESPACE: &str = "shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}";
+pub(crate) const FREQUENT_FOLDERS_NAMESPACE: &str =
+    "shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}";
 
 /// Filter type for Quick Access item queries
 ///
@@ -247,11 +246,9 @@ pub(crate) fn shell_folder(namespace: &str) -> WincentResult<Folder> {
 /// COM is automatically cleaned up via RAII when the function returns.
 pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let _com = ComGuard::try_initialize().map_err(|status| match status {
-        ComInitStatus::ApartmentMismatch => {
-            WincentError::ComApartmentMismatch(
-                "Thread already initialized with incompatible COM apartment model".to_string()
-            )
-        }
+        ComInitStatus::ApartmentMismatch => WincentError::ComApartmentMismatch(
+            "Thread already initialized with incompatible COM apartment model".to_string(),
+        ),
         ComInitStatus::OtherError(hr) => {
             WincentError::SystemError(format!("Failed to initialize COM: 0x{:08X}", hr))
         }
@@ -538,7 +535,9 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 /// - [`is_in_recent_files()`] - For fuzzy/substring matching
 pub fn is_recent_file_exact(path: &str) -> WincentResult<bool> {
     let items = get_recent_files()?;
-    Ok(items.iter().any(|item| crate::utils::paths_equal(item, path)))
+    Ok(items
+        .iter()
+        .any(|item| crate::utils::paths_equal(item, path)))
 }
 
 /// Checks if a file path or keyword exists in the Windows Recent Files list.
@@ -633,7 +632,9 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
 /// - [`is_in_frequent_folders()`] - For fuzzy/substring matching
 pub fn is_frequent_folder_exact(path: &str) -> WincentResult<bool> {
     let items = get_frequent_folders()?;
-    Ok(items.iter().any(|item| crate::utils::paths_equal(item, path)))
+    Ok(items
+        .iter()
+        .any(|item| crate::utils::paths_equal(item, path)))
 }
 
 /// Checks if a folder path or keyword exists in the Windows Frequent Folders list.
@@ -733,7 +734,9 @@ pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 /// - [`is_in_quick_access()`] - For fuzzy/substring matching
 pub fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
     let items = get_quick_access_items()?;
-    Ok(items.iter().any(|item| crate::utils::paths_equal(item, path)))
+    Ok(items
+        .iter()
+        .any(|item| crate::utils::paths_equal(item, path)))
 }
 
 /// Checks if a path or keyword exists in the Windows Quick Access list (Recent Items namespace).
@@ -922,16 +925,22 @@ mod tests {
         // Check that all items from native API exist in PowerShell results
         for item in &native_results {
             assert!(
-                powershell_results.iter().any(|ps| crate::utils::paths_equal(item, ps)),
-                "Native API item '{}' not found in PowerShell results", item
+                powershell_results
+                    .iter()
+                    .any(|ps| crate::utils::paths_equal(item, ps)),
+                "Native API item '{}' not found in PowerShell results",
+                item
             );
         }
 
         // Check that all items from PowerShell exist in native API results
         for item in &powershell_results {
             assert!(
-                native_results.iter().any(|n| crate::utils::paths_equal(item, n)),
-                "PowerShell item '{}' not found in Native API results", item
+                native_results
+                    .iter()
+                    .any(|n| crate::utils::paths_equal(item, n)),
+                "PowerShell item '{}' not found in Native API results",
+                item
             );
         }
 
@@ -958,15 +967,21 @@ mod tests {
 
         for item in &native_results {
             assert!(
-                powershell_results.iter().any(|ps| crate::utils::paths_equal(item, ps)),
-                "Native API item '{}' not found in PowerShell results", item
+                powershell_results
+                    .iter()
+                    .any(|ps| crate::utils::paths_equal(item, ps)),
+                "Native API item '{}' not found in PowerShell results",
+                item
             );
         }
 
         for item in &powershell_results {
             assert!(
-                native_results.iter().any(|n| crate::utils::paths_equal(item, n)),
-                "PowerShell item '{}' not found in Native API results", item
+                native_results
+                    .iter()
+                    .any(|n| crate::utils::paths_equal(item, n)),
+                "PowerShell item '{}' not found in Native API results",
+                item
             );
         }
 
@@ -993,15 +1008,21 @@ mod tests {
 
         for item in &native_results {
             assert!(
-                powershell_results.iter().any(|ps| crate::utils::paths_equal(item, ps)),
-                "Native API item '{}' not found in PowerShell results", item
+                powershell_results
+                    .iter()
+                    .any(|ps| crate::utils::paths_equal(item, ps)),
+                "Native API item '{}' not found in PowerShell results",
+                item
             );
         }
 
         for item in &powershell_results {
             assert!(
-                native_results.iter().any(|n| crate::utils::paths_equal(item, n)),
-                "PowerShell item '{}' not found in Native API results", item
+                native_results
+                    .iter()
+                    .any(|n| crate::utils::paths_equal(item, n)),
+                "PowerShell item '{}' not found in Native API results",
+                item
             );
         }
 
@@ -1018,7 +1039,9 @@ mod tests {
         // Strategy: Use multiple init/uninit cycles to amplify reference leaks.
         // If the library leaks references, COM will remain initialized after
         // the final CoUninitialize(), which we can detect.
-        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED};
+        use windows::Win32::System::Com::{
+            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
+        };
 
         unsafe {
             // Cycle 1: User init -> library call -> user uninit
@@ -1027,18 +1050,29 @@ mod tests {
 
             {
                 let _guard = ComGuard::try_initialize();
-                assert!(_guard.is_ok(), "Should handle S_FALSE correctly: {:?}", _guard);
+                assert!(
+                    _guard.is_ok(),
+                    "Should handle S_FALSE correctly: {:?}",
+                    _guard
+                );
             } // Guard drops here, should call CoUninitialize
 
             CoUninitialize();
 
             // Cycle 2: Repeat to amplify potential leaks
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            assert_eq!(hr.0, 0, "Second cycle should return S_OK (COM was uninitialized)");
+            assert_eq!(
+                hr.0, 0,
+                "Second cycle should return S_OK (COM was uninitialized)"
+            );
 
             {
                 let _guard = ComGuard::try_initialize();
-                assert!(_guard.is_ok(), "Should handle S_FALSE on second cycle: {:?}", _guard);
+                assert!(
+                    _guard.is_ok(),
+                    "Should handle S_FALSE on second cycle: {:?}",
+                    _guard
+                );
             }
 
             CoUninitialize();
@@ -1049,7 +1083,11 @@ mod tests {
 
             {
                 let _guard = ComGuard::try_initialize();
-                assert!(_guard.is_ok(), "Should handle S_FALSE on third cycle: {:?}", _guard);
+                assert!(
+                    _guard.is_ok(),
+                    "Should handle S_FALSE on third cycle: {:?}",
+                    _guard
+                );
             }
 
             CoUninitialize();
@@ -1081,11 +1119,9 @@ mod tests {
 
             // Call STA-only function (should return ComApartmentMismatch)
             let result = ComGuard::try_initialize().map_err(|status| match status {
-                ComInitStatus::ApartmentMismatch => {
-                    WincentError::ComApartmentMismatch(
-                        "Thread already initialized with incompatible COM apartment model".to_string()
-                    )
-                }
+                ComInitStatus::ApartmentMismatch => WincentError::ComApartmentMismatch(
+                    "Thread already initialized with incompatible COM apartment model".to_string(),
+                ),
                 ComInitStatus::OtherError(hr) => {
                     WincentError::SystemError(format!("Failed to initialize COM: 0x{:08X}", hr))
                 }
@@ -1141,7 +1177,9 @@ mod tests {
             // It may succeed (PowerShell works) or fail with other errors (PowerShell unavailable)
             match result {
                 Err(WincentError::ComApartmentMismatch(_)) => {
-                    panic!("ComApartmentMismatch should not propagate - fallback should be attempted");
+                    panic!(
+                        "ComApartmentMismatch should not propagate - fallback should be attempted"
+                    );
                 }
                 Ok(_) => {
                     // Fallback succeeded - good!
@@ -1170,7 +1208,11 @@ mod tests {
         let start = Instant::now();
         let native_files = query_recent_native(QuickAccess::RecentFiles)?;
         let native_duration = start.elapsed();
-        println!("  Native API: {:?} ({} items)", native_duration, native_files.len());
+        println!(
+            "  Native API: {:?} ({} items)",
+            native_duration,
+            native_files.len()
+        );
 
         let start = Instant::now();
         let ps_files = query_recent_powershell(QuickAccess::RecentFiles)?;
@@ -1179,30 +1221,48 @@ mod tests {
 
         let speedup = ps_duration.as_secs_f64() / native_duration.as_secs_f64();
         println!("  Speedup: {:.2}x", speedup);
-        println!("  Time saved: {:?}\n", ps_duration.saturating_sub(native_duration));
+        println!(
+            "  Time saved: {:?}\n",
+            ps_duration.saturating_sub(native_duration)
+        );
 
         // Test Frequent Folders
         println!("Testing Frequent Folders Query:");
         let start = Instant::now();
         let native_folders = query_recent_native(QuickAccess::FrequentFolders)?;
         let native_duration = start.elapsed();
-        println!("  Native API: {:?} ({} items)", native_duration, native_folders.len());
+        println!(
+            "  Native API: {:?} ({} items)",
+            native_duration,
+            native_folders.len()
+        );
 
         let start = Instant::now();
         let ps_folders = query_recent_powershell(QuickAccess::FrequentFolders)?;
         let ps_duration = start.elapsed();
-        println!("  PowerShell: {:?} ({} items)", ps_duration, ps_folders.len());
+        println!(
+            "  PowerShell: {:?} ({} items)",
+            ps_duration,
+            ps_folders.len()
+        );
 
         let speedup = ps_duration.as_secs_f64() / native_duration.as_secs_f64();
         println!("  Speedup: {:.2}x", speedup);
-        println!("  Time saved: {:?}\n", ps_duration.saturating_sub(native_duration));
+        println!(
+            "  Time saved: {:?}\n",
+            ps_duration.saturating_sub(native_duration)
+        );
 
         // Test All Items
         println!("Testing All Quick Access Items Query:");
         let start = Instant::now();
         let native_all = query_recent_native(QuickAccess::All)?;
         let native_duration = start.elapsed();
-        println!("  Native API: {:?} ({} items)", native_duration, native_all.len());
+        println!(
+            "  Native API: {:?} ({} items)",
+            native_duration,
+            native_all.len()
+        );
 
         let start = Instant::now();
         let ps_all = query_recent_powershell(QuickAccess::All)?;
@@ -1211,7 +1271,10 @@ mod tests {
 
         let speedup = ps_duration.as_secs_f64() / native_duration.as_secs_f64();
         println!("  Speedup: {:.2}x", speedup);
-        println!("  Time saved: {:?}\n", ps_duration.saturating_sub(native_duration));
+        println!(
+            "  Time saved: {:?}\n",
+            ps_duration.saturating_sub(native_duration)
+        );
 
         // Consistency test (10 runs)
         println!("=== Consistency Test (10 runs of All Items) ===\n");
@@ -1230,7 +1293,10 @@ mod tests {
             let ps_time = start.elapsed();
             ps_times.push(ps_time);
 
-            println!("Run {}: Native {:?}, PowerShell {:?}", i, native_time, ps_time);
+            println!(
+                "Run {}: Native {:?}, PowerShell {:?}",
+                i, native_time, ps_time
+            );
         }
 
         // Calculate statistics

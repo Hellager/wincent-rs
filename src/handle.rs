@@ -21,7 +21,7 @@ use crate::{
     com::{ComGuard, ComInitStatus},
     error::WincentError,
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
-    script_executor::ScriptExecutor,
+    script_executor::{QuickAccessDataFiles, ScriptExecutor},
     script_strategy::PSScript,
     utils::{paths_equal, validate_path, PathType},
     WincentResult,
@@ -33,6 +33,14 @@ use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Options for adding a file to Windows Recent Files.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AddRecentFileOptions {
+    /// Remove the cached Recent Files data file after adding the item so Explorer
+    /// rebuilds the visible list.
+    pub force_update: bool,
+}
 
 /// Invokes a Shell verb directly on a folder using Folder.Self pattern
 ///
@@ -69,31 +77,36 @@ const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 fn invoke_verb_on_self(path: &str, verb: &str, timeout: std::time::Duration) -> WincentResult<()> {
     let path = path.to_owned();
     let verb = verb.to_owned();
-    crate::com_thread::run_on_sta_thread(move || {
-        let folder = shell_folder(&path)?;
+    crate::com_thread::run_on_sta_thread(
+        move || {
+            let folder = shell_folder(&path)?;
 
-        unsafe {
-            let folder3: Folder3 = folder.cast().map_err(|e| {
-                WincentError::SystemError(format!("Failed to cast to Folder3 for {}: {}", path, e))
-            })?;
+            unsafe {
+                let folder3: Folder3 = folder.cast().map_err(|e| {
+                    WincentError::SystemError(format!(
+                        "Failed to cast to Folder3 for {}: {}",
+                        path, e
+                    ))
+                })?;
 
-            let self_item = folder3.Self_().map_err(|e| {
-                WincentError::SystemError(format!("Failed to get Self for {}: {}", path, e))
-            })?;
+                let self_item = folder3.Self_().map_err(|e| {
+                    WincentError::SystemError(format!("Failed to get Self for {}: {}", path, e))
+                })?;
 
-            let verb_variant = VARIANT::from(verb.as_str());
-            self_item.InvokeVerb(&verb_variant).map_err(|e| {
-                WincentError::SystemError(format!(
-                    "Failed to invoke verb '{}' on {}: {}",
-                    verb, path, e
-                ))
-            })?;
-        }
+                let verb_variant = VARIANT::from(verb.as_str());
+                self_item.InvokeVerb(&verb_variant).map_err(|e| {
+                    WincentError::SystemError(format!(
+                        "Failed to invoke verb '{}' on {}: {}",
+                        verb, path, e
+                    ))
+                })?;
+            }
 
-        Ok(())
-    }, timeout)
+            Ok(())
+        },
+        timeout,
+    )
 }
-
 
 /// Finds a folder item in Frequent Folders namespace and invokes a Shell verb on it
 ///
@@ -141,46 +154,49 @@ fn invoke_verb_on_self(path: &str, verb: &str, timeout: std::time::Duration) -> 
 fn find_and_invoke_verb(path: &str, verb: &str, timeout: std::time::Duration) -> WincentResult<()> {
     let path = path.to_owned();
     let verb = verb.to_owned();
-    crate::com_thread::run_on_sta_thread(move || {
-        let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
-        let items = folder_items(&folder)?;
+    crate::com_thread::run_on_sta_thread(
+        move || {
+            let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
+            let items = folder_items(&folder)?;
 
-        let count = unsafe {
-            items.Count().map_err(|e| {
-                WincentError::SystemError(format!("Failed to get item count: {}", e))
-            })?
-        };
-
-        for index in 0..count {
-            let index_variant = VARIANT::from(index);
-            let item = unsafe {
-                match items.Item(&index_variant) {
-                    Ok(item) => item,
-                    Err(_) => continue,
-                }
+            let count = unsafe {
+                items.Count().map_err(|e| {
+                    WincentError::SystemError(format!("Failed to get item count: {}", e))
+                })?
             };
 
-            if let Some(item_path_str) = item_path(&item) {
-                if paths_equal(&item_path_str, &path) {
-                    let verb_variant = VARIANT::from(verb.as_str());
-                    unsafe {
-                        item.InvokeVerb(&verb_variant).map_err(|e| {
-                            WincentError::SystemError(format!(
-                                "Failed to invoke verb '{}' on {}: {}",
-                                verb, path, e
-                            ))
-                        })?;
+            for index in 0..count {
+                let index_variant = VARIANT::from(index);
+                let item = unsafe {
+                    match items.Item(&index_variant) {
+                        Ok(item) => item,
+                        Err(_) => continue,
                     }
-                    return Ok(());
+                };
+
+                if let Some(item_path_str) = item_path(&item) {
+                    if paths_equal(&item_path_str, &path) {
+                        let verb_variant = VARIANT::from(verb.as_str());
+                        unsafe {
+                            item.InvokeVerb(&verb_variant).map_err(|e| {
+                                WincentError::SystemError(format!(
+                                    "Failed to invoke verb '{}' on {}: {}",
+                                    verb, path, e
+                                ))
+                            })?;
+                        }
+                        return Ok(());
+                    }
                 }
             }
-        }
 
-        Err(WincentError::NotInRecent(format!(
-            "Folder not found in frequent folders: {}",
-            path
-        )))
-    }, timeout)
+            Err(WincentError::NotInRecent(format!(
+                "Folder not found in frequent folders: {}",
+                path
+            )))
+        },
+        timeout,
+    )
 }
 
 /// Pins a folder to Quick Access using native COM API
@@ -256,34 +272,37 @@ fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Wince
 /// - [`unpin_frequent_folder_native()`] - Uses this function for pre-check
 fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> WincentResult<bool> {
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(move || {
-        let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
-        let items = folder_items(&folder)?;
+    crate::com_thread::run_on_sta_thread(
+        move || {
+            let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
+            let items = folder_items(&folder)?;
 
-        let count = unsafe {
-            items.Count().map_err(|e| {
-                WincentError::SystemError(format!("Failed to get item count: {}", e))
-            })?
-        };
-
-        for index in 0..count {
-            let index_variant = VARIANT::from(index);
-            let item = unsafe {
-                match items.Item(&index_variant) {
-                    Ok(item) => item,
-                    Err(_) => continue,
-                }
+            let count = unsafe {
+                items.Count().map_err(|e| {
+                    WincentError::SystemError(format!("Failed to get item count: {}", e))
+                })?
             };
 
-            if let Some(item_path_str) = item_path(&item) {
-                if paths_equal(&item_path_str, &path) {
-                    return Ok(true);
+            for index in 0..count {
+                let index_variant = VARIANT::from(index);
+                let item = unsafe {
+                    match items.Item(&index_variant) {
+                        Ok(item) => item,
+                        Err(_) => continue,
+                    }
+                };
+
+                if let Some(item_path_str) = item_path(&item) {
+                    if paths_equal(&item_path_str, &path) {
+                        return Ok(true);
+                    }
                 }
             }
-        }
 
-        Ok(false)
-    }, timeout)
+            Ok(false)
+        },
+        timeout,
+    )
 }
 ///
 /// This function implements a **safe Windows version-aware strategy**:
@@ -464,14 +483,10 @@ pub(crate) fn add_file_to_recent_native(path: &str) -> WincentResult<()> {
 
     // Initialize COM (handle already-initialized case)
     let _com = ComGuard::try_initialize().map_err(|status| match status {
-        ComInitStatus::ApartmentMismatch => {
-            WincentError::ComApartmentMismatch(
-                "Thread already initialized with incompatible COM apartment model".to_string()
-            )
-        }
-        ComInitStatus::OtherError(hr) => {
-            WincentError::WindowsApi(hr)
-        }
+        ComInitStatus::ApartmentMismatch => WincentError::ComApartmentMismatch(
+            "Thread already initialized with incompatible COM apartment model".to_string(),
+        ),
+        ComInitStatus::OtherError(hr) => WincentError::WindowsApi(hr),
         _ => unreachable!(),
     })?;
 
@@ -550,55 +565,58 @@ pub(crate) fn add_file_to_recent_native(path: &str) -> WincentResult<()> {
 /// - [`remove_from_recent_files()`] - Public wrapper with fallback strategy
 fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(move || {
-        let recent_namespace = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
-        let folder = shell_folder(recent_namespace)?;
-        let items = folder_items(&folder)?;
+    crate::com_thread::run_on_sta_thread(
+        move || {
+            let recent_namespace = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
+            let folder = shell_folder(recent_namespace)?;
+            let items = folder_items(&folder)?;
 
-        let count = unsafe {
-            items.Count().map_err(|e| {
-                WincentError::SystemError(format!("Failed to get item count: {}", e))
-            })?
-        };
-
-        // Search for the target file
-        for index in 0..count {
-            let index_variant = VARIANT::from(index);
-            let item = unsafe {
-                match items.Item(&index_variant) {
-                    Ok(item) => item,
-                    Err(_) => continue,
-                }
+            let count = unsafe {
+                items.Count().map_err(|e| {
+                    WincentError::SystemError(format!("Failed to get item count: {}", e))
+                })?
             };
 
-            // Check if this is a file (not folder)
-            let is_folder = unsafe { item.IsFolder().map(bool::from).unwrap_or(true) };
-            if is_folder {
-                continue;
-            }
-
-            if let Some(item_path_str) = item_path(&item) {
-                if paths_equal(&item_path_str, &path) {
-                    // Found the file, invoke remove verb
-                    let verb_variant = VARIANT::from("remove");
-                    unsafe {
-                        item.InvokeVerb(&verb_variant).map_err(|e| {
-                            WincentError::SystemError(format!(
-                                "Failed to invoke 'remove' verb on {}: {}",
-                                path, e
-                            ))
-                        })?;
+            // Search for the target file
+            for index in 0..count {
+                let index_variant = VARIANT::from(index);
+                let item = unsafe {
+                    match items.Item(&index_variant) {
+                        Ok(item) => item,
+                        Err(_) => continue,
                     }
-                    return Ok(());
+                };
+
+                // Check if this is a file (not folder)
+                let is_folder = unsafe { item.IsFolder().map(bool::from).unwrap_or(true) };
+                if is_folder {
+                    continue;
+                }
+
+                if let Some(item_path_str) = item_path(&item) {
+                    if paths_equal(&item_path_str, &path) {
+                        // Found the file, invoke remove verb
+                        let verb_variant = VARIANT::from("remove");
+                        unsafe {
+                            item.InvokeVerb(&verb_variant).map_err(|e| {
+                                WincentError::SystemError(format!(
+                                    "Failed to invoke 'remove' verb on {}: {}",
+                                    path, e
+                                ))
+                            })?;
+                        }
+                        return Ok(());
+                    }
                 }
             }
-        }
 
-        Err(WincentError::NotInRecent(format!(
-            "File not found in recent items: {}",
-            path
-        )))
-    }, timeout)
+            Err(WincentError::NotInRecent(format!(
+                "File not found in recent items: {}",
+                path
+            )))
+        },
+        timeout,
+    )
 }
 
 /// Removes a file from the Windows Recent Items list using PowerShell
@@ -849,6 +867,20 @@ pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
     add_file_to_recent_native(path)
 }
 
+/// Adds a file to Windows Recent Files with explicit display refresh behavior.
+pub fn add_to_recent_files_with_options(
+    path: &str,
+    options: AddRecentFileOptions,
+) -> WincentResult<()> {
+    add_file_to_recent_native(path)?;
+
+    if options.force_update {
+        QuickAccessDataFiles::new()?.remove_recent_file()?;
+    }
+
+    Ok(())
+}
+
 /// Removes a file from Windows Recent Files.
 ///
 /// This function uses a **two-tier fallback strategy** to maximize compatibility
@@ -928,7 +960,8 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
 
     // Try native COM first (fast path), fallback to PowerShell if it fails
-    remove_recent_file_native(path, DEFAULT_COM_TIMEOUT).or_else(|_| remove_recent_file_powershell(path))
+    remove_recent_file_native(path, DEFAULT_COM_TIMEOUT)
+        .or_else(|_| remove_recent_file_powershell(path))
 }
 
 /// Pins a folder to Windows Quick Access (Frequent Folders).
@@ -1274,8 +1307,7 @@ mod tests {
         max_retries: u32,
     ) -> WincentResult<bool> {
         for _ in 0..max_retries {
-            let frequent_folders =
-                query_recent(crate::QuickAccess::FrequentFolders)?;
+            let frequent_folders = query_recent(crate::QuickAccess::FrequentFolders)?;
             let exists = frequent_folders.iter().any(|p| p == path);
 
             if exists == should_exist {
@@ -1466,10 +1498,7 @@ mod tests {
         // Scenario 3: Verify the folder is no longer pinned after unpin
         thread::sleep(Duration::from_millis(500));
         let is_pinned = crate::query::is_frequent_folder_exact(test_path)?;
-        assert!(
-            !is_pinned,
-            "Folder should not be pinned after unpinning"
-        );
+        assert!(!is_pinned, "Folder should not be pinned after unpinning");
 
         cleanup_test_env(&test_dir)?;
         Ok(())
@@ -1553,7 +1582,9 @@ mod tests {
         if !wait_for_file_status(test_path, true, 20)? {
             // If file doesn't appear, skip this test (Windows Recent Items can be flaky)
             cleanup_test_env(&test_dir)?;
-            println!("Skipping test - file did not appear in recent items (Windows Shell timing issue)");
+            println!(
+                "Skipping test - file did not appear in recent items (Windows Shell timing issue)"
+            );
             return Ok(());
         }
 
@@ -1578,7 +1609,8 @@ mod tests {
         if let Err(e) = result {
             let error_msg = format!("{:?}", e);
             assert!(
-                error_msg.contains("NotInRecent") || error_msg.contains("not found in recent items"),
+                error_msg.contains("NotInRecent")
+                    || error_msg.contains("not found in recent items"),
                 "Should return NotInRecent error when file not found: {:?}",
                 e
             );
@@ -1602,7 +1634,10 @@ mod tests {
         assert!(result.is_err(), "Should fail with empty path");
 
         let result = add_to_recent_files("\0invalid\0path");
-        assert!(result.is_err(), "Invalid path characters should not be allowed");
+        assert!(
+            result.is_err(),
+            "Invalid path characters should not be allowed"
+        );
 
         // Test remove errors - validates fallback consistency
         // If native fails, PowerShell should also fail for the same reasons
@@ -1650,7 +1685,9 @@ mod tests {
         // Wait for both files to appear (20 retries × 500ms = 10 seconds)
         if !wait_for_file_status(test_path, true, 20)? {
             cleanup_test_env(&test_dir)?;
-            println!("Skipping test - file did not appear in recent items (Windows Shell timing issue)");
+            println!(
+                "Skipping test - file did not appear in recent items (Windows Shell timing issue)"
+            );
             return Ok(());
         }
         if !wait_for_file_status(test_path2, true, 20)? {
@@ -1665,7 +1702,7 @@ mod tests {
         cleanup_test_env(&test_dir)?;
         Ok(())
     }
-    
+
     #[test]
     #[ignore = "Modifies system state"]
     fn test_unpin_folder_item_compatibility() -> WincentResult<()> {
@@ -1701,39 +1738,45 @@ mod tests {
         // Must run on a dedicated STA thread: on Win11, shell_folder() for frequent folders
         // requires cross-process calls to explorer.exe that need a message pump.
         let test_path_owned = test_path.to_owned();
-        let found = crate::com_thread::run_on_sta_thread(move || {
-            let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
-            let items = folder_items(&folder)?;
+        let found = crate::com_thread::run_on_sta_thread(
+            move || {
+                let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
+                let items = folder_items(&folder)?;
 
-            let count = unsafe {
-                items.Count().map_err(|e| {
-                    WincentError::SystemError(format!("Failed to get item count: {}", e))
-                })?
-            };
-
-            for index in 0..count {
-                let index_variant = VARIANT::from(index);
-                let item = unsafe {
-                    match items.Item(&index_variant) {
-                        Ok(item) => item,
-                        Err(_) => continue,
-                    }
+                let count = unsafe {
+                    items.Count().map_err(|e| {
+                        WincentError::SystemError(format!("Failed to get item count: {}", e))
+                    })?
                 };
 
-                if let Some(item_path_str) = item_path(&item) {
-                    if paths_equal(&item_path_str, &test_path_owned) {
-                        // Found our test folder - test unpin_folder_item()
-                        // This will try unpinfromhome first, then fallback to pintohome
-                        unpin_folder_item(&item)?;
-                        return Ok(true);
+                for index in 0..count {
+                    let index_variant = VARIANT::from(index);
+                    let item = unsafe {
+                        match items.Item(&index_variant) {
+                            Ok(item) => item,
+                            Err(_) => continue,
+                        }
+                    };
+
+                    if let Some(item_path_str) = item_path(&item) {
+                        if paths_equal(&item_path_str, &test_path_owned) {
+                            // Found our test folder - test unpin_folder_item()
+                            // This will try unpinfromhome first, then fallback to pintohome
+                            unpin_folder_item(&item)?;
+                            return Ok(true);
+                        }
                     }
                 }
-            }
 
-            Ok(false)
-        }, DEFAULT_COM_TIMEOUT)?;
+                Ok(false)
+            },
+            DEFAULT_COM_TIMEOUT,
+        )?;
 
-        assert!(found, "Should have found the test folder in frequent folders");
+        assert!(
+            found,
+            "Should have found the test folder in frequent folders"
+        );
 
         // Verify the folder was actually unpinned
         thread::sleep(Duration::from_millis(500));
@@ -1766,7 +1809,10 @@ mod tests {
         unpin_frequent_folder_native(test_path, DEFAULT_COM_TIMEOUT)?;
         let native_unpin = start.elapsed();
 
-        println!("Native API - Pin: {:?}, Unpin: {:?}", native_pin, native_unpin);
+        println!(
+            "Native API - Pin: {:?}, Unpin: {:?}",
+            native_pin, native_unpin
+        );
         println!("Total: {:?}", native_pin + native_unpin);
 
         cleanup_test_env(&test_dir)?;
@@ -1782,7 +1828,9 @@ mod tests {
         // Strategy: Use multiple init/uninit cycles to amplify reference leaks.
         // If the library leaks references, COM will remain initialized after
         // the final CoUninitialize(), which we can detect.
-        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED};
+        use windows::Win32::System::Com::{
+            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
+        };
 
         let test_dir = setup_test_env()?;
         let test_file = create_test_file(&test_dir, "s_false_test.txt", "content")?;
@@ -1794,16 +1842,27 @@ mod tests {
             assert_eq!(hr.0, 0, "First CoInitializeEx should return S_OK");
 
             let result = add_file_to_recent_native(test_path);
-            assert!(result.is_ok(), "Should handle S_FALSE correctly: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "Should handle S_FALSE correctly: {:?}",
+                result
+            );
 
             CoUninitialize();
 
             // Cycle 2: Repeat to amplify potential leaks
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            assert_eq!(hr.0, 0, "Second cycle should return S_OK (COM was uninitialized)");
+            assert_eq!(
+                hr.0, 0,
+                "Second cycle should return S_OK (COM was uninitialized)"
+            );
 
             let result = add_file_to_recent_native(test_path);
-            assert!(result.is_ok(), "Should handle S_FALSE on second cycle: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "Should handle S_FALSE on second cycle: {:?}",
+                result
+            );
 
             CoUninitialize();
 
@@ -1812,7 +1871,11 @@ mod tests {
             assert_eq!(hr.0, 0, "Third cycle should return S_OK");
 
             let result = add_file_to_recent_native(test_path);
-            assert!(result.is_ok(), "Should handle S_FALSE on third cycle: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "Should handle S_FALSE on third cycle: {:?}",
+                result
+            );
 
             CoUninitialize();
 
@@ -1874,13 +1937,28 @@ mod tests {
     fn test_with_timeout_zero_rejected() {
         // All three *_with_timeout public functions must reject Duration::ZERO
         // before any operation (path validation, native COM, PowerShell fallback).
-        let r = remove_from_recent_files_with_timeout("C:\\Windows\\notepad.exe", std::time::Duration::ZERO);
-        assert!(matches!(r, Err(WincentError::InvalidArgument(_))), "got: {:?}", r);
+        let r = remove_from_recent_files_with_timeout(
+            "C:\\Windows\\notepad.exe",
+            std::time::Duration::ZERO,
+        );
+        assert!(
+            matches!(r, Err(WincentError::InvalidArgument(_))),
+            "got: {:?}",
+            r
+        );
 
         let r = add_to_frequent_folders_with_timeout("C:\\Windows", std::time::Duration::ZERO);
-        assert!(matches!(r, Err(WincentError::InvalidArgument(_))), "got: {:?}", r);
+        assert!(
+            matches!(r, Err(WincentError::InvalidArgument(_))),
+            "got: {:?}",
+            r
+        );
 
         let r = remove_from_frequent_folders_with_timeout("C:\\Windows", std::time::Duration::ZERO);
-        assert!(matches!(r, Err(WincentError::InvalidArgument(_))), "got: {:?}", r);
+        assert!(
+            matches!(r, Err(WincentError::InvalidArgument(_))),
+            "got: {:?}",
+            r
+        );
     }
 }

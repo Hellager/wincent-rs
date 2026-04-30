@@ -1,22 +1,18 @@
 use crate::error::WincentError;
-use crate::retry::RetryPolicy;
 use crate::script_storage::ScriptStorage;
 use crate::script_strategy::PSScript;
 use crate::utils::get_windows_recent_folder;
 use crate::WincentResult;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime};
-use tokio::task;
+use std::time::Duration;
 
-/// PowerShell script executor
+/// PowerShell script executor.
 pub(crate) struct ScriptExecutor;
 
 impl ScriptExecutor {
-    /// Executes PowerShell script synchronously
+    /// Executes a PowerShell script synchronously.
     pub fn execute_ps_script(
         script_type: PSScript,
         parameter: Option<&str>,
@@ -41,11 +37,8 @@ impl ScriptExecutor {
             .map_err(|e| {
                 use crate::error::{PowerShellError, PowerShellErrorKind};
 
-                // Capture IO error details
                 let io_error = Some(e.kind());
                 let os_error = e.raw_os_error();
-
-                // Determine error kind based on error type
                 let kind = if let Some(5) = os_error {
                     PowerShellErrorKind::AccessDenied
                 } else if e.kind() == std::io::ErrorKind::PermissionDenied {
@@ -69,25 +62,7 @@ impl ScriptExecutor {
             })
     }
 
-    /// Executes PowerShell script asynchronously
-    pub async fn execute_ps_script_async(
-        script_type: PSScript,
-        parameter: Option<String>,
-    ) -> WincentResult<Output> {
-        // Clone parameters for async task
-        let param_clone = parameter.clone();
-
-        // Execute in separate thread
-        let result = task::spawn_blocking(move || {
-            Self::execute_ps_script(script_type, param_clone.as_deref())
-        })
-        .await
-        .map_err(|e| WincentError::AsyncExecution(e.to_string()))??;
-
-        Ok(result)
-    }
-
-    /// Parses script output into string collection
+    /// Parses script output into a string collection.
     pub fn parse_output_to_strings(
         output: Output,
         script_type: PSScript,
@@ -99,8 +74,6 @@ impl ScriptExecutor {
             use crate::error::PowerShellError;
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-            // Infer error kind from stderr content
             let kind = PowerShellError::infer_kind_from_stderr(&stderr);
 
             return Err(WincentError::PowerShellExecution(PowerShellError {
@@ -118,7 +91,7 @@ impl ScriptExecutor {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let lines: Vec<String> = stdout
+        let lines = stdout
             .lines()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -126,267 +99,24 @@ impl ScriptExecutor {
 
         Ok(lines)
     }
-
-    /// Executes script with timeout protection
-    #[allow(dead_code)]
-    pub async fn execute_with_timeout(
-        script_type: PSScript,
-        parameter: Option<String>,
-        timeout_secs: u64,
-    ) -> WincentResult<Output> {
-        let execution = Self::execute_ps_script_async(script_type, parameter.clone());
-
-        match tokio::time::timeout(Duration::from_secs(timeout_secs), execution).await {
-            Ok(result) => result,
-            Err(_) => {
-                use crate::error::{PowerShellError, PowerShellErrorKind};
-                use crate::script_storage::ScriptStorage;
-
-                // Get script path for error context
-                let script_path = if let Some(ref param) = parameter {
-                    ScriptStorage::get_dynamic_script_path(script_type, param)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                } else {
-                    ScriptStorage::get_script_path(script_type)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                };
-
-                Err(WincentError::PowerShellExecution(PowerShellError {
-                    kind: PowerShellErrorKind::Timeout,
-                    script_type,
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: format!("Operation timed out after {} seconds", timeout_secs),
-                    script_path,
-                    parameters: parameter,
-                    duration: Some(Duration::from_secs(timeout_secs)),
-                    io_error: None,
-                    os_error: None,
-                }))
-            }
-        }
-    }
-
-    /// Executes PowerShell script with retry mechanism
-    ///
-    /// Automatically retries transient errors according to the provided retry policy.
-    /// Only errors identified as transient (via `PowerShellError::is_transient()`)
-    /// will be retried. Permanent errors fail immediately.
-    ///
-    /// Parsing the script output (`parse_output_to_strings`) is performed inside
-    /// the retry loop so that non-zero exit codes — which manifest as transient COM
-    /// lock failures in real-world use — are also subject to retry.
-    ///
-    /// # Arguments
-    /// * `script_type` - Type of PowerShell script to execute
-    /// * `parameter` - Optional parameter for the script
-    /// * `policy` - Retry policy configuration
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # async fn example() -> WincentResult<()> {
-    /// // Retry is automatically handled by QuickAccessManager
-    /// let manager = QuickAccessManager::builder()
-    ///     .retry_policy(RetryPolicy::default())
-    ///     .build()
-    ///     .await?;
-    ///
-    /// // Operations will automatically retry on transient errors
-    /// let items = manager.get_items(QuickAccess::RecentFiles).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn execute_with_retry(
-        script_type: PSScript,
-        parameter: Option<String>,
-        policy: &RetryPolicy,
-    ) -> WincentResult<Vec<String>> {
-        Self::execute_with_retry_inner(script_type, parameter, policy).await
-    }
-
-    /// Inner implementation driven by `execute_with_retry`. Every transient-error
-    /// decision is delegated to `apply_retry_decision`, the same function used by the
-    /// test helper `retry_with_callback`; structural sharing prevents silent drift.
-    async fn execute_with_retry_inner(
-        script_type: PSScript,
-        parameter: Option<String>,
-        policy: &RetryPolicy,
-    ) -> WincentResult<Vec<String>> {
-        let mut last_error = None;
-
-        for attempt in 0..=policy.max_attempts {
-            if attempt > 0 {
-                let delay = policy.calculate_delay(attempt - 1);
-                tokio::time::sleep(delay).await;
-            }
-
-            let script_path = if let Some(ref p) = parameter {
-                ScriptStorage::get_dynamic_script_path(script_type, p)?
-            } else {
-                ScriptStorage::get_script_path(script_type)?
-            };
-            let start = std::time::Instant::now();
-
-            // --- spawn-error decision (transient spawn failures) ---
-            let raw_output = match Self::execute_ps_script_async(script_type, parameter.clone()).await {
-                Err(e) => {
-                    match apply_retry_decision(Err(e), attempt, policy.max_attempts)? {
-                        RetryAction::Retry(err) => {
-                            eprintln!(
-                                "[wincent] Transient spawn error on attempt {}/{}: {:?} - {}",
-                                attempt + 1, policy.max_attempts + 1, script_type, err.stderr
-                            );
-                            last_error = Some(err);
-                            continue;
-                        }
-                        RetryAction::Done(_) => unreachable!(),
-                    }
-                }
-                Ok(output) => output,
-            };
-
-            // --- parse-error decision (non-zero exit / transient COM errors) ---
-            let duration = start.elapsed();
-            let parse_result = Self::parse_output_to_strings(
-                raw_output, script_type, script_path, parameter.clone(), duration,
-            );
-            match apply_retry_decision(parse_result, attempt, policy.max_attempts)? {
-                RetryAction::Done(result) => {
-                    if attempt > 0 {
-                        eprintln!(
-                            "[wincent] Script execution succeeded after {} retries: {:?}",
-                            attempt, script_type
-                        );
-                    }
-                    return Ok(result);
-                }
-                RetryAction::Retry(err) => {
-                    eprintln!(
-                        "[wincent] Transient exit-code error on attempt {}/{}: {:?} - {}",
-                        attempt + 1, policy.max_attempts + 1, script_type, err.stderr
-                    );
-                    last_error = Some(err);
-                }
-            }
-        }
-
-        Err(WincentError::PowerShellExecution(
-            last_error.expect("Should have at least one error after exhausting retries"),
-        ))
-    }
-
-    /// Executes PowerShell script with both retry and timeout protection
-    ///
-    /// Combines retry logic with timeout protection. The timeout applies to the
-    /// entire retry sequence, not individual attempts. Output parsing is performed
-    /// inside the retry loop (via `execute_with_retry`), so non-zero exit codes
-    /// are also subject to the retry policy.
-    ///
-    /// # Arguments
-    /// * `script_type` - Type of PowerShell script to execute
-    /// * `parameter` - Optional parameter for the script
-    /// * `timeout` - Maximum duration for all retry attempts combined
-    /// * `retry_policy` - Retry policy configuration
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    /// use std::time::Duration;
-    ///
-    /// # async fn example() -> WincentResult<()> {
-    /// // Retry and timeout are automatically handled by QuickAccessManager
-    /// let manager = QuickAccessManager::builder()
-    ///     .retry_policy(RetryPolicy::default())
-    ///     .timeout(Duration::from_secs(30))
-    ///     .build()
-    ///     .await?;
-    ///
-    /// // Operations will retry on transient errors and timeout after 30s
-    /// let items = manager.get_items(QuickAccess::RecentFiles).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn execute_with_retry_and_timeout(
-        script_type: PSScript,
-        parameter: Option<String>,
-        timeout: Duration,
-        retry_policy: &RetryPolicy,
-    ) -> WincentResult<Vec<String>> {
-        let execution = Self::execute_with_retry(script_type, parameter.clone(), retry_policy);
-
-        match tokio::time::timeout(timeout, execution).await {
-            Ok(result) => result,
-            Err(_) => {
-                use crate::error::{PowerShellError, PowerShellErrorKind};
-                use crate::script_storage::ScriptStorage;
-
-                let script_path = if let Some(ref param) = parameter {
-                    ScriptStorage::get_dynamic_script_path(script_type, param)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                } else {
-                    ScriptStorage::get_script_path(script_type)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                };
-
-                Err(WincentError::PowerShellExecution(PowerShellError {
-                    kind: PowerShellErrorKind::Timeout,
-                    script_type,
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: format!("Operation timed out after {:?}", timeout),
-                    script_path,
-                    parameters: parameter,
-                    duration: Some(timeout),
-                    io_error: None,
-                    os_error: None,
-                }))
-            }
-        }
-    }
 }
 
-/// Cached script executor with automatic invalidation
-pub struct CachedScriptExecutor {
-    cache: Mutex<HashMap<CacheKey, CacheEntry>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct CacheKey {
-    script_type: PSScript,
-    parameter: Option<String>,
-}
-
-struct CacheEntry {
-    result: Vec<String>,
-    timestamp: SystemTime,
-}
-
-/// Windows Quick Access data file information
+/// Windows Quick Access data file information.
 pub(crate) struct QuickAccessDataFiles {
     recent_files_path: PathBuf,
-    frequent_folders_path: PathBuf,
 }
 
 impl QuickAccessDataFiles {
-    /// Retrieves Quick Access data file paths
+    /// Retrieves Quick Access data file paths.
     pub fn new() -> WincentResult<Self> {
         let recent_folder = get_windows_recent_folder()?;
         let automatic_dest_dir = Path::new(&recent_folder).join("AutomaticDestinations");
 
-        let recent_files_path =
-            automatic_dest_dir.join("5f7b5f1e01b83767.automaticDestinations-ms");
-        let frequent_folders_path =
-            automatic_dest_dir.join("f01b4d95cf55d32a.automaticDestinations-ms");
-
         Ok(Self {
-            recent_files_path,
-            frequent_folders_path,
+            recent_files_path: automatic_dest_dir.join("5f7b5f1e01b83767.automaticDestinations-ms"),
         })
     }
 
-    /// Unified file removal logic with proper error handling
     fn remove_file(&self, path: &Path) -> WincentResult<()> {
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -395,353 +125,10 @@ impl QuickAccessDataFiles {
         }
     }
 
-    /// Remove recent files data file (ignores if file doesn't exist)
+    /// Removes the Recent Files data file, ignoring missing-file errors.
     pub fn remove_recent_file(&self) -> WincentResult<()> {
         self.remove_file(&self.recent_files_path)
     }
-
-    /// Retrieves modification time for recent files data
-    fn get_recent_files_modified_time(&self) -> WincentResult<SystemTime> {
-        if self.recent_files_path.exists() {
-            let metadata = fs::metadata(&self.recent_files_path).map_err(WincentError::Io)?;
-            Ok(metadata.modified().unwrap_or(SystemTime::now()))
-        } else {
-            Ok(SystemTime::now())
-        }
-    }
-
-    /// Retrieves modification time for frequent folders data
-    fn get_frequent_folders_modified_time(&self) -> WincentResult<SystemTime> {
-        if self.frequent_folders_path.exists() {
-            let metadata = fs::metadata(&self.frequent_folders_path).map_err(WincentError::Io)?;
-            Ok(metadata.modified().unwrap_or(SystemTime::now()))
-        } else {
-            Ok(SystemTime::now())
-        }
-    }
-
-    /// Retrieves latest modification time for Quick Access data
-    fn get_quick_access_modified_time(&self) -> WincentResult<SystemTime> {
-        let recent_time = self.get_recent_files_modified_time()?;
-        let frequent_time = self.get_frequent_folders_modified_time()?;
-
-        // Return most recent timestamp
-        Ok(recent_time.max(frequent_time))
-    }
-
-    /// Gets relevant modification time based on script type
-    fn get_modified_time_for_script(&self, script_type: PSScript) -> WincentResult<SystemTime> {
-        match script_type {
-            PSScript::QueryRecentFile => self.get_recent_files_modified_time(),
-            PSScript::QueryFrequentFolder => self.get_frequent_folders_modified_time(),
-            PSScript::QueryQuickAccess => self.get_quick_access_modified_time(),
-            _ => Ok(SystemTime::now()), // Non-query scripts use current time
-        }
-    }
-}
-
-impl CachedScriptExecutor {
-    pub fn new() -> Self {
-        Self {
-            cache: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Determines if script type should be cached
-    fn should_cache(script_type: PSScript) -> bool {
-        matches!(
-            script_type,
-            PSScript::QueryQuickAccess | PSScript::QueryRecentFile | PSScript::QueryFrequentFolder
-        )
-    }
-
-    /// Executes script with cache management
-    pub(crate) async fn execute(
-        &self,
-        script_type: PSScript,
-        parameter: Option<String>,
-    ) -> WincentResult<Vec<String>> {
-        // Bypass cache for non-query operations
-        if !Self::should_cache(script_type) {
-            let start = std::time::Instant::now();
-            let script_path = if let Some(ref param) = parameter {
-                ScriptStorage::get_dynamic_script_path(script_type, param)?
-            } else {
-                ScriptStorage::get_script_path(script_type)?
-            };
-            let output = ScriptExecutor::execute_ps_script_async(script_type, parameter.clone()).await?;
-            let duration = start.elapsed();
-            return ScriptExecutor::parse_output_to_strings(output, script_type, script_path, parameter, duration);
-        }
-
-        let key = CacheKey {
-            script_type,
-            parameter: parameter.clone(),
-        };
-
-        // Initialize data file tracker
-        let data_files = QuickAccessDataFiles::new()?;
-        let current_modified_time = data_files.get_modified_time_for_script(script_type)?;
-
-        // Cache check
-        {
-            let cache = self.cache.lock().unwrap();
-            if let Some(entry) = cache.get(&key) {
-                // Validate cache using modification timestamp
-                if entry.timestamp >= current_modified_time {
-                    return Ok(entry.result.clone());
-                }
-            }
-        }
-
-        // Cache miss: execute and store
-        let start = std::time::Instant::now();
-        let script_path = if let Some(ref param) = parameter {
-            ScriptStorage::get_dynamic_script_path(script_type, param)?
-        } else {
-            ScriptStorage::get_script_path(script_type)?
-        };
-        let output = ScriptExecutor::execute_ps_script_async(script_type, parameter.clone()).await?;
-        let duration = start.elapsed();
-        let result = ScriptExecutor::parse_output_to_strings(output, script_type, script_path, parameter, duration)?;
-
-        // Update cache
-        {
-            let mut cache = self.cache.lock().unwrap();
-            cache.insert(
-                key,
-                CacheEntry {
-                    result: result.clone(),
-                    timestamp: current_modified_time,
-                },
-            );
-        }
-
-        Ok(result)
-    }
-
-    /// Executes script with timeout protection
-    #[allow(dead_code)]
-    pub(crate) async fn execute_with_timeout(
-        &self,
-        script_type: PSScript,
-        parameter: Option<String>,
-        timeout_secs: u64,
-    ) -> WincentResult<Vec<String>> {
-        match tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            self.execute(script_type, parameter.clone()),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                use crate::error::{PowerShellError, PowerShellErrorKind};
-                use crate::script_storage::ScriptStorage;
-
-                // Get script path for error context
-                let script_path = if let Some(ref param) = parameter {
-                    ScriptStorage::get_dynamic_script_path(script_type, param)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                } else {
-                    ScriptStorage::get_script_path(script_type)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                };
-
-                Err(WincentError::PowerShellExecution(PowerShellError {
-                    kind: PowerShellErrorKind::Timeout,
-                    script_type,
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: format!("Operation timed out after {} seconds", timeout_secs),
-                    script_path,
-                    parameters: parameter,
-                    duration: Some(Duration::from_secs(timeout_secs)),
-                    io_error: None,
-                    os_error: None,
-                }))
-            }
-        }
-    }
-
-    /// Executes script with retry and timeout protection (returns Vec<String>)
-    ///
-    /// Combines retry logic with timeout protection and caching.
-    /// For cached operations, the cache is checked first. For non-cached operations,
-    /// uses the retry mechanism from ScriptExecutor.
-    ///
-    /// # Arguments
-    /// * `script_type` - Type of PowerShell script to execute
-    /// * `parameter` - Optional parameter for the script
-    /// * `timeout` - Maximum duration for all retry attempts combined
-    /// * `retry_policy` - Retry policy configuration
-    pub(crate) async fn execute_with_retry_and_timeout(
-        &self,
-        script_type: PSScript,
-        parameter: Option<String>,
-        timeout: Duration,
-        retry_policy: &RetryPolicy,
-    ) -> WincentResult<Vec<String>> {
-        // For non-cached operations, use ScriptExecutor's retry logic directly
-        if !Self::should_cache(script_type) {
-            return ScriptExecutor::execute_with_retry_and_timeout(
-                script_type,
-                parameter.clone(),
-                timeout,
-                retry_policy,
-            )
-            .await;
-        }
-
-        // For cached operations, wrap entire retry sequence with timeout
-        let retry_future = async {
-            let mut last_error = None;
-
-            for attempt in 0..=retry_policy.max_attempts {
-                if attempt > 0 {
-                    let delay = retry_policy.calculate_delay(attempt - 1);
-                    tokio::time::sleep(delay).await;
-                }
-
-                // Try execution (without individual timeout)
-                match self.execute(script_type, parameter.clone()).await {
-                    Ok(data) => {
-                        if attempt > 0 {
-                            eprintln!(
-                                "[wincent] Cached execution succeeded after {} retries: {:?}",
-                                attempt, script_type
-                            );
-                        }
-                        return Ok(data);
-                    }
-                    Err(WincentError::PowerShellExecution(err)) => {
-                        if !err.is_transient() || attempt >= retry_policy.max_attempts {
-                            return Err(WincentError::PowerShellExecution(err));
-                        }
-
-                        eprintln!(
-                            "[wincent] Transient error on attempt {}/{}: {:?}",
-                            attempt + 1,
-                            retry_policy.max_attempts + 1,
-                            script_type
-                        );
-
-                        last_error = Some(err);
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-
-            Err(WincentError::PowerShellExecution(
-                last_error.expect("Should have at least one error after exhausting retries"),
-            ))
-        };
-
-        // Apply timeout to entire retry sequence
-        match tokio::time::timeout(timeout, retry_future).await {
-            Ok(result) => result,
-            Err(_) => {
-                // Timeout error
-                use crate::error::{PowerShellError, PowerShellErrorKind};
-                let script_path = if let Some(ref param) = parameter {
-                    ScriptStorage::get_dynamic_script_path(script_type, param)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                } else {
-                    ScriptStorage::get_script_path(script_type)
-                        .unwrap_or_else(|_| PathBuf::from("unknown"))
-                };
-
-                Err(WincentError::PowerShellExecution(PowerShellError {
-                    kind: PowerShellErrorKind::Timeout,
-                    script_type,
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: format!("Operation timed out after {:?}", timeout),
-                    script_path,
-                    parameters: parameter,
-                    duration: Some(timeout),
-                    io_error: None,
-                    os_error: None,
-                }))
-            }
-        }
-    }
-
-    /// Clears entire cache
-    pub fn clear_cache(&self) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.clear();
-    }
-
-    /// Returns the number of cached entries
-    pub fn cache_size(&self) -> usize {
-        let cache = self.cache.lock().unwrap();
-        cache.len()
-    }
-}
-
-/// Applies the standard transient-error retry decision for one attempt result.
-///
-/// This is the **single authoritative copy** of the retry decision logic shared by
-/// both `execute_with_retry_inner` (production async loop) and `retry_with_callback`
-/// (test injection helper).  Both callers pass each attempt's `WincentResult` here;
-/// the return value tells them what to do next:
-///
-/// - `Ok(RetryAction::Done(v))`: return `Ok(v)` immediately.
-/// - `Ok(RetryAction::Retry(err))`: store `err` as `last_error` and continue the loop.
-/// - `Err(e)`: return `Err(e)` immediately (permanent or non-PowerShell error).
-pub(crate) enum RetryAction {
-    Done(Vec<String>),
-    Retry(crate::error::PowerShellError),
-}
-
-pub(crate) fn apply_retry_decision(
-    result: WincentResult<Vec<String>>,
-    attempt: u32,
-    max_attempts: u32,
-) -> WincentResult<RetryAction> {
-    match result {
-        Ok(v) => Ok(RetryAction::Done(v)),
-        Err(WincentError::PowerShellExecution(err)) => {
-            if !err.is_transient() || attempt >= max_attempts {
-                Err(WincentError::PowerShellExecution(err))
-            } else {
-                Ok(RetryAction::Retry(err))
-            }
-        }
-        Err(e) => Err(e),
-    }
-}
-
-/// Test-only helper: drives the retry/backoff loop by calling `attempt_fn` on each
-/// attempt, delegating every transient-error decision to `apply_retry_decision`.
-///
-/// Because `apply_retry_decision` is shared with `execute_with_retry_inner`, tests
-/// that drive `retry_with_callback` exercise the **same decision code** that runs in
-/// production; drift between the two is structurally prevented.
-#[cfg(test)]
-pub(crate) async fn retry_with_callback<F>(
-    mut attempt_fn: F,
-    policy: &RetryPolicy,
-) -> WincentResult<Vec<String>>
-where
-    F: FnMut() -> WincentResult<Vec<String>>,
-{
-    let mut last_error = None;
-
-    for attempt in 0..=policy.max_attempts {
-        if attempt > 0 {
-            tokio::time::sleep(policy.calculate_delay(attempt - 1)).await;
-        }
-        match apply_retry_decision(attempt_fn(), attempt, policy.max_attempts)? {
-            RetryAction::Done(v) => return Ok(v),
-            RetryAction::Retry(err) => last_error = Some(err),
-        }
-    }
-
-    Err(WincentError::PowerShellExecution(
-        last_error.expect("at least one error after exhausting retries"),
-    ))
 }
 
 #[cfg(test)]
@@ -791,104 +178,17 @@ mod tests {
             assert_eq!(ps_err.stderr, "Error message");
             assert_eq!(ps_err.exit_code, Some(1));
             assert_eq!(ps_err.script_type, PSScript::QueryQuickAccess);
-            assert_eq!(ps_err.kind, crate::error::PowerShellErrorKind::ExecutionFailed);
+            assert_eq!(
+                ps_err.kind,
+                crate::error::PowerShellErrorKind::ExecutionFailed
+            );
         } else {
             panic!("Expected PowerShellExecution error");
         }
     }
 
     #[test]
-    fn test_cache_eligibility_check() {
-        // Cache-eligible script types
-        assert!(CachedScriptExecutor::should_cache(
-            PSScript::QueryQuickAccess
-        ));
-        assert!(CachedScriptExecutor::should_cache(
-            PSScript::QueryRecentFile
-        ));
-        assert!(CachedScriptExecutor::should_cache(
-            PSScript::QueryFrequentFolder
-        ));
-
-        // Non-cacheable script types
-        assert!(!CachedScriptExecutor::should_cache(
-            PSScript::RefreshExplorer
-        ));
-        assert!(!CachedScriptExecutor::should_cache(
-            PSScript::RemoveRecentFile
-        ));
-        assert!(!CachedScriptExecutor::should_cache(
-            PSScript::PinToFrequentFolder
-        ));
-        assert!(!CachedScriptExecutor::should_cache(
-            PSScript::UnpinFromFrequentFolder
-        ));
-        assert!(!CachedScriptExecutor::should_cache(
-            PSScript::CheckQueryFeasible
-        ));
-        assert!(!CachedScriptExecutor::should_cache(
-            PSScript::CheckPinUnpinFeasible
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_quick_access_file_tracking() -> WincentResult<()> {
-        let data_files = QuickAccessDataFiles::new()?;
-
-        // Validate file path patterns
-        assert!(data_files
-            .recent_files_path
-            .to_string_lossy()
-            .contains("5f7b5f1e01b83767"));
-        assert!(data_files
-            .frequent_folders_path
-            .to_string_lossy()
-            .contains("f01b4d95cf55d32a"));
-
-        // Basic timestamp checks
-        let _ = data_files.get_recent_files_modified_time()?;
-        let _ = data_files.get_frequent_folders_modified_time()?;
-        let _ = data_files.get_quick_access_modified_time()?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cache_management_workflow() -> WincentResult<()> {
-        let executor = CachedScriptExecutor::new();
-
-        // Prime cache
-        {
-            let mut cache_map = executor.cache.lock().unwrap();
-            cache_map.insert(
-                CacheKey {
-                    script_type: PSScript::QueryQuickAccess,
-                    parameter: None,
-                },
-                CacheEntry {
-                    result: vec!["cached result".to_string()],
-                    timestamp: SystemTime::now() + Duration::from_secs(3600),
-                },
-            );
-        }
-
-        // Cache hit scenario
-        let result = executor.execute(PSScript::QueryQuickAccess, None).await?;
-        assert_eq!(result, vec!["cached result".to_string()]);
-
-        // Cache clearance test
-        executor.clear_cache();
-        let cache_map = executor.cache.lock().unwrap();
-        assert!(cache_map.is_empty());
-
-        Ok(())
-    }
-
-    #[test]
     fn test_non_zero_exit_produces_transient_retryable_error() {
-        use std::os::windows::process::ExitStatusExt;
-
-        // Non-zero exit with a "locked" message in stderr — is_transient() must be true
         let output = Output {
             status: std::process::ExitStatus::from_raw(1),
             stdout: Vec::new(),
@@ -914,98 +214,5 @@ mod tests {
         } else {
             panic!("Expected PowerShellExecution error");
         }
-    }
-
-    /// Verifies the retry path used for transient parse errors.
-    ///
-    /// `test_non_zero_exit_produces_transient_retryable_error` confirms that a
-    /// non-zero exit with a "locked" stderr is classified as transient. This test
-    /// drives `retry_with_callback`, which shares `apply_retry_decision` with the
-    /// production retry loop, to verify retry count, success-after-retry, and
-    /// permanent-error short-circuit behavior.
-    #[tokio::test]
-    async fn test_retry_loop_fires_on_transient_parse_error() {
-        use crate::error::{PowerShellError, PowerShellErrorKind};
-        use std::sync::{Arc, Mutex};
-
-        let call_count = Arc::new(Mutex::new(0u32));
-        let call_count_clone = call_count.clone();
-
-        let policy = RetryPolicy {
-            max_attempts: 2,
-            initial_delay: Duration::from_millis(1),
-            max_delay: Duration::from_millis(5),
-            backoff_factor: 1.0,
-            jitter: false,
-        };
-
-        // Drive retry_with_callback; its transient-error decision logic is shared
-        // with execute_with_retry_inner through apply_retry_decision.
-        let result = super::retry_with_callback(
-            move || {
-                let mut count = call_count_clone.lock().unwrap();
-                *count += 1;
-                let current = *count;
-
-                if current <= 2 {
-                    // Simulate what parse_output_to_strings produces on a non-zero exit
-                    // with a transient "locked" stderr (verified by
-                    // test_non_zero_exit_produces_transient_retryable_error).
-                    Err(WincentError::PowerShellExecution(PowerShellError {
-                        kind: PowerShellErrorKind::ExecutionFailed,
-                        script_type: PSScript::QueryQuickAccess,
-                        exit_code: Some(1),
-                        stdout: String::new(),
-                        stderr: "Shell namespace file is locked by another process".to_string(),
-                        script_path: PathBuf::from("test.ps1"),
-                        parameters: None,
-                        duration: None,
-                        io_error: None,
-                        os_error: None,
-                    }))
-                } else {
-                    Ok(vec!["item1".to_string()])
-                }
-            },
-            &policy,
-        )
-        .await;
-
-        let final_count = *call_count.lock().unwrap();
-        assert_eq!(
-            final_count, 3,
-            "retry loop must fire 3 times (2 transient failures + 1 success)"
-        );
-        assert!(result.is_ok(), "result should be Ok after successful retry");
-        assert_eq!(result.unwrap(), vec!["item1".to_string()]);
-
-        // Also confirm that permanent errors (non-transient) stop the loop immediately.
-        let stop_count = Arc::new(Mutex::new(0u32));
-        let stop_count_clone = stop_count.clone();
-        let permanent_result = super::retry_with_callback(
-            move || {
-                *stop_count_clone.lock().unwrap() += 1;
-                Err(WincentError::PowerShellExecution(PowerShellError {
-                    kind: PowerShellErrorKind::ExecutionFailed,
-                    script_type: PSScript::QueryQuickAccess,
-                    exit_code: Some(1),
-                    stdout: String::new(),
-                    stderr: "Access is denied.".to_string(), // non-transient
-                    script_path: PathBuf::from("test.ps1"),
-                    parameters: None,
-                    duration: None,
-                    io_error: None,
-                    os_error: None,
-                }))
-            },
-            &policy,
-        )
-        .await;
-
-        assert_eq!(
-            *stop_count.lock().unwrap(), 1,
-            "permanent error must stop retry loop after first attempt"
-        );
-        assert!(permanent_result.is_err());
     }
 }

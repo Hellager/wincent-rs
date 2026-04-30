@@ -1,5 +1,5 @@
-use crate::{error::WincentError, WincentResult};
 use crate::com::{classify_coinit_result, ComInitStatus};
+use crate::{error::WincentError, WincentResult};
 use std::panic::AssertUnwindSafe;
 use std::sync::mpsc;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
@@ -40,7 +40,8 @@ where
                 }
                 ComInitStatus::ApartmentMismatch => {
                     let _ = tx.send(Err(WincentError::ComApartmentMismatch(
-                        "Thread already initialized with incompatible COM apartment model".to_string()
+                        "Thread already initialized with incompatible COM apartment model"
+                            .to_string(),
                     )));
                     return;
                 }
@@ -53,30 +54,28 @@ where
                 }
             }
 
-            let result = std::panic::catch_unwind(AssertUnwindSafe(f))
-                .unwrap_or_else(|payload| {
-                    let msg = payload
-                        .downcast_ref::<&str>()
-                        .copied()
-                        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                        .unwrap_or("unknown panic");
-                    Err(WincentError::SystemError(format!(
-                        "COM STA closure panicked: {}",
-                        msg
-                    )))
-                });
+            let result = std::panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|payload| {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("unknown panic");
+                Err(WincentError::SystemError(format!(
+                    "COM STA closure panicked: {}",
+                    msg
+                )))
+            });
             unsafe { CoUninitialize() };
             let _ = tx.send(result);
         })
         .map_err(|e| WincentError::SystemError(format!("Failed to spawn COM thread: {}", e)))?;
 
-    rx.recv_timeout(timeout)
-        .map_err(|_| {
-            WincentError::SystemError(format!(
-                "COM STA thread timed out or disconnected after {}s",
-                timeout.as_secs()
-            ))
-        })?
+    rx.recv_timeout(timeout).map_err(|_| {
+        WincentError::SystemError(format!(
+            "COM STA thread timed out or disconnected after {}s",
+            timeout.as_secs()
+        ))
+    })?
 }
 
 #[cfg(test)]
@@ -87,8 +86,7 @@ mod tests {
     fn test_run_on_sta_thread_zero_timeout_rejected() {
         // Duration::ZERO must be rejected immediately with InvalidArgument,
         // not silently converted to a near-instant recv_timeout that races.
-        let result: WincentResult<()> =
-            run_on_sta_thread(|| Ok(()), std::time::Duration::ZERO);
+        let result: WincentResult<()> = run_on_sta_thread(|| Ok(()), std::time::Duration::ZERO);
         assert!(
             matches!(result, Err(WincentError::InvalidArgument(_))),
             "Expected InvalidArgument for zero timeout, got: {:?}",
@@ -106,9 +104,10 @@ mod tests {
     #[test]
     fn test_run_on_sta_thread_error_propagation() {
         // Tests that errors from the closure are properly propagated
-        let result: WincentResult<()> = run_on_sta_thread(|| {
-            Err(WincentError::InvalidPath("test".to_string()))
-        }, std::time::Duration::from_secs(10));
+        let result: WincentResult<()> = run_on_sta_thread(
+            || Err(WincentError::InvalidPath("test".to_string())),
+            std::time::Duration::from_secs(10),
+        );
         assert!(matches!(result, Err(WincentError::InvalidPath(_))));
     }
 
@@ -126,8 +125,10 @@ mod tests {
     fn test_run_on_sta_thread_panic_becomes_system_error() {
         // A panicking closure must not leak COM state or produce a misleading
         // "timed out / disconnected" error — it should surface as SystemError.
-        let result: WincentResult<()> =
-            run_on_sta_thread(|| panic!("deliberate test panic"), std::time::Duration::from_secs(10));
+        let result: WincentResult<()> = run_on_sta_thread(
+            || panic!("deliberate test panic"),
+            std::time::Duration::from_secs(10),
+        );
         assert!(
             matches!(result, Err(WincentError::SystemError(_))),
             "Expected SystemError for panicking closure, got: {:?}",

@@ -17,10 +17,19 @@
 use crate::{
     com::{ComGuard, ComInitStatus},
     error::WincentError,
-    utils::get_windows_recent_folder,
-    WincentResult,
+    utils::{get_windows_recent_folder, refresh_explorer_window},
+    QuickAccess, WincentResult,
 };
 use windows::Win32::UI::Shell::SHAddToRecentDocs;
+
+/// Options for clearing Quick Access items.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EmptyOptions {
+    /// Also attempt to remove pinned folders from Quick Access.
+    pub also_pinned_folders: bool,
+    /// Refresh open Explorer windows after a successful clear.
+    pub force_refresh: bool,
+}
 
 /// Clears the Windows Recent Files list using the Windows Shell API.
 ///
@@ -79,7 +88,8 @@ fn empty_pinned_folders_powershell() -> WincentResult<()> {
     use crate::script_strategy::PSScript;
 
     let start = std::time::Instant::now();
-    let script_path = crate::script_storage::ScriptStorage::get_script_path(PSScript::EmptyPinnedFolders)?;
+    let script_path =
+        crate::script_storage::ScriptStorage::get_script_path(PSScript::EmptyPinnedFolders)?;
     let output = ScriptExecutor::execute_ps_script(PSScript::EmptyPinnedFolders, None)?;
     let duration = start.elapsed();
     let _ = ScriptExecutor::parse_output_to_strings(
@@ -214,6 +224,66 @@ pub fn empty_quick_access(also_pinned_folders: bool) -> WincentResult<()> {
     Ok(())
 }
 
+fn empty_all_items(options: EmptyOptions) -> WincentResult<()> {
+    if let Err(source) = empty_recent_files() {
+        return Err(WincentError::PartialEmpty {
+            recent_files_cleared: false,
+            frequent_folders_cleared: false,
+            source: Box::new(source),
+        });
+    }
+
+    if let Err(source) = empty_frequent_folders(options.also_pinned_folders) {
+        return Err(WincentError::PartialEmpty {
+            recent_files_cleared: true,
+            frequent_folders_cleared: false,
+            source: Box::new(source),
+        });
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshPolicy {
+    PropagateFailure,
+    BestEffort,
+    Skip,
+}
+
+fn refresh_policy_for_result(result: &WincentResult<()>, force_refresh: bool) -> RefreshPolicy {
+    if !force_refresh {
+        return RefreshPolicy::Skip;
+    }
+
+    match result {
+        Ok(()) => RefreshPolicy::PropagateFailure,
+        Err(WincentError::PartialEmpty { .. }) => RefreshPolicy::BestEffort,
+        Err(_) => RefreshPolicy::Skip,
+    }
+}
+
+/// Clears items from a specific Quick Access category.
+pub fn empty_items(qa_type: QuickAccess, options: EmptyOptions) -> WincentResult<()> {
+    let result = match qa_type {
+        QuickAccess::RecentFiles => empty_recent_files(),
+        QuickAccess::FrequentFolders => empty_frequent_folders(options.also_pinned_folders),
+        QuickAccess::All => empty_all_items(options),
+    };
+
+    match refresh_policy_for_result(&result, options.force_refresh) {
+        RefreshPolicy::PropagateFailure => refresh_explorer_window()?,
+        RefreshPolicy::BestEffort => {
+            // Preserve the cleanup failure while still trying to show any
+            // successfully cleared category in Explorer.
+            let _ = refresh_explorer_window();
+        }
+        RefreshPolicy::Skip => {}
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,7 +316,11 @@ mod tests {
 
     impl TestGuard {
         fn new(dir: PathBuf) -> Self {
-            Self { dir, pinned: Vec::new(), recent_file: None }
+            Self {
+                dir,
+                pinned: Vec::new(),
+                recent_file: None,
+            }
         }
 
         fn with_pinned(mut self, path: &str) -> Self {
@@ -272,6 +346,45 @@ mod tests {
             }
             let _ = cleanup_test_env(&self.dir);
         }
+    }
+
+    #[test]
+    fn refresh_policy_skip_when_no_force_refresh() {
+        assert_eq!(
+            refresh_policy_for_result(&Ok(()), false),
+            RefreshPolicy::Skip
+        );
+    }
+
+    #[test]
+    fn refresh_policy_propagate_on_ok() {
+        assert_eq!(
+            refresh_policy_for_result(&Ok(()), true),
+            RefreshPolicy::PropagateFailure
+        );
+    }
+
+    #[test]
+    fn refresh_policy_best_effort_on_partial_empty() {
+        assert_eq!(
+            refresh_policy_for_result(
+                &Err(WincentError::PartialEmpty {
+                    recent_files_cleared: true,
+                    frequent_folders_cleared: false,
+                    source: Box::new(WincentError::ScriptFailed("failed".to_string())),
+                }),
+                true,
+            ),
+            RefreshPolicy::BestEffort
+        );
+    }
+
+    #[test]
+    fn refresh_policy_skip_on_non_partial_empty_error() {
+        assert_eq!(
+            refresh_policy_for_result(&Err(WincentError::ScriptFailed("failed".to_string())), true),
+            RefreshPolicy::Skip
+        );
     }
 
     /// Poll `get_recent_files()` until the given path appears or retries are
@@ -374,7 +487,11 @@ mod tests {
                 assert_eq!(hr.0, 0, "Cycle {cycle}: CoInitializeEx should return S_OK");
 
                 let result = empty_recent_files_with_api();
-                assert!(result.is_ok(), "Cycle {cycle}: should handle S_FALSE: {:?}", result);
+                assert!(
+                    result.is_ok(),
+                    "Cycle {cycle}: should handle S_FALSE: {:?}",
+                    result
+                );
 
                 CoUninitialize();
             }
@@ -456,8 +573,12 @@ mod tests {
         impl Drop for JumplistGuard {
             fn drop(&mut self) {
                 match &self.original {
-                    Some(bytes) => { let _ = std::fs::write(&self.path, bytes); }
-                    None        => { let _ = std::fs::remove_file(&self.path); }
+                    Some(bytes) => {
+                        let _ = std::fs::write(&self.path, bytes);
+                    }
+                    None => {
+                        let _ = std::fs::remove_file(&self.path);
+                    }
                 }
             }
         }
@@ -485,7 +606,10 @@ mod tests {
             }
             std::fs::write(&jumplist_file, b"stub").map_err(WincentError::Io)?;
         }
-        assert!(jumplist_file.exists(), "Jump list file must exist before the call");
+        assert!(
+            jumplist_file.exists(),
+            "Jump list file must exist before the call"
+        );
 
         empty_user_folders_with_jumplist_file()?;
 

@@ -7,7 +7,6 @@
 //! - Cross-domain error classification (I/O, system, scripting)
 //! - Automatic error conversion from common Rust types
 //! - Detailed error context preservation
-//! - Async-task error propagation support
 //! - Comprehensive test utilities
 //! - Localized error handling support
 //!
@@ -50,9 +49,9 @@
 //!     None
 //! }
 //!
-//! # async fn example() -> WincentResult<()> {
-//! # let manager = QuickAccessManager::new().await?;
-//! match manager.add_item("C:\\test", QuickAccess::FrequentFolders, false).await {
+//! # fn example() -> WincentResult<()> {
+//! # let manager = QuickAccessManager::new();
+//! match manager.add_item("C:\\test", QuickAccess::FrequentFolders, false) {
 //!     Ok(_) => println!("Success"),
 //!     Err(WincentError::PowerShellExecution(err)) => {
 //!         let err = err.reclassify_with(classify_chinese_error);
@@ -240,19 +239,20 @@ impl PowerShellError {
 
         // Check for access denied (highest priority for common errors)
         if (stderr_lower.contains("access") && stderr_lower.contains("denied"))
-            || stderr_lower.contains("unauthorizedaccessexception") {
+            || stderr_lower.contains("unauthorizedaccessexception")
+        {
             return PowerShellErrorKind::AccessDenied;
         }
 
         // Check for execution policy
-        if stderr_lower.contains("execution policy")
-            || stderr_lower.contains("executionpolicy") {
+        if stderr_lower.contains("execution policy") || stderr_lower.contains("executionpolicy") {
             return PowerShellErrorKind::ExecutionPolicy;
         }
 
         // Check for cmdlet not found
         if stderr_lower.contains("not recognized as")
-            || stderr_lower.contains("commandnotfoundexception") {
+            || stderr_lower.contains("commandnotfoundexception")
+        {
             return PowerShellErrorKind::CmdletNotFound;
         }
 
@@ -552,8 +552,7 @@ impl PowerShellError {
 
         // Fallback: Text matching (case-insensitive)
         let stderr_lower = self.normalized_stderr();
-        stderr_lower.contains("execution policy")
-            || stderr_lower.contains("executionpolicy")
+        stderr_lower.contains("execution policy") || stderr_lower.contains("executionpolicy")
     }
 
     /// Checks if error is due to timeout
@@ -667,6 +666,9 @@ pub enum WincentError {
     #[error("Invalid path: {0}")]
     InvalidPath(String),
 
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
+
     #[error("Operation not supported: {0}")]
     UnsupportedOperation(String),
 
@@ -694,9 +696,6 @@ pub enum WincentError {
     #[error("Script strategy not found: {0}")]
     ScriptStrategyNotFound(String),
 
-    #[error("Async execution error: {0}")]
-    AsyncExecution(String),
-
     #[error("Operation timed out: {0}")]
     Timeout(String),
 
@@ -715,17 +714,14 @@ pub enum WincentError {
 
     #[error("Item not found in Quick Access: {0}")]
     NotInRecent(String),
+
+    #[error("COM apartment model mismatch: {0}")]
+    ComApartmentMismatch(String),
 }
 
 impl From<windows::core::Error> for WincentError {
     fn from(err: windows::core::Error) -> Self {
         WincentError::WindowsApi(err.code().0)
-    }
-}
-
-impl From<tokio::task::JoinError> for WincentError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        WincentError::AsyncExecution(err.to_string())
     }
 }
 
@@ -773,7 +769,9 @@ mod tests {
         let partial_empty = WincentError::PartialEmpty {
             recent_files_cleared: true,
             frequent_folders_cleared: false,
-            source: Box::new(WincentError::ScriptFailed("failed to clear pinned folders".into())),
+            source: Box::new(WincentError::ScriptFailed(
+                "failed to clear pinned folders".into(),
+            )),
         };
         let rendered = format!("{}", partial_empty);
         assert!(rendered.contains("recent_files_cleared: true"));
