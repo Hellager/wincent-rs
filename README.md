@@ -47,20 +47,19 @@ wincent = "0.1.2"
 ```rust
 use wincent::predule::*;
 
-#[tokio::main]
-async fn main() -> WincentResult<()> {
+fn main() -> WincentResult<()> {
     // Initialize manager
-    let manager = QuickAccessManager::new().await?;
+    let manager = QuickAccessManager::new();
     
     // Add file to Recent Files with force update
     manager.add_item(
         "C:\\path\\to\\file.txt",
         QuickAccess::RecentFiles,
         true
-    ).await?;
+    )?;
     
     // Query all items
-    let items = manager.get_items(QuickAccess::All).await?;
+    let items = manager.get_items(QuickAccess::All)?;
     println!("Quick Access items: {:?}", items);
     
     Ok(())
@@ -72,16 +71,15 @@ async fn main() -> WincentResult<()> {
 ```rust
 use wincent::predule::*;
 
-#[tokio::main]
-async fn main() -> WincentResult<()> {
-    let manager = QuickAccessManager::new().await?;
+fn main() -> WincentResult<()> {
+    let manager = QuickAccessManager::new();
     
     // Clear recent files with force refresh
     manager.empty_items(
         QuickAccess::RecentFiles,
         true,  // force refresh
-        false  // preserve system defaults
-    ).await?;
+        false  // preserve pinned folders
+    )?;
     
     Ok(())
 }
@@ -90,9 +88,8 @@ async fn main() -> WincentResult<()> {
 ## Best Practices
 
 - Use `force_update` when adding recent files for immediate visibility
-- Check operation feasibility only when necessary
 - Clear cache after bulk operations
-- Consider `also_system_default` carefully when clearing items
+- Consider `also_pinned_folders` carefully when clearing frequent folders
 - Handle timeouts appropriately in production environments
 
 ## System Requirements and Limitations
@@ -104,13 +101,9 @@ async fn main() -> WincentResult<()> {
   - System security policies may restrict PowerShell script execution
   - Windows Explorer integration might vary across different Windows versions
 
-- **Pre-flight Checks**: Before performing operations, especially for folder management, it's recommended to use the built-in feasibility checks:
-  ```rust
-  let (can_query, can_modify) = manager.check_feasible().await;
-  if !can_modify {
-      println!("Warning: System environment may restrict modification operations");
-  }
-  ```
+- **Operation Errors**: Quick Access support varies by Windows version and local
+  policy. Handle operation errors directly, especially when pinning or unpinning
+  folders.
 
 These limitations are inherent to Windows Quick Access functionality and not specific to this library. We provide comprehensive error handling and status checking mechanisms to help you handle these scenarios gracefully.
 

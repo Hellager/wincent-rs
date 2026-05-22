@@ -47,20 +47,19 @@ wincent = "0.1.2"
 ```rust
 use wincent::predule::*;
 
-#[tokio::main]
-async fn main() -> WincentResult<()> {
+fn main() -> WincentResult<()> {
     // 初始化管理器
-    let manager = QuickAccessManager::new().await?;
+    let manager = QuickAccessManager::new();
     
     // 添加文件到最近文件并强制更新
     manager.add_item(
         "C:\\path\\to\\file.txt",
         QuickAccess::RecentFiles,
         true
-    ).await?;
+    )?;
     
     // 查询所有项目
-    let items = manager.get_items(QuickAccess::All).await?;
+    let items = manager.get_items(QuickAccess::All)?;
     println!("快速访问项目: {:?}", items);
     
     Ok(())
@@ -72,16 +71,15 @@ async fn main() -> WincentResult<()> {
 ```rust
 use wincent::predule::*;
 
-#[tokio::main]
-async fn main() -> WincentResult<()> {
-    let manager = QuickAccessManager::new().await?;
+fn main() -> WincentResult<()> {
+    let manager = QuickAccessManager::new();
     
     // 清空最近文件并强制刷新
     manager.empty_items(
         QuickAccess::RecentFiles,
         true,  // 强制刷新
-        false  // 保留系统默认项
-    ).await?;
+        false  // 保留固定文件夹
+    )?;
     
     Ok(())
 }
@@ -90,9 +88,8 @@ async fn main() -> WincentResult<()> {
 ## 最佳实践
 
 - 添加最近文件时使用 `force_update` 以立即显示
-- 仅在必要时检查操作可行性
 - 批量操作后清理缓存
-- 谨慎使用 `also_system_default` 清理项目
+- 谨慎使用 `also_pinned_folders` 清理固定文件夹
 - 在生产环境中妥善处理超时情况
 
 ## 系统要求和限制
@@ -104,13 +101,7 @@ async fn main() -> WincentResult<()> {
   - 系统安全策略可能限制 PowerShell 脚本执行
   - Windows 资源管理器集成在不同 Windows 版本中可能有所不同
 
-- **预检查建议**: 在执行操作之前，特别是文件夹管理操作，建议使用内置的可行性检查：
-  ```rust
-  let (can_query, can_modify) = manager.check_feasible().await;
-  if !can_modify {
-      println!("警告：系统环境可能限制修改操作");
-  }
-  ```
+- **操作错误处理**: 快速访问支持会受 Windows 版本和本地策略影响。执行固定或取消固定文件夹等操作时，应直接处理返回错误。
 
 这些限制是 Windows 快速访问功能本身的固有特性，并非本库特有。我们提供了全面的错误处理和状态检查机制，以帮助您优雅地处理这些场景。
 

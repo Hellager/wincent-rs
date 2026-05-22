@@ -108,7 +108,7 @@ fn show_welcome() {
 // Display main menu
 fn show_main_menu() {
     println!("\n{}{}Select Operation:{}", YELLOW, BOLD, RESET);
-    println!("{}1. Check Execution Policy Status", BLUE);
+    println!("{}1. Check Quick Access Query Status", BLUE);
     println!("{}2. Manage Quick Access Items", BLUE);
     println!("{}3. View Quick Access Items", BLUE);
     println!("{}4. Clear Quick Access Items", BLUE);
@@ -173,27 +173,25 @@ fn wait_for_key() {
     let _ = read_input();
 }
 
-// Check execution policy status
-async fn check_feasibility(manager: &QuickAccessManager) -> WincentResult<()> {
-    let mut spinner = ConsoleSpinner::new("Checking execution policy status...");
+// Check query status
+async fn check_query_status(manager: &QuickAccessManager) -> WincentResult<()> {
+    let mut spinner = ConsoleSpinner::new("Checking Quick Access query status...");
 
     for _ in 0..10 {
         spinner.spin();
         sleep(Duration::from_millis(100)).await;
     }
 
-    let (query_feasible, handle_feasible) = manager.check_feasible().await;
-
-    if query_feasible && handle_feasible {
-        spinner.complete(true, "All operations are allowed");
-    } else {
-        spinner.complete(
-            false,
-            "Some operations may be restricted, please check system settings",
-        );
+    match manager.get_items(QuickAccess::All) {
+        Ok(items) => {
+            spinner.complete(true, &format!("Query succeeded ({} items)", items.len()));
+            Ok(())
+        }
+        Err(e) => {
+            spinner.complete(false, &format!("Query failed: {}", e));
+            Err(e)
+        }
     }
-
-    Ok(())
 }
 
 // Add file to Recent Files
@@ -217,10 +215,7 @@ async fn add_file_to_recent(manager: &QuickAccessManager) -> WincentResult<()> {
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager
-        .add_item(&path, QuickAccess::RecentFiles, false)
-        .await
-    {
+    match manager.add_item(&path, QuickAccess::RecentFiles, false) {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully added file: {}", path));
             Ok(())
@@ -253,10 +248,7 @@ async fn pin_folder_to_frequent(manager: &QuickAccessManager) -> WincentResult<(
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager
-        .add_item(&path, QuickAccess::FrequentFolders, false)
-        .await
-    {
+    match manager.add_item(&path, QuickAccess::FrequentFolders, false) {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully pinned folder: {}", path));
             Ok(())
@@ -284,7 +276,7 @@ async fn remove_file_from_recent(manager: &QuickAccessManager) -> WincentResult<
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager.remove_item(&path, QuickAccess::RecentFiles).await {
+    match manager.remove_item(&path, QuickAccess::RecentFiles) {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully removed file: {}", path));
             Ok(())
@@ -312,10 +304,7 @@ async fn unpin_folder_from_frequent(manager: &QuickAccessManager) -> WincentResu
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager
-        .remove_item(&path, QuickAccess::FrequentFolders)
-        .await
-    {
+    match manager.remove_item(&path, QuickAccess::FrequentFolders) {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully unpinned folder: {}", path));
             Ok(())
@@ -345,7 +334,7 @@ async fn query_and_display_items(
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager.get_items(qa_type).await {
+    match manager.get_items(qa_type) {
         Ok(items) => {
             spinner.complete(true, &format!("Successfully retrieved {} list", type_name));
 
@@ -400,7 +389,7 @@ async fn empty_items(manager: &QuickAccessManager, qa_type: QuickAccess) -> Winc
         sleep(Duration::from_millis(100)).await;
     }
 
-    match manager.empty_items(qa_type, false, false).await {
+    match manager.empty_items(qa_type, false, false) {
         Ok(_) => {
             spinner.complete(true, &format!("Successfully cleared {}", type_name));
             Ok(())
@@ -534,7 +523,7 @@ async fn handle_empty_menu(manager: &QuickAccessManager) -> WincentResult<()> {
 #[tokio::main]
 async fn main() -> Result<(), WincentError> {
     // Create QuickAccessManager instance
-    let manager = QuickAccessManager::new().await?;
+    let manager = QuickAccessManager::new();
 
     show_welcome();
 
@@ -545,7 +534,7 @@ async fn main() -> Result<(), WincentError> {
 
         match choice.as_str() {
             "1" => {
-                if let Err(e) = check_feasibility(&manager).await {
+                if let Err(e) = check_query_status(&manager).await {
                     println!("{}Error: {}{}", RED, e, RESET);
                 }
                 wait_for_key();

@@ -5,11 +5,10 @@
 use std::time::Instant;
 use wincent::prelude::*;
 
-#[tokio::main]
-async fn main() -> WincentResult<()> {
+fn main() -> WincentResult<()> {
     println!("=== QuickAccessManager Batch Operations Examples ===\n");
 
-    let manager = QuickAccessManager::new().await?;
+    let manager = QuickAccessManager::new();
 
     // Example 1: Batch add multiple files
     println!("1. Batch adding multiple files:");
@@ -29,16 +28,13 @@ async fn main() -> WincentResult<()> {
     ];
 
     let start = Instant::now();
-    let result = manager.add_items_batch(&files_to_add, true).await?;
+    let result = manager.add_items_batch(&files_to_add, true);
     let duration = start.elapsed();
 
     println!("   ✓ Batch operation completed in {:?}", duration);
     println!("   - Succeeded: {}", result.succeeded.len());
     println!("   - Failed: {}", result.failed.len());
-    println!(
-        "   - Success rate: {:.1}%",
-        result.success_rate() * 100.0
-    );
+    println!("   - Success rate: {:.1}%", result.success_rate() * 100.0);
 
     if !result.failed.is_empty() {
         println!("   Failed items:");
@@ -61,7 +57,7 @@ async fn main() -> WincentResult<()> {
         ),
     ];
 
-    let result = manager.add_items_batch(&mixed_items, false).await?;
+    let result = manager.add_items_batch(&mixed_items, false);
     println!("   ✓ Added {} folders", result.succeeded.len());
     println!();
 
@@ -82,16 +78,13 @@ async fn main() -> WincentResult<()> {
         ),
     ];
 
-    let result = manager.add_items_batch(&items_with_errors, false).await?;
+    let result = manager.add_items_batch(&items_with_errors, false);
 
     if result.has_partial_success() {
         println!("   ✓ Partial success:");
         println!("     - Succeeded: {}", result.succeeded.len());
         println!("     - Failed: {}", result.failed.len());
-        println!(
-            "     - Success rate: {:.1}%",
-            result.success_rate() * 100.0
-        );
+        println!("     - Success rate: {:.1}%", result.success_rate() * 100.0);
     }
 
     if !result.is_complete_success() {
@@ -115,7 +108,7 @@ async fn main() -> WincentResult<()> {
         ),
     ];
 
-    let result = manager.remove_items_batch(&items_to_remove).await?;
+    let result = manager.remove_items_batch(&items_to_remove);
     println!("   ✓ Removed {} items", result.succeeded.len());
     if !result.failed.is_empty() {
         println!("   Failed to remove {} items", result.failed.len());
@@ -135,16 +128,14 @@ async fn main() -> WincentResult<()> {
     println!("   Testing single operations...");
     let start = Instant::now();
     for file in &test_files {
-        let _ = manager
-            .add_item(file, QuickAccess::RecentFiles, false)
-            .await;
+        let _ = manager.add_item(file, QuickAccess::RecentFiles, false);
     }
     let single_duration = start.elapsed();
     println!("   - Single operations: {:?}", single_duration);
 
     // Clean up
     for file in &test_files {
-        let _ = manager.remove_item(file, QuickAccess::RecentFiles).await;
+        let _ = manager.remove_item(file, QuickAccess::RecentFiles);
     }
 
     // Batch operations
@@ -155,13 +146,13 @@ async fn main() -> WincentResult<()> {
         .collect();
 
     let start = Instant::now();
-    let _ = manager.add_items_batch(&batch_items, false).await?;
+    let _ = manager.add_items_batch(&batch_items, false);
     let batch_duration = start.elapsed();
     println!("   - Batch operations: {:?}", batch_duration);
 
     if single_duration > batch_duration {
-        let improvement = (1.0 - batch_duration.as_secs_f64() / single_duration.as_secs_f64())
-            * 100.0;
+        let improvement =
+            (1.0 - batch_duration.as_secs_f64() / single_duration.as_secs_f64()) * 100.0;
         println!(
             "   ✓ Batch is {:.1}% faster than single operations",
             improvement
@@ -170,7 +161,7 @@ async fn main() -> WincentResult<()> {
     println!();
 
     // Clean up batch items
-    let _ = manager.remove_items_batch(&batch_items).await?;
+    let _ = manager.remove_items_batch(&batch_items);
 
     println!("=== All examples completed successfully! ===");
 
