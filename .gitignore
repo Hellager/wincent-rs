@@ -23,4 +23,4 @@ Cargo.lock
 # Customize ignores
 .claude/
 .idea/
-.temp/
+temp/
