@@ -34,6 +34,9 @@ features = [
     "Win32_System_Diagnostics_Debug"
 ]
 
+[features]
+destlist = []
+
 [dev-dependencies]
 test-log = "0.2.16"
 serial_test = "3.2.0"

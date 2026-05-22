@@ -717,6 +717,12 @@ pub enum WincentError {
 
     #[error("COM apartment model mismatch: {0}")]
     ComApartmentMismatch(String),
+
+    #[error("DestList parse error: {0}")]
+    DestListParse(String),
+
+    #[error("Unsupported DestList version: {0}")]
+    DestListUnsupportedVersion(u32),
 }
 
 impl From<windows::core::Error> for WincentError {
