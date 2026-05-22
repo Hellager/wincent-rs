@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::WincentError;
+use crate::utils::get_windows_recent_folder;
 use crate::WincentResult;
 
 use super::cfb::{
@@ -49,46 +50,37 @@ pub struct DestList {
 /// A single DestList entry.
 #[derive(Debug, Clone)]
 pub struct DestListEntry {
-    /// Byte offset of this entry within the DestList stream (used by write.rs).
-    #[allow(dead_code)]
-    pub(crate) entry_offset: usize,
     pub entry_id: u64,
-    /// Hex string of `entry_id`; names the corresponding Shell Link stream.
-    pub stream_name: String,
     /// Raw path as stored; may be `"knownfolder:{GUID}"`.
     pub raw_path: String,
     /// Resolved path (knownfolder GUIDs resolved via Shell Link stream).
     pub path: String,
-    /// `None` if not pinned.
-    pub pin_order: Option<i32>,
-    pub recent_rank: i32,
+    /// `-1` if not pinned.
+    pub pin_status: i32,
+    pub rank: i32,
     /// `0` means hidden in v4.
-    pub access_count: u32,
+    pub count: u32,
+    pub score: f32,
     pub last_access_filetime: Option<u64>,
 }
 
+/// Returns all entries from a parsed DestList.
+pub fn entries(dest_list: &DestList) -> Vec<DestListEntry> {
+    dest_list.entries.clone()
+}
+
 /// Returns the path to the Explorer recent-files `.automaticDestinations-ms` file.
-pub fn recent_files_dest_path() -> PathBuf {
-    let appdata = std::env::var_os("APPDATA")
-        .unwrap_or_else(|| "C:\\Users\\Default\\AppData\\Roaming".into());
-    PathBuf::from(appdata)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Recent")
+pub fn recent_files_dest_path() -> WincentResult<PathBuf> {
+    Ok(PathBuf::from(get_windows_recent_folder()?)
         .join("AutomaticDestinations")
-        .join(RECENT_FILES_APPID)
+        .join(RECENT_FILES_APPID))
 }
 
 /// Returns the path to the Explorer frequent-folders `.automaticDestinations-ms` file.
-pub fn frequent_folders_dest_path() -> PathBuf {
-    let appdata = std::env::var_os("APPDATA")
-        .unwrap_or_else(|| "C:\\Users\\Default\\AppData\\Roaming".into());
-    PathBuf::from(appdata)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Recent")
+pub fn frequent_folders_dest_path() -> WincentResult<PathBuf> {
+    Ok(PathBuf::from(get_windows_recent_folder()?)
         .join("AutomaticDestinations")
-        .join(FREQUENT_FOLDERS_APPID)
+        .join(FREQUENT_FOLDERS_APPID))
 }
 
 /// Parses an `.automaticDestinations-ms` file from disk.
@@ -145,25 +137,33 @@ fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
     let mut offset = 32usize;
     let mut entries = Vec::new();
 
-    for _ in 0..entry_count {
+    for i in 0..entry_count {
         if offset + 130 > dest_list.len() {
-            break;
+            return Err(WincentError::DestListParse(format!(
+                "DestList truncated: expected {entry_count} entries, got {i}"
+            )));
         }
 
         let entry_id = read_u64(&dest_list, offset + 88).map_err(WincentError::DestListParse)?;
+        let score = f32::from_bits(
+            read_u32(&dest_list, offset + 96).map_err(WincentError::DestListParse)?,
+        );
         let last_access_filetime = read_u64(&dest_list, offset + 100).ok();
         let pin_status =
             read_i32(&dest_list, offset + 108).map_err(WincentError::DestListParse)?;
-        let recent_rank =
+        let rank =
             read_i32(&dest_list, offset + 112).map_err(WincentError::DestListParse)?;
-        let access_count =
+        let count =
             read_u32(&dest_list, offset + 116).map_err(WincentError::DestListParse)?;
         let path_chars =
             read_u16(&dest_list, offset + 128).map_err(WincentError::DestListParse)? as usize;
         let path_start = offset + 130;
         let path_end = path_start + path_chars.saturating_mul(2);
         if path_end > dest_list.len() {
-            break;
+            return Err(WincentError::DestListParse(format!(
+                "DestList entry {i} path extends beyond stream (offset={offset}, path_end={path_end}, len={})",
+                dest_list.len()
+            )));
         }
 
         let raw_path = decode_utf16_lossy(&dest_list[path_start..path_end]);
@@ -171,14 +171,13 @@ fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
         let resolved_path = resolve_path(cfb, &stream_name, &raw_path);
 
         entries.push(DestListEntry {
-            entry_offset: offset,
             entry_id,
-            stream_name,
             raw_path,
             path: resolved_path,
-            pin_order: (pin_status >= 0).then_some(pin_status),
-            recent_rank,
-            access_count,
+            pin_status,
+            rank,
+            count,
+            score,
             last_access_filetime,
         });
 
@@ -217,24 +216,29 @@ fn parse_lnk_local_path(data: &[u8]) -> Option<String> {
 
     if flags & 0x1 != 0 {
         let id_list_size = read_u16(data, offset).ok()? as usize;
-        offset = offset.checked_add(2 + id_list_size)?;
+        offset = offset.checked_add(2)?.checked_add(id_list_size)?;
     }
 
-    if flags & 0x2 == 0 || offset + 28 > data.len() {
+    let offset_plus_28 = offset.checked_add(28)?;
+    if flags & 0x2 == 0 || offset_plus_28 > data.len() {
         return None;
     }
 
     let link_info_start = offset;
     let link_info_size = read_u32(data, link_info_start).ok()? as usize;
-    if link_info_size < 28 || link_info_start + link_info_size > data.len() {
+    let link_info_end = link_info_start.checked_add(link_info_size)?;
+    if link_info_size < 28 || link_info_end > data.len() {
         return None;
     }
 
     let local_base_offset = read_u32(data, link_info_start + 16).ok()? as usize;
     let common_suffix_offset = read_u32(data, link_info_start + 24).ok()? as usize;
 
-    let base = read_c_string(data, link_info_start + local_base_offset);
-    let suffix = read_c_string(data, link_info_start + common_suffix_offset);
+    let base_abs = link_info_start.checked_add(local_base_offset)?;
+    let suffix_abs = link_info_start.checked_add(common_suffix_offset)?;
+
+    let base = read_c_string(data, base_abs);
+    let suffix = read_c_string(data, suffix_abs);
 
     match (base, suffix) {
         (Some(base), Some(suffix)) if !base.is_empty() && !suffix.is_empty() => {
@@ -293,5 +297,55 @@ mod tests {
         let result = parse_bytes(data);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), WincentError::DestListParse(_)));
+    }
+
+    #[test]
+    #[ignore = "Integration test; reads system Jump List file — run with: cargo test --features destlist parse_recent_files_metadata -- --ignored --nocapture"]
+    fn parse_recent_files_metadata() {
+        let path = recent_files_dest_path().expect("failed to get recent files dest path");
+        println!("Path: {}", path.display());
+
+        let parsed = parse_file(&path).expect("failed to parse recent files dest");
+        let all = entries(&parsed.dest_list);
+
+        println!(
+            "version={} declared={} pinned={} last_entry_id={:#x}",
+            parsed.dest_list.version,
+            parsed.dest_list.declared_entry_count,
+            parsed.dest_list.pinned_entry_count,
+            parsed.dest_list.last_entry_id,
+        );
+        println!("entries ({}):", all.len());
+        for e in &all {
+            println!(
+                "  id={:#x} pin={} rank={} count={} score={:.2} path={}",
+                e.entry_id, e.pin_status, e.rank, e.count, e.score, e.path
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "Integration test; reads system Jump List file — run with: cargo test --features destlist parse_frequent_folders_metadata -- --ignored --nocapture"]
+    fn parse_frequent_folders_metadata() {
+        let path = frequent_folders_dest_path().expect("failed to get frequent folders dest path");
+        println!("Path: {}", path.display());
+
+        let parsed = parse_file(&path).expect("failed to parse frequent folders dest");
+        let all = entries(&parsed.dest_list);
+
+        println!(
+            "version={} declared={} pinned={} last_entry_id={:#x}",
+            parsed.dest_list.version,
+            parsed.dest_list.declared_entry_count,
+            parsed.dest_list.pinned_entry_count,
+            parsed.dest_list.last_entry_id,
+        );
+        println!("entries ({}):", all.len());
+        for e in &all {
+            println!(
+                "  id={:#x} pin={} rank={} count={} score={:.2} path={}",
+                e.entry_id, e.pin_status, e.rank, e.count, e.score, e.path
+            );
+        }
     }
 }

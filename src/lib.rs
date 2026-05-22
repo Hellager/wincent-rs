@@ -97,7 +97,7 @@ pub mod prelude {
     pub use crate::destlist::{
         filetime_to_system_time, frequent_folders_dest_path,
         parse_bytes as parse_dest_bytes, parse_file as parse_dest_file, recent_files_dest_path,
-        visible_entries, AutomaticDestinations, CfbInfo, DestList, DestListEntry,
+        entries, AutomaticDestinations, CfbInfo, DestList, DestListEntry,
     };
 
     // Commonly used query functions

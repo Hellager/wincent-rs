@@ -45,7 +45,7 @@ wincent = "0.1.2"
 ### Basic Operations
 
 ```rust
-use wincent::predule::*;
+use wincent::prelude::*;
 
 fn main() -> WincentResult<()> {
     // Initialize manager
@@ -69,7 +69,7 @@ fn main() -> WincentResult<()> {
 ### Advanced Usage
 
 ```rust
-use wincent::predule::*;
+use wincent::prelude::*;
 
 fn main() -> WincentResult<()> {
     let manager = QuickAccessManager::new();

@@ -204,20 +204,21 @@ impl QuickAccessManager {
 
 #[cfg(feature = "destlist")]
 impl QuickAccessManager {
-    /// Parses the recent-files `.automaticDestinations-ms` file and returns rich metadata.
+    /// Parses the recent-files `.automaticDestinations-ms` file and returns all entries.
     pub fn get_recent_files_metadata(
         &self,
-    ) -> WincentResult<crate::destlist::AutomaticDestinations> {
-        crate::destlist::parse_file(crate::destlist::recent_files_dest_path())
+    ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
+        let parsed = crate::destlist::parse_file(crate::destlist::recent_files_dest_path()?)?;
+        Ok(crate::destlist::entries(&parsed.dest_list))
     }
 
-    /// Parses the frequent-folders `.automaticDestinations-ms` file and returns rich metadata.
+    /// Parses the frequent-folders `.automaticDestinations-ms` file and returns all entries.
     pub fn get_frequent_folders_metadata(
         &self,
-    ) -> WincentResult<crate::destlist::AutomaticDestinations> {
-        crate::destlist::parse_file(crate::destlist::frequent_folders_dest_path())
+    ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
+        let parsed = crate::destlist::parse_file(crate::destlist::frequent_folders_dest_path()?)?;
+        Ok(crate::destlist::entries(&parsed.dest_list))
     }
-
 }
 
 #[cfg(test)]

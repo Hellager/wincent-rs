@@ -39,9 +39,19 @@ impl CompoundFile {
         let sector_size = 1usize
             .checked_shl(read_u16(&data, 0x1e)? as u32)
             .ok_or_else(|| "invalid sector size shift".to_string())?;
+        if sector_size != 512 && sector_size != 4096 {
+            return Err(format!(
+                "unsupported CFB sector size {sector_size}: expected 512 or 4096"
+            ));
+        }
         let mini_sector_size = 1usize
             .checked_shl(read_u16(&data, 0x20)? as u32)
             .ok_or_else(|| "invalid mini sector size shift".to_string())?;
+        if mini_sector_size != 64 {
+            return Err(format!(
+                "unsupported CFB mini sector size {mini_sector_size}: expected 64"
+            ));
+        }
         let first_dir_sector = read_u32(&data, 0x30)?;
         let mini_cutoff_size = read_u32(&data, 0x38)?;
         let first_mini_fat_sector = read_u32(&data, 0x3c)?;
@@ -257,7 +267,9 @@ fn sector_slice(data: &[u8], sector_size: usize, sector_id: u32) -> CfbResult<&[
     let offset = (sector_id as usize + 1)
         .checked_mul(sector_size)
         .ok_or_else(|| "sector offset overflow".to_string())?;
-    let end = offset + sector_size;
+    let end = offset
+        .checked_add(sector_size)
+        .ok_or_else(|| "sector end overflow".to_string())?;
     data.get(offset..end)
         .ok_or_else(|| format!("sector {sector_id} is out of bounds"))
 }
@@ -369,5 +381,17 @@ mod tests {
         let result = sector_chain(&fat, 5);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside the FAT"));
+    }
+
+    #[test]
+    fn rejects_invalid_sector_size() {
+        let mut data = vec![0u8; 512];
+        data[0..8].copy_from_slice(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+        // Sector size shift of 1 → sector_size = 2, which is neither 512 nor 4096.
+        data[0x1e..0x20].copy_from_slice(&1u16.to_le_bytes());
+        data[0x20..0x22].copy_from_slice(&6u16.to_le_bytes()); // mini: 64
+        let result = CompoundFile::parse(data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unsupported CFB sector size"));
     }
 }
