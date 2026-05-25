@@ -152,6 +152,9 @@ cargo test
 
 - [Castorix31](https://learn.microsoft.com/en-us/answers/questions/1087928/how-to-get-recent-docs-list-and-delete-some-of-the)
 - [Yohan Ney](https://stackoverflow.com/questions/30051634/is-it-possible-programmatically-add-folders-to-the-windows-10-quick-access-panel)
+- [libyal](https://github.com/libyal/dtformats/blob/main/documentation/Jump%20lists%20format.asciidoc)
+- [Eric Zimmerman](https://github.com/EricZimmerman/JumpList)
+- [kacos2000](https://github.com/kacos2000/Jumplist-Browser)
 
 ## 许可证
 
