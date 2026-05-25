@@ -69,6 +69,7 @@ mod com;
 mod com_thread;
 pub mod empty;
 pub mod error;
+mod explorer_window;
 pub mod handle;
 pub mod manager;
 pub mod query;
