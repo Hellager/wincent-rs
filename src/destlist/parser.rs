@@ -5,9 +5,7 @@ use crate::error::WincentError;
 use crate::utils::get_windows_recent_folder;
 use crate::WincentResult;
 
-use super::cfb::{
-    decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, CompoundFile,
-};
+use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, CompoundFile};
 
 pub const RECENT_FILES_APPID: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
 pub const FREQUENT_FOLDERS_APPID: &str = "f01b4d95cf55d32a.automaticDestinations-ms";
@@ -43,25 +41,43 @@ pub struct DestList {
     pub version: u32,
     pub declared_entry_count: usize,
     pub pinned_entry_count: u32,
+    /// Compatibility alias for [`DestList::last_entry_number`].
     pub last_entry_id: u64,
+    pub last_entry_number: u32,
+    pub last_entry_number_unknown: u32,
+    pub last_revision_number: u32,
+    pub last_revision_number_unknown: u32,
     pub entries: Vec<DestListEntry>,
 }
 
 /// A single DestList entry.
 #[derive(Debug, Clone)]
 pub struct DestListEntry {
+    pub entry_offset: usize,
+    pub entry_len: usize,
+    /// Compatibility alias for [`DestListEntry::entry_number`].
     pub entry_id: u64,
+    pub entry_number: u32,
+    pub entry_number_unknown: u32,
+    pub stream_name: String,
     /// Raw path as stored; may be `"knownfolder:{GUID}"`.
     pub raw_path: String,
     /// Resolved path (knownfolder GUIDs resolved via Shell Link stream).
     pub path: String,
     /// `-1` if not pinned.
     pub pin_status: i32,
+    pub pin_order: Option<i32>,
+    /// Compatibility alias for [`DestListEntry::recent_rank`].
     pub rank: i32,
+    pub recent_rank: i32,
     /// `0` means hidden in v4.
     pub count: u32,
+    pub access_count: u32,
     pub score: f32,
+    /// Compatibility alias for [`DestListEntry::last_interaction_filetime`].
     pub last_access_filetime: Option<u64>,
+    pub last_interaction_filetime: Option<u64>,
+    pub sps_size: Option<u32>,
 }
 
 /// Returns all entries from a parsed DestList.
@@ -109,7 +125,10 @@ pub fn parse_bytes(data: Vec<u8>) -> WincentResult<AutomaticDestinations> {
             })
             .collect(),
     };
-    Ok(AutomaticDestinations { cfb_info, dest_list })
+    Ok(AutomaticDestinations {
+        cfb_info,
+        dest_list,
+    })
 }
 
 fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
@@ -119,79 +138,207 @@ fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
         .ok_or_else(|| WincentError::DestListParse("DestList stream not found".to_string()))?;
 
     if dest_list.len() < 32 {
-        return Err(WincentError::DestListParse(
-            "DestList stream is too small".to_string(),
-        ));
+        return Ok(DestList {
+            version: 0,
+            declared_entry_count: 0,
+            pinned_entry_count: 0,
+            last_entry_id: 0,
+            last_entry_number: 0,
+            last_entry_number_unknown: 0,
+            last_revision_number: 0,
+            last_revision_number_unknown: 0,
+            entries: Vec::new(),
+        });
     }
 
     let version = read_u32(&dest_list, 0).map_err(WincentError::DestListParse)?;
-    if version != 4 && version != 6 {
+    if !matches!(version, 1 | 3 | 4 | 6) {
         return Err(WincentError::DestListUnsupportedVersion(version));
     }
 
     let entry_count = read_u32(&dest_list, 4).map_err(WincentError::DestListParse)? as usize;
-    let pinned_entry_count =
-        read_u32(&dest_list, 8).map_err(WincentError::DestListParse)?;
-    let last_entry_id =
-        read_u64(&dest_list, 16).map_err(WincentError::DestListParse)?;
+    let pinned_entry_count = read_u32(&dest_list, 8).map_err(WincentError::DestListParse)?;
+    let last_entry_number = read_u32(&dest_list, 0x10).map_err(WincentError::DestListParse)?;
+    let last_entry_number_unknown =
+        read_u32(&dest_list, 0x14).map_err(WincentError::DestListParse)?;
+    let last_revision_number = read_u32(&dest_list, 0x18).map_err(WincentError::DestListParse)?;
+    let last_revision_number_unknown =
+        read_u32(&dest_list, 0x1c).map_err(WincentError::DestListParse)?;
     let mut offset = 32usize;
     let mut entries = Vec::new();
 
     for i in 0..entry_count {
-        if offset + 130 > dest_list.len() {
-            return Err(WincentError::DestListParse(format!(
-                "DestList truncated: expected {entry_count} entries, got {i}"
-            )));
-        }
+        let Some(entry) = parse_dest_list_entry(cfb, &dest_list, version, offset)
+            .map_err(WincentError::DestListParse)?
+        else {
+            if i == 0 {
+                return Err(WincentError::DestListParse(format!(
+                    "DestList truncated before first entry (declared {entry_count})"
+                )));
+            }
+            break;
+        };
 
-        let entry_id = read_u64(&dest_list, offset + 88).map_err(WincentError::DestListParse)?;
-        let score = f32::from_bits(
-            read_u32(&dest_list, offset + 96).map_err(WincentError::DestListParse)?,
-        );
-        let last_access_filetime = read_u64(&dest_list, offset + 100).ok();
-        let pin_status =
-            read_i32(&dest_list, offset + 108).map_err(WincentError::DestListParse)?;
-        let rank =
-            read_i32(&dest_list, offset + 112).map_err(WincentError::DestListParse)?;
-        let count =
-            read_u32(&dest_list, offset + 116).map_err(WincentError::DestListParse)?;
-        let path_chars =
-            read_u16(&dest_list, offset + 128).map_err(WincentError::DestListParse)? as usize;
-        let path_start = offset + 130;
-        let path_end = path_start + path_chars.saturating_mul(2);
-        if path_end > dest_list.len() {
-            return Err(WincentError::DestListParse(format!(
-                "DestList entry {i} path extends beyond stream (offset={offset}, path_end={path_end}, len={})",
-                dest_list.len()
-            )));
-        }
-
-        let raw_path = decode_utf16_lossy(&dest_list[path_start..path_end]);
-        let stream_name = format!("{entry_id:x}");
-        let resolved_path = resolve_path(cfb, &stream_name, &raw_path);
-
-        entries.push(DestListEntry {
-            entry_id,
-            raw_path,
-            path: resolved_path,
-            pin_status,
-            rank,
-            count,
-            score,
-            last_access_filetime,
-        });
-
-        // Versions 4 and 6 both store two UTF-16 NUL terminators after the variable path.
-        offset = path_end + 4;
+        offset = offset.checked_add(entry.entry_len).ok_or_else(|| {
+            WincentError::DestListParse("DestList entry offset overflow".to_string())
+        })?;
+        entries.push(entry);
     }
 
     Ok(DestList {
         version,
         declared_entry_count: entry_count,
         pinned_entry_count,
-        last_entry_id,
+        last_entry_id: last_entry_number as u64,
+        last_entry_number,
+        last_entry_number_unknown,
+        last_revision_number,
+        last_revision_number_unknown,
         entries,
     })
+}
+
+fn parse_dest_list_entry(
+    cfb: &CompoundFile,
+    dest_list: &[u8],
+    version: u32,
+    offset: usize,
+) -> Result<Option<DestListEntry>, String> {
+    match version {
+        1 => parse_dest_list_entry_v1(cfb, dest_list, offset),
+        3 | 4 | 6 => parse_dest_list_entry_v2_or_later(cfb, dest_list, offset),
+        _ => Err(format!("unsupported DestList version {version}")),
+    }
+}
+
+fn parse_dest_list_entry_v1(
+    cfb: &CompoundFile,
+    dest_list: &[u8],
+    offset: usize,
+) -> Result<Option<DestListEntry>, String> {
+    if offset + 0x72 > dest_list.len() {
+        return Ok(None);
+    }
+
+    let entry_number = read_u32(dest_list, offset + 0x58)?;
+    let entry_number_unknown = read_u32(dest_list, offset + 0x5c)?;
+    let score = f32::from_bits(read_u32(dest_list, offset + 0x60)?);
+    let last_interaction_filetime = read_u64(dest_list, offset + 0x64).ok();
+    let pin_status = read_i32(dest_list, offset + 0x6c)?;
+    let path_chars = read_u16(dest_list, offset + 0x70)? as usize;
+    let path_start = offset + 0x72;
+    let path_end = path_start
+        .checked_add(path_chars.saturating_mul(2))
+        .ok_or_else(|| "DestList v1 path size overflow".to_string())?;
+    if path_end > dest_list.len() {
+        return Ok(None);
+    }
+
+    Ok(Some(build_entry(
+        cfb,
+        offset,
+        path_end - offset,
+        entry_number,
+        entry_number_unknown,
+        &dest_list[path_start..path_end],
+        pin_status,
+        -1,
+        0,
+        score,
+        last_interaction_filetime,
+        None,
+    )))
+}
+
+fn parse_dest_list_entry_v2_or_later(
+    cfb: &CompoundFile,
+    dest_list: &[u8],
+    offset: usize,
+) -> Result<Option<DestListEntry>, String> {
+    if offset + 0x82 > dest_list.len() {
+        return Ok(None);
+    }
+
+    let entry_number = read_u32(dest_list, offset + 0x58)?;
+    let entry_number_unknown = read_u32(dest_list, offset + 0x5c)?;
+    let score = f32::from_bits(read_u32(dest_list, offset + 0x60)?);
+    let last_interaction_filetime = read_u64(dest_list, offset + 0x64).ok();
+    let pin_status = read_i32(dest_list, offset + 0x6c)?;
+    let recent_rank = read_i32(dest_list, offset + 0x70)?;
+    let access_count = read_u32(dest_list, offset + 0x74)?;
+    let path_chars = read_u16(dest_list, offset + 0x80)? as usize;
+    let path_start = offset + 0x82;
+    let path_end = path_start
+        .checked_add(path_chars.saturating_mul(2))
+        .ok_or_else(|| "DestList path size overflow".to_string())?;
+    if path_end > dest_list.len() || path_end + 4 > dest_list.len() {
+        return Ok(None);
+    }
+
+    let sps_size = read_u32(dest_list, path_end)?;
+    let entry_end = path_end
+        .checked_add(4)
+        .and_then(|value| value.checked_add(sps_size as usize))
+        .ok_or_else(|| "DestList entry size overflow".to_string())?;
+    if entry_end > dest_list.len() {
+        return Ok(None);
+    }
+
+    Ok(Some(build_entry(
+        cfb,
+        offset,
+        entry_end - offset,
+        entry_number,
+        entry_number_unknown,
+        &dest_list[path_start..path_end],
+        pin_status,
+        recent_rank,
+        access_count,
+        score,
+        last_interaction_filetime,
+        Some(sps_size),
+    )))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_entry(
+    cfb: &CompoundFile,
+    entry_offset: usize,
+    entry_len: usize,
+    entry_number: u32,
+    entry_number_unknown: u32,
+    raw_path_bytes: &[u8],
+    pin_status: i32,
+    recent_rank: i32,
+    access_count: u32,
+    score: f32,
+    last_interaction_filetime: Option<u64>,
+    sps_size: Option<u32>,
+) -> DestListEntry {
+    let raw_path = decode_utf16_lossy(raw_path_bytes);
+    let stream_name = format!("{entry_number:x}");
+    let resolved_path = resolve_path(cfb, &stream_name, &raw_path);
+
+    DestListEntry {
+        entry_offset,
+        entry_len,
+        entry_id: entry_number as u64,
+        entry_number,
+        entry_number_unknown,
+        stream_name,
+        raw_path,
+        path: resolved_path,
+        pin_status,
+        pin_order: (pin_status >= 0).then_some(pin_status),
+        rank: recent_rank,
+        recent_rank,
+        count: access_count,
+        access_count,
+        score,
+        last_access_filetime: last_interaction_filetime,
+        last_interaction_filetime,
+        sps_size,
+    }
 }
 
 fn resolve_path(cfb: &CompoundFile, stream_name: &str, raw_path: &str) -> String {
@@ -219,13 +366,13 @@ fn parse_lnk_local_path(data: &[u8]) -> Option<String> {
         offset = offset.checked_add(2)?.checked_add(id_list_size)?;
     }
 
-    let offset_plus_28 = offset.checked_add(28)?;
-    if flags & 0x2 == 0 || offset_plus_28 > data.len() {
+    if flags & 0x2 == 0 || offset.checked_add(28)? > data.len() {
         return None;
     }
 
     let link_info_start = offset;
     let link_info_size = read_u32(data, link_info_start).ok()? as usize;
+    let link_info_header_size = read_u32(data, link_info_start + 4).ok()? as usize;
     let link_info_end = link_info_start.checked_add(link_info_size)?;
     if link_info_size < 28 || link_info_end > data.len() {
         return None;
@@ -233,12 +380,37 @@ fn parse_lnk_local_path(data: &[u8]) -> Option<String> {
 
     let local_base_offset = read_u32(data, link_info_start + 16).ok()? as usize;
     let common_suffix_offset = read_u32(data, link_info_start + 24).ok()? as usize;
+    let local_base_unicode_offset =
+        if link_info_header_size >= 0x24 && link_info_start.checked_add(32)? <= data.len() {
+            read_u32(data, link_info_start + 28).ok()? as usize
+        } else {
+            0
+        };
+    let common_suffix_unicode_offset =
+        if link_info_header_size >= 0x24 && link_info_start.checked_add(36)? <= data.len() {
+            read_u32(data, link_info_start + 32).ok()? as usize
+        } else {
+            0
+        };
 
-    let base_abs = link_info_start.checked_add(local_base_offset)?;
-    let suffix_abs = link_info_start.checked_add(common_suffix_offset)?;
-
-    let base = read_c_string(data, base_abs);
-    let suffix = read_c_string(data, suffix_abs);
+    let base = read_utf16_z_string_in_link_info(
+        data,
+        link_info_start,
+        link_info_size,
+        local_base_unicode_offset,
+    )
+    .or_else(|| {
+        read_c_string_in_link_info(data, link_info_start, link_info_size, local_base_offset)
+    });
+    let suffix = read_utf16_z_string_in_link_info(
+        data,
+        link_info_start,
+        link_info_size,
+        common_suffix_unicode_offset,
+    )
+    .or_else(|| {
+        read_c_string_in_link_info(data, link_info_start, link_info_size, common_suffix_offset)
+    });
 
     match (base, suffix) {
         (Some(base), Some(suffix)) if !base.is_empty() && !suffix.is_empty() => {
@@ -248,6 +420,34 @@ fn parse_lnk_local_path(data: &[u8]) -> Option<String> {
         (_, Some(suffix)) if looks_like_windows_path(&suffix) => Some(suffix),
         _ => None,
     }
+}
+
+fn read_c_string_in_link_info(
+    data: &[u8],
+    link_info_start: usize,
+    link_info_size: usize,
+    relative_offset: usize,
+) -> Option<String> {
+    if relative_offset == 0 || relative_offset >= link_info_size {
+        return None;
+    }
+    let absolute_offset = link_info_start.checked_add(relative_offset)?;
+    let link_info_end = link_info_start.checked_add(link_info_size)?;
+    read_c_string(data.get(..link_info_end)?, absolute_offset)
+}
+
+fn read_utf16_z_string_in_link_info(
+    data: &[u8],
+    link_info_start: usize,
+    link_info_size: usize,
+    relative_offset: usize,
+) -> Option<String> {
+    if relative_offset == 0 || relative_offset >= link_info_size {
+        return None;
+    }
+    let absolute_offset = link_info_start.checked_add(relative_offset)?;
+    let link_info_end = link_info_start.checked_add(link_info_size)?;
+    read_utf16_z_string(data.get(..link_info_end)?, absolute_offset)
 }
 
 fn join_windows_path(base: &str, suffix: &str) -> String {
@@ -274,6 +474,26 @@ fn read_c_string(data: &[u8], offset: usize) -> Option<String> {
     Some(String::from_utf8_lossy(&data[offset..end]).to_string())
 }
 
+fn read_utf16_z_string(data: &[u8], offset: usize) -> Option<String> {
+    if offset + 1 >= data.len() {
+        return None;
+    }
+
+    let mut end = offset;
+    while end + 1 < data.len() {
+        if data[end] == 0 && data[end + 1] == 0 {
+            break;
+        }
+        end += 2;
+    }
+
+    if end == offset || end + 1 >= data.len() {
+        return None;
+    }
+
+    Some(decode_utf16_lossy(&data[offset..end]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,7 +516,10 @@ mod tests {
         let data = vec![0u8; 100];
         let result = parse_bytes(data);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), WincentError::DestListParse(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            WincentError::DestListParse(_)
+        ));
     }
 
     #[test]

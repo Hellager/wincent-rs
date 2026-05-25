@@ -21,7 +21,7 @@
 //!
 //! # Known Limitations
 //!
-//! **Only DestList versions 4 and 6 are supported.** Other versions return
+//! **DestList versions 1, 3, 4 and 6 are supported.** Other versions return
 //! [`WincentError::DestListUnsupportedVersion`].
 
 pub(super) mod cfb;
