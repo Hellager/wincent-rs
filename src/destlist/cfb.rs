@@ -203,7 +203,7 @@ fn read_regular_stream(
     let chain = sector_chain(fat, start_sector)?;
     let mut out = Vec::new();
     for sector_id in chain {
-        out.extend_from_slice(sector_slice(data, sector_size, sector_id)?);
+        out.extend_from_slice(stream_sector_slice(data, sector_size, sector_id)?);
     }
     Ok(out)
 }
@@ -272,6 +272,20 @@ fn sector_slice(data: &[u8], sector_size: usize, sector_id: u32) -> CfbResult<&[
         .ok_or_else(|| "sector end overflow".to_string())?;
     data.get(offset..end)
         .ok_or_else(|| format!("sector {sector_id} is out of bounds"))
+}
+
+fn stream_sector_slice(data: &[u8], sector_size: usize, sector_id: u32) -> CfbResult<&[u8]> {
+    let offset = (sector_id as usize + 1)
+        .checked_mul(sector_size)
+        .ok_or_else(|| "sector offset overflow".to_string())?;
+    if offset >= data.len() {
+        return Err(format!("sector {sector_id} is out of bounds"));
+    }
+    let end = offset
+        .checked_add(sector_size)
+        .ok_or_else(|| "sector end overflow".to_string())?
+        .min(data.len());
+    Ok(&data[offset..end])
 }
 
 fn parse_directory(directory_stream: &[u8]) -> CfbResult<Vec<DirectoryEntry>> {
@@ -381,6 +395,30 @@ mod tests {
         let result = sector_chain(&fat, 5);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside the FAT"));
+    }
+
+    #[test]
+    fn regular_stream_allows_short_final_physical_sector() {
+        let mut data = vec![0u8; 512];
+        data.extend(std::iter::repeat(1u8).take(512));
+        data.extend(std::iter::repeat(2u8).take(10));
+        let fat = vec![1, END_OF_CHAIN];
+
+        let stream = read_regular_stream_sized(&data, 512, &fat, 0, 522).unwrap();
+
+        assert_eq!(stream.len(), 522);
+        assert!(stream[..512].iter().all(|byte| *byte == 1));
+        assert!(stream[512..].iter().all(|byte| *byte == 2));
+    }
+
+    #[test]
+    fn fat_sector_slice_still_requires_full_sector() {
+        let data = vec![0u8; 512 + 10];
+
+        let result = sector_slice(&data, 512, 0);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("sector 0 is out of bounds"));
     }
 
     #[test]

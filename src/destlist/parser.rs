@@ -353,7 +353,7 @@ fn resolve_path(cfb: &CompoundFile, stream_name: &str, raw_path: &str) -> String
     raw_path.to_string()
 }
 
-fn parse_lnk_local_path(data: &[u8]) -> Option<String> {
+pub(super) fn parse_lnk_local_path(data: &[u8]) -> Option<String> {
     if data.len() < 0x4c || read_u32(data, 0).ok()? != 0x4c {
         return None;
     }

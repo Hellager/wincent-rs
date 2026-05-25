@@ -25,9 +25,14 @@
 //! [`WincentError::DestListUnsupportedVersion`].
 
 pub(super) mod cfb;
+pub mod experimental_remove;
 pub mod parser;
 pub mod time;
 
+pub use experimental_remove::{
+    experimental_remove_entries_by_rebuild, experimental_remove_entry_paths_by_rebuild,
+    AutomaticDestinationsKind, ExperimentalRemoveOptions, ExperimentalRemoveReport,
+};
 pub use parser::{
     entries, frequent_folders_dest_path, parse_bytes, parse_file, recent_files_dest_path,
     AutomaticDestinations, CfbDirectoryEntry, CfbInfo, DestList, DestListEntry,
