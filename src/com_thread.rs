@@ -1,8 +1,32 @@
 use crate::com::{classify_coinit_result, ComInitStatus};
 use crate::{error::WincentError, WincentResult};
 use std::panic::AssertUnwindSafe;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::Duration;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+
+struct StaComGuard;
+
+impl Drop for StaComGuard {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
+fn recv_sta_result<T>(rx: Receiver<WincentResult<T>>, timeout: Duration) -> WincentResult<T> {
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => Err(WincentError::Timeout(format!(
+            "COM STA thread timed out after {}s",
+            timeout.as_secs_f64()
+        ))),
+        Err(RecvTimeoutError::Disconnected) => Err(WincentError::SystemError(
+            "COM STA thread disconnected before sending a result".to_string(),
+        )),
+    }
+}
 
 /// Runs a closure on a dedicated STA thread, allowing COM cross-process calls to succeed.
 ///
@@ -11,7 +35,12 @@ use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTME
 /// replies. COM's internal machinery handles this automatically when the closure runs on
 /// a fresh STA thread with no other blocking waits. Without this wrapper, calling
 /// `shell_folder(path)` from an arbitrary thread hangs indefinitely on Windows 11.
-pub(crate) fn run_on_sta_thread<F, T>(f: F, timeout: std::time::Duration) -> WincentResult<T>
+///
+/// If the timeout elapses, this function returns while the worker thread keeps
+/// running. COM is uninitialized by that worker when it exits naturally; if the
+/// receiver has already gone away, sending the late result is intentionally
+/// ignored.
+pub(crate) fn run_on_sta_thread<F, T>(f: F, timeout: Duration) -> WincentResult<T>
 where
     F: FnOnce() -> WincentResult<T> + Send + 'static,
     T: Send + 'static,
@@ -35,10 +64,13 @@ where
                 }
                 ComInitStatus::AlreadyInitialized => {
                     // Unexpected: new thread should not return S_FALSE
-                    // But continue for robustness
+                    // But continue for robustness. S_FALSE is still a
+                    // successful CoInitializeEx call and is balanced by
+                    // StaComGuard below.
                     eprintln!("Warning: CoInitializeEx returned S_FALSE on new thread");
                 }
                 ComInitStatus::ApartmentMismatch => {
+                    // Failed CoInitializeEx calls do not require CoUninitialize.
                     let _ = tx.send(Err(WincentError::ComApartmentMismatch(
                         "Thread already initialized with incompatible COM apartment model"
                             .to_string(),
@@ -46,6 +78,7 @@ where
                     return;
                 }
                 ComInitStatus::OtherError(hr_code) => {
+                    // Failed CoInitializeEx calls do not require CoUninitialize.
                     let _ = tx.send(Err(WincentError::SystemError(format!(
                         "COM init on STA thread failed: 0x{:08X}",
                         hr_code
@@ -54,6 +87,7 @@ where
                 }
             }
 
+            let _com = StaComGuard;
             let result = std::panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|payload| {
                 let msg = payload
                     .downcast_ref::<&str>()
@@ -65,17 +99,13 @@ where
                     msg
                 )))
             });
-            unsafe { CoUninitialize() };
+            // The receiver may have timed out and returned already. In that
+            // case the worker still finishes normally and StaComGuard releases COM.
             let _ = tx.send(result);
         })
         .map_err(|e| WincentError::SystemError(format!("Failed to spawn COM thread: {}", e)))?;
 
-    rx.recv_timeout(timeout).map_err(|_| {
-        WincentError::SystemError(format!(
-            "COM STA thread timed out or disconnected after {}s",
-            timeout.as_secs()
-        ))
-    })?
+    recv_sta_result(rx, timeout)
 }
 
 #[cfg(test)]
@@ -91,6 +121,38 @@ mod tests {
             matches!(result, Err(WincentError::InvalidArgument(_))),
             "Expected InvalidArgument for zero timeout, got: {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn test_recv_sta_result_timeout_is_distinct() {
+        let (_tx, rx) = mpsc::channel::<WincentResult<()>>();
+        let result = recv_sta_result(rx, std::time::Duration::from_millis(1));
+
+        assert!(
+            matches!(result, Err(WincentError::Timeout(_))),
+            "Expected Timeout for recv timeout, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_recv_sta_result_disconnected_is_distinct() {
+        let (tx, rx) = mpsc::channel::<WincentResult<()>>();
+        drop(tx);
+
+        let result = recv_sta_result(rx, std::time::Duration::from_secs(10));
+
+        assert!(
+            matches!(result, Err(WincentError::SystemError(_))),
+            "Expected SystemError for disconnected worker, got: {:?}",
+            result
+        );
+        let rendered = result.unwrap_err().to_string();
+        assert!(
+            rendered.contains("disconnected"),
+            "Disconnected error should be explicit, got: {}",
+            rendered
         );
     }
 
