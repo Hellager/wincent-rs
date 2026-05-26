@@ -37,7 +37,7 @@ const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 const SHARD_PATHW: u32 = 0x0000_0003;
 
 /// Options for adding a file to Windows Recent Files.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AddRecentFileOptions {
     /// Remove the cached Recent Files data file after adding the item so Explorer
     /// rebuilds the visible list.

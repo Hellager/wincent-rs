@@ -39,7 +39,7 @@ pub enum AutomaticDestinationsKind {
 }
 
 /// Options for the experimental remove-and-rebuild flow.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExperimentalRemoveOptions {
     /// Initial grace delay after deleting the `.automaticDestinations-ms` file
     /// before polling for the rebuilt file.
@@ -60,7 +60,7 @@ impl Default for ExperimentalRemoveOptions {
 }
 
 /// Result of the experimental remove-and-rebuild flow.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExperimentalRemoveReport {
     /// Automatic destination kind that was processed.
     pub kind: AutomaticDestinationsKind,

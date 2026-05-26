@@ -96,6 +96,7 @@ impl RetryPolicy {
     /// let policy = RetryPolicy::no_retry();
     /// assert_eq!(policy.max_attempts, 0);
     /// ```
+    #[must_use]
     pub fn no_retry() -> Self {
         Self {
             max_attempts: 0,
@@ -121,6 +122,7 @@ impl RetryPolicy {
     /// let policy = RetryPolicy::fast();
     /// assert_eq!(policy.max_attempts, 2);
     /// ```
+    #[must_use]
     pub fn fast() -> Self {
         Self {
             max_attempts: 2,
@@ -140,6 +142,7 @@ impl RetryPolicy {
     /// let policy = RetryPolicy::standard();
     /// assert_eq!(policy.max_attempts, 3);
     /// ```
+    #[must_use]
     pub fn standard() -> Self {
         Self::default()
     }
@@ -159,6 +162,7 @@ impl RetryPolicy {
     /// let policy = RetryPolicy::aggressive();
     /// assert_eq!(policy.max_attempts, 5);
     /// ```
+    #[must_use]
     pub fn aggressive() -> Self {
         Self {
             max_attempts: 5,
@@ -186,6 +190,7 @@ impl RetryPolicy {
     /// let delay2 = policy.calculate_delay(1);
     /// // delay2 should be roughly 2x delay1 (with jitter variation)
     /// ```
+    #[must_use]
     pub fn calculate_delay(&self, attempt: u32) -> Duration {
         // Calculate base delay with exponential backoff
         let base_delay =

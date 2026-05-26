@@ -13,7 +13,7 @@ pub const RECENT_FILES_APPID: &str = "5f7b5f1e01b83767.automaticDestinations-ms"
 pub const FREQUENT_FOLDERS_APPID: &str = "f01b4d95cf55d32a.automaticDestinations-ms";
 
 /// Parsed `.automaticDestinations-ms` file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AutomaticDestinations {
     /// Compound File Binary container metadata.
     pub cfb_info: CfbInfo,
@@ -22,7 +22,7 @@ pub struct AutomaticDestinations {
 }
 
 /// CFB container metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfbInfo {
     /// Regular sector size in bytes.
     pub sector_size: usize,
@@ -35,7 +35,7 @@ pub struct CfbInfo {
 }
 
 /// A single CFB directory entry (stream or storage).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfbDirectoryEntry {
     /// Directory entry name.
     pub name: String,
@@ -48,7 +48,7 @@ pub struct CfbDirectoryEntry {
 }
 
 /// Parsed DestList stream header + entries.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DestList {
     /// DestList format version.
     pub version: u32,
@@ -71,7 +71,7 @@ pub struct DestList {
 }
 
 /// A single DestList entry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DestListEntry {
     /// Byte offset of this entry inside the DestList stream.
     pub entry_offset: usize,

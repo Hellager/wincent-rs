@@ -18,6 +18,8 @@ use crate::{
 use std::time::Duration;
 
 /// Builder for configuring [`QuickAccessManager`].
+#[derive(Debug, Clone)]
+#[must_use]
 pub struct QuickAccessManagerBuilder {
     timeout: Duration,
 }
@@ -36,10 +38,26 @@ impl QuickAccessManagerBuilder {
     /// # Panics
     ///
     /// Panics if `duration` is zero.
+    #[must_use]
     pub fn timeout(mut self, duration: Duration) -> Self {
         assert!(!duration.is_zero(), "Timeout must be greater than zero");
         self.timeout = duration;
         self
+    }
+
+    /// Tries to set the timeout for shell operations that support timeout control.
+    ///
+    /// Unlike [`QuickAccessManagerBuilder::timeout`], this returns
+    /// [`WincentError::InvalidArgument`] instead of panicking when `duration` is
+    /// zero.
+    pub fn try_timeout(mut self, duration: Duration) -> WincentResult<Self> {
+        if duration.is_zero() {
+            return Err(WincentError::InvalidArgument(
+                "timeout must be greater than zero".to_string(),
+            ));
+        }
+        self.timeout = duration;
+        Ok(self)
     }
 
     /// Builds a configured [`QuickAccessManager`].
@@ -54,6 +72,7 @@ impl QuickAccessManagerBuilder {
 ///
 /// This type is a thin synchronous facade over the `query`, `handle`, `empty`,
 /// and `batch` modules.
+#[derive(Debug, Clone)]
 pub struct QuickAccessManager {
     timeout: Duration,
 }
@@ -66,16 +85,19 @@ impl Default for QuickAccessManager {
 
 impl QuickAccessManager {
     /// Creates a new builder for [`QuickAccessManager`].
+    #[must_use]
     pub fn builder() -> QuickAccessManagerBuilder {
         QuickAccessManagerBuilder::default()
     }
 
     /// Creates a manager with default configuration.
+    #[must_use]
     pub fn new() -> Self {
         Self::builder().build()
     }
 
     /// Returns the configured shell operation timeout.
+    #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
@@ -117,7 +139,7 @@ impl QuickAccessManager {
 
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
-        if self.check_item_exact(path, qa_type.clone())? {
+        if self.check_item_exact(path, qa_type)? {
             return Err(WincentError::AlreadyExists(path.to_string()));
         }
 
@@ -143,7 +165,7 @@ impl QuickAccessManager {
 
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
-        if !self.check_item_exact(path, qa_type.clone())? {
+        if !self.check_item_exact(path, qa_type)? {
             return Err(WincentError::NotInRecent(path.to_string()));
         }
 
@@ -249,6 +271,15 @@ mod tests {
             .timeout(Duration::from_secs(30))
             .build();
         assert_eq!(manager.timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn builder_try_timeout_returns_error_for_zero() {
+        let error = QuickAccessManager::builder()
+            .try_timeout(Duration::ZERO)
+            .unwrap_err();
+
+        assert!(matches!(error, WincentError::InvalidArgument(_)));
     }
 
     #[test]

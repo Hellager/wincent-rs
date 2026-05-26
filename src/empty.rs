@@ -26,7 +26,7 @@ use windows::Win32::UI::Shell::SHAddToRecentDocs;
 const SHARD_PATHW: u32 = 0x0000_0003;
 
 /// Options for clearing Quick Access items.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EmptyOptions {
     /// Also attempt to remove pinned folders from Quick Access.
     pub also_pinned_folders: bool,

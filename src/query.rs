@@ -366,7 +366,7 @@ fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
 /// The native approach is significantly faster (~10-50ms vs ~200-500ms).
 pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     // Try native COM first (fast path)
-    let qa_type_clone = qa_type.clone();
+    let qa_type_clone = qa_type;
     query_recent_native(qa_type).or_else(|native_error| {
         eprintln!(
             "Warning: native Quick Access query for {:?} failed; falling back to PowerShell: {}",

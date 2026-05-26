@@ -325,11 +325,13 @@ impl PowerShellError {
     ///     println!("Chinese access denied error");
     /// }
     /// ```
+    #[must_use]
     pub fn raw_stderr(&self) -> &str {
         &self.stderr
     }
 
     /// Returns the raw stdout for custom analysis
+    #[must_use]
     pub fn raw_stdout(&self) -> &str {
         &self.stdout
     }
@@ -355,6 +357,7 @@ impl PowerShellError {
     ///     println!("Access denied in Chinese");
     /// }
     /// ```
+    #[must_use]
     pub fn stderr_contains(&self, pattern: &str) -> bool {
         self.stderr.to_lowercase().contains(&pattern.to_lowercase())
     }
@@ -413,6 +416,7 @@ impl PowerShellError {
     /// assert!(err.is_access_denied()); // Still true
     /// assert!(!err.is_timeout()); // False - no inconsistency
     /// ```
+    #[must_use]
     pub fn with_kind(mut self, kind: PowerShellErrorKind) -> Self {
         // Only allow reclassification if there's no strong evidence from OS/IO errors
         if self.os_error.is_none() && self.io_error.is_none() {
@@ -485,6 +489,7 @@ impl PowerShellError {
     /// assert!(err.is_access_denied()); // Still true
     /// assert!(!err.is_timeout()); // False - no inconsistency
     /// ```
+    #[must_use]
     pub fn reclassify_with<F>(mut self, classifier: F) -> Self
     where
         F: Fn(&str) -> Option<PowerShellErrorKind>,
@@ -509,6 +514,7 @@ impl PowerShellError {
     }
 
     /// Checks if error is due to access denied
+    #[must_use]
     pub fn is_access_denied(&self) -> bool {
         // Priority 1: Check OS error code
         if let Some(os_err) = self.os_error {
@@ -538,6 +544,7 @@ impl PowerShellError {
     }
 
     /// Checks if error is due to execution policy
+    #[must_use]
     pub fn is_execution_policy_error(&self) -> bool {
         // If os_error or io_error exists, they take precedence
         // This prevents state inconsistency where multiple is_*() methods return true
@@ -556,6 +563,7 @@ impl PowerShellError {
     }
 
     /// Checks if error is due to timeout
+    #[must_use]
     pub fn is_timeout(&self) -> bool {
         // If os_error or io_error exists, they take precedence
         // This prevents state inconsistency where multiple is_*() methods return true
@@ -575,6 +583,7 @@ impl PowerShellError {
     }
 
     /// Checks if error is due to missing cmdlet
+    #[must_use]
     pub fn is_cmdlet_not_found(&self) -> bool {
         // If os_error or io_error exists, they take precedence
         // This prevents state inconsistency where multiple is_*() methods return true
@@ -594,6 +603,7 @@ impl PowerShellError {
     }
 
     /// Provides user-friendly fix suggestions
+    #[must_use]
     pub fn suggest_fix(&self) -> Option<String> {
         if self.is_access_denied() {
             return Some("Try running as administrator or check file permissions.".to_string());
@@ -618,6 +628,7 @@ impl PowerShellError {
     }
 
     /// Categorizes error as transient (retryable) or permanent
+    #[must_use]
     pub fn is_transient(&self) -> bool {
         // Timeout, network issues, temporary locks are transient
         self.is_timeout()

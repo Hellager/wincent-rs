@@ -124,8 +124,8 @@ pub mod prelude {
 
 use crate::error::WincentError;
 
-#[derive(Debug, PartialEq, Clone)]
 /// Quick Access categories supported by this crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QuickAccess {
     /// Frequently used or pinned folders shown by Quick Access.
     FrequentFolders,

@@ -15,7 +15,7 @@ use crate::{
 use std::time::Duration;
 
 /// Result of a batch operation containing succeeded and failed items.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct BatchResult {
     /// Successfully processed items.
     pub succeeded: Vec<String>,
@@ -30,16 +30,19 @@ pub struct BatchResult {
 
 impl BatchResult {
     /// Returns true if all operations succeeded.
+    #[must_use]
     pub fn is_complete_success(&self) -> bool {
         self.failed.is_empty()
     }
 
     /// Returns true if at least one operation succeeded.
+    #[must_use]
     pub fn has_partial_success(&self) -> bool {
         !self.succeeded.is_empty()
     }
 
     /// Returns the success rate (0.0 to 1.0).
+    #[must_use]
     pub fn success_rate(&self) -> f64 {
         let total = self.total();
         if total == 0 {
@@ -49,13 +52,14 @@ impl BatchResult {
     }
 
     /// Returns the total number of operations.
+    #[must_use]
     pub fn total(&self) -> usize {
         self.succeeded.len() + self.failed.len()
     }
 }
 
 /// Options for batch operations.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatchOptions {
     /// Timeout for shell operations that support timeout control.
     pub timeout: Duration,
@@ -108,7 +112,7 @@ fn add_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentR
 
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if check_item_exact(path, qa_type.clone())? {
+    if check_item_exact(path, qa_type)? {
         return Err(WincentError::AlreadyExists(path.to_string()));
     }
 
@@ -132,7 +136,7 @@ fn remove_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> Wince
 
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if !check_item_exact(path, qa_type.clone())? {
+    if !check_item_exact(path, qa_type)? {
         return Err(WincentError::NotInRecent(path.to_string()));
     }
 
@@ -162,7 +166,7 @@ pub fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -
     let mut recent_files_succeeded = false;
 
     for (path, qa_type) in items {
-        match add_item(path, qa_type.clone(), options) {
+        match add_item(path, *qa_type, options) {
             Ok(()) => {
                 if matches!(qa_type, QuickAccess::RecentFiles) {
                     recent_files_succeeded = true;
@@ -194,7 +198,7 @@ pub fn remove_items_batch(items: &[(String, QuickAccess)], options: BatchOptions
     let mut failed = Vec::new();
 
     for (path, qa_type) in items {
-        match remove_item(path, qa_type.clone(), options) {
+        match remove_item(path, *qa_type, options) {
             Ok(()) => succeeded.push(path.clone()),
             Err(error) => failed.push((path.clone(), error)),
         }
