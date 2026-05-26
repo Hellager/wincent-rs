@@ -703,8 +703,15 @@ pub enum WincentError {
         "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"
     )]
     PartialEmpty {
+        /// Whether Recent Files were cleared before a later cleanup step failed.
         recent_files_cleared: bool,
+        /// Whether Frequent Folders cleanup made user-visible progress before failure.
+        ///
+        /// For Frequent Folders this is intentionally coarse-grained: `true`
+        /// means the user-visited jump list was cleared. Pinned folder cleanup
+        /// may still have failed and be reported by `source`.
         frequent_folders_cleared: bool,
+        /// The underlying error that prevented the full clear from completing.
         #[source]
         source: Box<WincentError>,
     },

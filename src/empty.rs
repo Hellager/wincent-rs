@@ -22,6 +22,9 @@ use crate::{
 };
 use windows::Win32::UI::Shell::SHAddToRecentDocs;
 
+/// SHARD_PATHW - with a null data pointer, clears all recent documents.
+const SHARD_PATHW: u32 = 0x0000_0003;
+
 /// Options for clearing Quick Access items.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EmptyOptions {
@@ -52,9 +55,10 @@ pub(crate) fn empty_recent_files_with_api() -> WincentResult<()> {
         _ => unreachable!(),
     })?;
 
+    // SAFETY: SHARD_PATHW with a null data pointer is a documented Windows API
+    // pattern for clearing the recent documents list. No pointer dereference occurs.
     unsafe {
-        // Passing None clears all recent docs (SHARD_PATHW with null pv)
-        SHAddToRecentDocs(0x0000_0003, None);
+        SHAddToRecentDocs(SHARD_PATHW, None);
     }
 
     Ok(())
@@ -161,6 +165,8 @@ pub fn empty_recent_files() -> WincentResult<()> {
 /// # Returns
 ///
 /// Returns `Ok(())` if the requested cleanup steps completed successfully.
+/// If the jump list was cleared but pinned-folder cleanup failed, returns
+/// `WincentError::PartialEmpty` with `frequent_folders_cleared: true`.
 ///
 /// # Example
 ///
@@ -180,9 +186,31 @@ pub fn empty_recent_files() -> WincentResult<()> {
 pub fn empty_frequent_folders(also_pinned_folders: bool) -> WincentResult<()> {
     empty_user_folders_with_jumplist_file()?;
     if also_pinned_folders {
-        empty_pinned_folders()?;
+        if let Err(source) = empty_pinned_folders() {
+            return Err(partial_frequent_folders_error(source));
+        }
     }
     Ok(())
+}
+
+fn partial_frequent_folders_error(source: WincentError) -> WincentError {
+    WincentError::PartialEmpty {
+        recent_files_cleared: false,
+        // This means the user-visited frequent-folders jump list was cleared.
+        // It does not guarantee pinned folders were removed.
+        frequent_folders_cleared: true,
+        source: Box::new(source),
+    }
+}
+
+fn frequent_folders_cleared_from_error(error: &WincentError) -> bool {
+    match error {
+        WincentError::PartialEmpty {
+            frequent_folders_cleared,
+            ..
+        } => *frequent_folders_cleared,
+        _ => false,
+    }
 }
 
 /// Clears items from Windows Quick Access.
@@ -234,9 +262,10 @@ fn empty_all_items(options: EmptyOptions) -> WincentResult<()> {
     }
 
     if let Err(source) = empty_frequent_folders(options.also_pinned_folders) {
+        let frequent_folders_cleared = frequent_folders_cleared_from_error(&source);
         return Err(WincentError::PartialEmpty {
             recent_files_cleared: true,
-            frequent_folders_cleared: false,
+            frequent_folders_cleared,
             source: Box::new(source),
         });
     }
@@ -300,6 +329,18 @@ mod tests {
     // -------------------------------------------------------------------------
     // Integration-test helpers
     // -------------------------------------------------------------------------
+
+    fn path_to_str(path: &std::path::Path) -> WincentResult<&str> {
+        path.to_str()
+            .ok_or_else(|| WincentError::InvalidPath(path.display().to_string()))
+    }
+
+    fn unique_millis() -> WincentResult<u128> {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .map_err(|error| WincentError::SystemError(error.to_string()))
+    }
 
     /// RAII guard that runs best-effort cleanup when dropped.
     ///
@@ -377,6 +418,32 @@ mod tests {
             ),
             RefreshPolicy::BestEffort
         );
+    }
+
+    #[test]
+    fn partial_frequent_folders_error_marks_jump_list_progress() {
+        let error = partial_frequent_folders_error(WincentError::ScriptFailed("failed".into()));
+
+        match error {
+            WincentError::PartialEmpty {
+                recent_files_cleared,
+                frequent_folders_cleared,
+                ..
+            } => {
+                assert!(!recent_files_cleared);
+                assert!(frequent_folders_cleared);
+            }
+            other => panic!("Expected PartialEmpty, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn frequent_folders_cleared_from_error_preserves_partial_progress() {
+        let partial = partial_frequent_folders_error(WincentError::ScriptFailed("failed".into()));
+        let non_partial = WincentError::ScriptFailed("failed".into());
+
+        assert!(frequent_folders_cleared_from_error(&partial));
+        assert!(!frequent_folders_cleared_from_error(&non_partial));
     }
 
     #[test]
@@ -523,12 +590,9 @@ mod tests {
     fn test_empty_recent_files() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let timestamp = unique_millis()?;
         let test_file = create_test_file(&test_dir, &format!("empty_test_{timestamp}.txt"), "x")?;
-        let test_path = test_file.to_str().unwrap();
+        let test_path = path_to_str(&test_file)?;
         // Guard is created after test_file so it can register the path for cleanup.
         let _guard = TestGuard::new(test_dir.clone()).with_recent_file(test_path);
 
@@ -631,12 +695,12 @@ mod tests {
     #[ignore = "Modifies system state"]
     fn test_empty_pinned_folders_clears_all() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
-        let test_path_a = test_dir.to_str().unwrap().to_owned();
+        let test_path_a = path_to_str(&test_dir)?.to_owned();
 
         // Create a second distinct directory inside the test tree.
         let dir_b = test_dir.join("sub_b");
         std::fs::create_dir_all(&dir_b).map_err(WincentError::Io)?;
-        let test_path_b = dir_b.to_str().unwrap().to_owned();
+        let test_path_b = path_to_str(&dir_b)?.to_owned();
 
         let _guard = TestGuard::new(test_dir.clone())
             .with_pinned(&test_path_a)
@@ -700,7 +764,7 @@ mod tests {
     #[ignore = "Modifies system state"]
     fn test_empty_frequent_folders_true_removes_pinned() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
-        let test_path = test_dir.to_str().unwrap().to_owned();
+        let test_path = path_to_str(&test_dir)?.to_owned();
         let _guard = TestGuard::new(test_dir.clone()).with_pinned(&test_path);
 
         pin_frequent_folder(&test_path, Duration::from_secs(10))?;
@@ -739,12 +803,9 @@ mod tests {
     fn test_empty_quick_access_false_preserves_pinned() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let timestamp = unique_millis()?;
         let test_file = create_test_file(&test_dir, &format!("qa_false_{timestamp}.txt"), "x")?;
-        let file_path = test_file.to_str().unwrap();
+        let file_path = path_to_str(&test_file)?;
         let _guard = TestGuard::new(test_dir.clone()).with_recent_file(file_path);
 
         add_file_to_recent_native(file_path)?;
@@ -774,14 +835,11 @@ mod tests {
     #[ignore = "Modifies system state"]
     fn test_empty_quick_access_true_clears_all() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
-        let test_path = test_dir.to_str().unwrap().to_owned();
+        let test_path = path_to_str(&test_dir)?.to_owned();
 
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let timestamp = unique_millis()?;
         let test_file = create_test_file(&test_dir, &format!("qa_true_{timestamp}.txt"), "x")?;
-        let file_path = test_file.to_str().unwrap();
+        let file_path = path_to_str(&test_file)?;
         let _guard = TestGuard::new(test_dir.clone())
             .with_pinned(&test_path)
             .with_recent_file(file_path);
