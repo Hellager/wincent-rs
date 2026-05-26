@@ -542,7 +542,7 @@ mod tests {
     /// reference counts by cycling through multiple init/uninit rounds and checking
     /// that no STA references leak into a subsequent MTA initialization.
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
     fn test_com_s_false_reference_counting() -> WincentResult<()> {
         use windows::Win32::System::Com::{
             CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
@@ -586,7 +586,7 @@ mod tests {
     /// Act:     call `empty_recent_files_with_api()`.
     /// Assert:  the list becomes empty.
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_empty_recent_files -- --ignored --nocapture"]
     fn test_empty_recent_files() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
 
@@ -623,7 +623,7 @@ mod tests {
     /// programmatically) are stored separately and are NOT affected by deleting
     /// this file.
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_empty_user_folders_deletes_jumplist_file -- --ignored --nocapture"]
     fn test_empty_user_folders_deletes_jumplist_file() -> WincentResult<()> {
         use crate::utils::get_windows_recent_folder;
 
@@ -692,7 +692,7 @@ mod tests {
     /// Act:     call `empty_pinned_folders()`.
     /// Assert:  both pinned directories are absent (semantic boundary: "clears all").
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_empty_pinned_folders_clears_all -- --ignored --nocapture"]
     fn test_empty_pinned_folders_clears_all() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path_a = path_to_str(&test_dir)?.to_owned();
@@ -750,7 +750,7 @@ mod tests {
     /// automatically recreates the jump list file after deletion, making a
     /// post-call file-existence check racy.
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_empty_frequent_folders_false_no_error -- --ignored --nocapture"]
     fn test_empty_frequent_folders_false_no_error() -> WincentResult<()> {
         empty_frequent_folders(false)
     }
@@ -761,7 +761,7 @@ mod tests {
     /// Act:     call `empty_frequent_folders(true)`.
     /// Assert:  the pinned folder is absent.
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_empty_frequent_folders_true_removes_pinned -- --ignored --nocapture"]
     fn test_empty_frequent_folders_true_removes_pinned() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?.to_owned();
@@ -799,7 +799,7 @@ mod tests {
     /// does not guarantee a shell-pinned entry immune to jump list deletion on
     /// all Windows configurations.
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_empty_quick_access_false_preserves_pinned -- --ignored --nocapture"]
     fn test_empty_quick_access_false_preserves_pinned() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
 
@@ -832,7 +832,7 @@ mod tests {
     /// Act:     call `empty_quick_access(true)`.
     /// Assert:  Recent Files is empty and the pinned folder is absent.
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_empty_quick_access_true_clears_all -- --ignored --nocapture"]
     fn test_empty_quick_access_true_clears_all() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?.to_owned();

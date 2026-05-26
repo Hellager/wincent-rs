@@ -158,13 +158,13 @@ mod utils_test {
     use super::*;
 
     #[test]
-    #[ignore = "Requires desktop session and may need elevated privileges"]
+    #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer -- --ignored --nocapture"]
     fn test_refresh_explorer() -> WincentResult<()> {
         refresh_explorer_window()
     }
 
     #[test]
-    #[ignore = "Performance benchmark - requires desktop session"]
+    #[ignore = "Performance benchmark; requires desktop session — run with: cargo test test_refresh_explorer_performance -- --ignored --nocapture"]
     fn test_refresh_explorer_performance() -> WincentResult<()> {
         use std::time::Instant;
 
@@ -191,14 +191,14 @@ mod utils_test {
     }
 
     #[test]
-    #[ignore = "Requires desktop session and may need elevated privileges"]
+    #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer_native_only -- --ignored --nocapture"]
     fn test_refresh_explorer_native_only() -> WincentResult<()> {
         // Test that native COM version works independently
         refresh_explorer_native()
     }
 
     #[test]
-    #[ignore = "Requires desktop session and may need elevated privileges"]
+    #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer_powershell_only -- --ignored --nocapture"]
     fn test_refresh_explorer_powershell_only() -> WincentResult<()> {
         // Test that PowerShell fallback still works
         refresh_explorer_powershell()

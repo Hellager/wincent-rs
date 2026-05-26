@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
     fn test_pin_unpin_frequent_folder() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?;
@@ -1468,7 +1468,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
     fn test_unpin_native_error_classification() -> WincentResult<()> {
         // Tests the critical error classification logic in unpin_frequent_folder_native()
         // After fix: The function now checks if folder is pinned BEFORE attempting to unpin
@@ -1522,7 +1522,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
     fn test_add_remove_file_in_recent() -> WincentResult<()> {
         // Note: This test depends on Windows Shell's asynchronous behavior
         // SHAddToRecentDocs API does not guarantee immediate visibility
@@ -1563,7 +1563,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
     fn test_remove_recent_file_native_direct() -> WincentResult<()> {
         // Tests the native removal logic directly to verify the "find item and invoke remove verb" path
         // Implementation: src/handle.rs:400-451
@@ -1671,7 +1671,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
     fn test_remove_from_recent_files_preserves_not_in_recent() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_file =
@@ -1693,7 +1693,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
     fn test_add_file_to_recent_with_spaces() -> WincentResult<()> {
         // Tests that add_to_recent_files() works for filenames that contain spaces.
         // Uses timestamp-suffixed names to avoid Windows Shell deduplication:
@@ -1743,7 +1743,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
     fn test_unpin_folder_item_compatibility() -> WincentResult<()> {
         // Tests the Windows 10/11 compatibility logic in unpin_folder_item()
         // Implementation: src/handle.rs:258-272
@@ -1830,7 +1830,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Performance benchmark"]
+    #[ignore = "Performance benchmark — run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
     fn test_native_pin_unpin_performance() -> WincentResult<()> {
         use std::time::Instant;
 
@@ -1859,7 +1859,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state"]
+    #[ignore = "Modifies system state — run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
     fn test_com_s_false_reference_counting() -> WincentResult<()> {
         // Tests that add_file_to_recent_native() correctly handles S_FALSE
         // and properly calls CoUninitialize to balance reference counts.

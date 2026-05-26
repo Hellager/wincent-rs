@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; depends on current user Quick Access state"]
+    #[ignore = "Integration test; depends on current user Quick Access state — run with: cargo test test_query_recent_files -- --ignored --nocapture"]
     fn test_query_recent_files() -> WincentResult<()> {
         let files = query_recent(QuickAccess::RecentFiles)?;
 
@@ -859,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; depends on current user Quick Access state"]
+    #[ignore = "Integration test; depends on current user Quick Access state — run with: cargo test test_query_frequent_folders -- --ignored --nocapture"]
     fn test_query_frequent_folders() -> WincentResult<()> {
         let folders = query_recent(QuickAccess::FrequentFolders)?;
 
@@ -883,7 +883,7 @@ mod tests {
     }
 
     #[test_log::test]
-    #[ignore = "Integration test; depends on current user Quick Access state"]
+    #[ignore = "Integration test; depends on current user Quick Access state — run with: cargo test test_query_quick_access -- --ignored --nocapture"]
     fn test_query_quick_access() -> WincentResult<()> {
         let items = query_recent(QuickAccess::All)?;
 
@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; depends on current user Quick Access state"]
+    #[ignore = "Integration test; depends on current user Quick Access state — run with: cargo test test_exact_vs_fuzzy_matching -- --ignored --nocapture"]
     fn test_exact_vs_fuzzy_matching() -> WincentResult<()> {
         let items = query_recent(QuickAccess::All)?;
 
@@ -987,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; depends on current user Recent Files state"]
+    #[ignore = "Integration test; depends on current user Recent Files state — run with: cargo test test_recent_file_exact_public_api_is_case_insensitive -- --ignored --nocapture"]
     fn test_recent_file_exact_public_api_is_case_insensitive() -> WincentResult<()> {
         let files = get_recent_files()?;
         let Some(path) = files.first() else {
@@ -1004,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; depends on current user Frequent Folders state"]
+    #[ignore = "Integration test; depends on current user Frequent Folders state — run with: cargo test test_frequent_folder_exact_public_api_is_case_insensitive -- --ignored --nocapture"]
     fn test_frequent_folder_exact_public_api_is_case_insensitive() -> WincentResult<()> {
         let folders = get_frequent_folders()?;
         let Some(path) = folders.first() else {
@@ -1021,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; depends on current user Quick Access state"]
+    #[ignore = "Integration test; depends on current user Quick Access state — run with: cargo test test_quick_access_exact_public_api_is_case_insensitive -- --ignored --nocapture"]
     fn test_quick_access_exact_public_api_is_case_insensitive() -> WincentResult<()> {
         let items = get_quick_access_items()?;
         let Some(path) = items.first() else {
@@ -1038,7 +1038,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; requires stable Quick Access state"]
+    #[ignore = "Integration test; requires stable Quick Access state — run with: cargo test test_native_vs_powershell_results_recent_files -- --ignored --nocapture"]
     fn test_native_vs_powershell_results_recent_files() -> WincentResult<()> {
         let native_results = query_recent_native(QuickAccess::RecentFiles)?;
         let powershell_results = query_recent_powershell(QuickAccess::RecentFiles)?;
@@ -1082,7 +1082,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; requires stable Quick Access state"]
+    #[ignore = "Integration test; requires stable Quick Access state — run with: cargo test test_native_vs_powershell_results_frequent_folders -- --ignored --nocapture"]
     fn test_native_vs_powershell_results_frequent_folders() -> WincentResult<()> {
         let native_results = query_recent_native(QuickAccess::FrequentFolders)?;
         let powershell_results = query_recent_powershell(QuickAccess::FrequentFolders)?;
@@ -1123,7 +1123,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; requires stable Quick Access state"]
+    #[ignore = "Integration test; requires stable Quick Access state — run with: cargo test test_native_vs_powershell_results_all -- --ignored --nocapture"]
     fn test_native_vs_powershell_results_all() -> WincentResult<()> {
         let native_results = query_recent_native(QuickAccess::All)?;
         let powershell_results = query_recent_powershell(QuickAccess::All)?;

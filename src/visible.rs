@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reads and writes the current user's Explorer registry settings"]
+    #[ignore = "Reads and writes the current user's Explorer registry settings — run with: cargo test --features visible recent_files_visibility_round_trip -- --ignored --nocapture"]
     fn recent_files_visibility_round_trip() -> WincentResult<()> {
         let initial = is_recent_files_visible()?;
 
@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reads and writes the current user's Explorer registry settings"]
+    #[ignore = "Reads and writes the current user's Explorer registry settings — run with: cargo test --features visible frequent_folders_visibility_round_trip -- --ignored --nocapture"]
     fn frequent_folders_visibility_round_trip() -> WincentResult<()> {
         let initial = is_frequent_folders_visible()?;
 
