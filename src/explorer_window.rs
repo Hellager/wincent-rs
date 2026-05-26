@@ -17,6 +17,7 @@ use windows::Win32::UI::Shell::{
 
 const QUICK_ACCESS_NAMESPACE: &str = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
 const HOME_NAMESPACE: &str = "shell:::{f874310e-b6b7-47dc-bc84-b9e6b38f5903}";
+const BROWSER_READY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -233,14 +234,8 @@ fn navigate_back_to_location(
         return navigate_to_url(web_browser, &original.location_url);
     }
 
-    let candidates = if is_empty_url_home_name(&original.location_name) {
-        [HOME_NAMESPACE, QUICK_ACCESS_NAMESPACE]
-    } else {
-        [QUICK_ACCESS_NAMESPACE, HOME_NAMESPACE]
-    };
-
     let mut errors = Vec::new();
-    for candidate in candidates {
+    for candidate in [QUICK_ACCESS_NAMESPACE, HOME_NAMESPACE] {
         match navigate_to_url(web_browser, candidate) {
             Ok(()) => {
                 let current = browser_location(web_browser);
@@ -260,6 +255,10 @@ fn navigate_back_to_location(
 
 fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
     let started = std::time::Instant::now();
+    let mut polls = 0_u32;
+    let mut last_busy = None;
+    let mut last_ready = None;
+
     while started.elapsed() < timeout {
         let busy = unsafe {
             web_browser
@@ -273,11 +272,24 @@ fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
                 .map(|value| value == READYSTATE_COMPLETE)
                 .unwrap_or(true)
         };
+        polls += 1;
+        last_busy = Some(busy);
+        last_ready = Some(ready);
+
         if !busy && ready {
-            break;
+            return;
         }
-        thread::sleep(Duration::from_millis(200));
+
+        thread::sleep(BROWSER_READY_POLL_INTERVAL);
     }
+
+    eprintln!(
+        "Warning: Explorer browser did not report ready within {:.3}s after {} polls (last_busy={:?}, last_ready={:?})",
+        timeout.as_secs_f64(),
+        polls,
+        last_busy,
+        last_ready
+    );
 }
 
 fn desktop_path() -> WincentResult<PathBuf> {
@@ -336,8 +348,11 @@ fn refresh_shell_view(dispatch: &IDispatch) -> WincentResult<()> {
 }
 
 fn is_recent_access_location(location: &ExplorerLocation) -> bool {
+    // Match only stable shell namespace URLs/GUIDs. Explorer display names are
+    // localized and may be empty, so name-based matching is intentionally not
+    // used; callers fall back to broader Explorer refresh when URL matching is
+    // unavailable.
     is_home_or_recent_url(&location.location_url)
-        || is_empty_url_recent_access_name(&location.location_name)
 }
 
 fn is_probable_explorer_location(location: &ExplorerLocation) -> bool {
@@ -353,19 +368,6 @@ fn is_home_or_recent_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     lower.contains("f874310e-b6b7-47dc-bc84-b9e6b38f5903")
         || lower.contains("679f85cb-0220-4080-b29b-5540cc05aab6")
-}
-
-fn is_empty_url_recent_access_name(name: &str) -> bool {
-    let normalized = name.trim().to_ascii_lowercase();
-    normalized == "quick access"
-        || normalized == "home"
-        || name.trim() == "\u{5feb}\u{901f}\u{8bbf}\u{95ee}"
-        || name.trim() == "\u{4e3b}\u{9875}"
-}
-
-fn is_empty_url_home_name(name: &str) -> bool {
-    let normalized = name.trim().to_ascii_lowercase();
-    normalized == "home" || name.trim() == "\u{4e3b}\u{9875}"
 }
 
 #[cfg(test)]
@@ -417,11 +419,11 @@ mod tests {
             location_name: String::new(),
             location_url: "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}".to_string(),
         }));
-        assert!(is_recent_access_location(&ExplorerLocation {
+        assert!(!is_recent_access_location(&ExplorerLocation {
             location_name: "Quick Access".to_string(),
             location_url: String::new(),
         }));
-        assert!(is_recent_access_location(&ExplorerLocation {
+        assert!(!is_recent_access_location(&ExplorerLocation {
             location_name: "\u{5feb}\u{901f}\u{8bbf}\u{95ee}".to_string(),
             location_url: String::new(),
         }));
