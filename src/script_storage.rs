@@ -90,10 +90,13 @@ impl ScriptStorage {
         Ok(())
     }
 
-    /// Generates parameter hash for dynamic script filenames
+    /// Generates parameter hash for dynamic script filenames.
+    ///
+    /// This is a cache key, not a security boundary. Use the full MD5 digest to
+    /// avoid the easy cache collisions that come from a short prefix.
     fn hash_parameter(parameter: &str) -> String {
         let digest = md5::compute(parameter.as_bytes());
-        format!("{:x}", digest)[..8].to_string() // Take first 8 hexadecimal chars
+        format!("{:x}", digest)
     }
 
     /// Reads a script file and strips the leading UTF-8 BOM (if present), returning
@@ -134,6 +137,8 @@ impl ScriptStorage {
         // Write when missing or when on-disk content differs from freshly generated content.
         // This ensures that script format changes (e.g. escaping fixes) are propagated to
         // callers even when the same-version script file already exists on disk.
+        // A concurrent process may make the same decision at the same time, but the write
+        // is idempotent because the generated static content is deterministic.
         let needs_write = match Self::read_script_content(&script_path) {
             Some(existing) => existing != content,
             None => true,
@@ -163,6 +168,8 @@ impl ScriptStorage {
         let content = ScriptStrategyFactory::generate_script(script_type, Some(parameter))?;
 
         // Write when missing or when on-disk content differs from freshly generated content.
+        // A concurrent process may race this read-compare-write sequence, but both writers
+        // produce identical content for the same script type, version, and parameter.
         let needs_write = match Self::read_script_content(&script_path) {
             Some(existing) => existing != content,
             None => true,
@@ -271,7 +278,7 @@ mod tests {
         let hash2 = ScriptStorage::hash_parameter(param2);
 
         assert_ne!(hash1, hash2);
-        assert_eq!(hash1.len(), 8);
+        assert_eq!(hash1.len(), 32);
     }
 
     #[test]

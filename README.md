@@ -99,6 +99,8 @@ fn main() -> WincentResult<()> {
 - **Environment Compatibility**: Different Windows environments (including versions, configurations, and installed software) may affect the library's functionality. In particular:
   - Third-party software may modify relevant registry entries
   - System security policies may restrict PowerShell script execution
+  - Generated helper scripts are launched with process-scoped `-ExecutionPolicy Bypass`;
+    this does not change user or machine policy, but hardened environments may still block it
   - Windows Explorer integration might vary across different Windows versions
 
 - **Operation Errors**: Quick Access support varies by Windows version and local

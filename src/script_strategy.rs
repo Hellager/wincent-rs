@@ -1,7 +1,5 @@
 use crate::error::WincentError;
 use crate::WincentResult;
-use std::collections::HashMap;
-use std::sync::OnceLock;
 
 /// Escapes a string for use inside PowerShell single-quoted strings.
 ///
@@ -193,8 +191,8 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
         let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
         Ok(format!(
             r#"
-    {}
-    {}
+    {header}
+    {shell}
 
     $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
     if ($isWin11)
@@ -203,15 +201,15 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
     }}
     else
     {{
-        $folders = $shell.Namespace('{}').Items();
-        $target = $folders | Where-Object {{$_.Path -eq '{}'}};
+        $folders = $shell.Namespace('{frequent_folders}').Items();
+        $target = $folders | Where-Object {{$_.Path -eq '{path}'}};
         $target.InvokeVerb('unpinfromhome');    
     }} 
 "#,
-            BaseScriptStrategy::utf8_header(),
-            BaseScriptStrategy::shell_com_object(),
-            ShellNamespaces::FREQUENT_FOLDERS,
-            path
+            header = BaseScriptStrategy::utf8_header(),
+            shell = BaseScriptStrategy::shell_com_object(),
+            frequent_folders = ShellNamespaces::FREQUENT_FOLDERS,
+            path = path
         ))
     }
 }
@@ -329,81 +327,19 @@ pub(crate) struct ScriptStrategyFactory;
 impl ScriptStrategyFactory {
     /// Retrieves the strategy instance for the specified script type
     pub fn get_strategy(script_type: PSScript) -> WincentResult<Box<dyn ScriptStrategy>> {
-        static STRATEGIES: OnceLock<HashMap<PSScript, Box<dyn ScriptStrategy + Sync + Send>>> =
-            OnceLock::new();
-
-        let strategies = STRATEGIES.get_or_init(|| {
-            let mut map = HashMap::new();
-            map.insert(
-                PSScript::RefreshExplorer,
-                Box::new(RefreshExplorerStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::QueryQuickAccess,
-                Box::new(QueryQuickAccessStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::QueryRecentFile,
-                Box::new(QueryRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::QueryFrequentFolder,
-                Box::new(QueryFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::AddRecentFile,
-                Box::new(AddRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::RemoveRecentFile,
-                Box::new(RemoveRecentFileStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::PinToFrequentFolder,
-                Box::new(PinToFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::UnpinFromFrequentFolder,
-                Box::new(UnpinFromFrequentFolderStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::CheckQueryFeasible,
-                Box::new(CheckQueryFeasibleStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::CheckPinUnpinFeasible,
-                Box::new(CheckPinUnpinFeasibleStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map.insert(
-                PSScript::EmptyPinnedFolders,
-                Box::new(EmptyPinnedFoldersStrategy) as Box<dyn ScriptStrategy + Sync + Send>,
-            );
-            map
-        });
-
-        // Clone strategy instances to avoid borrowing issues
-        match strategies.get(&script_type) {
-            Some(_strategy) => {
-                // Create new Box instances for trait objects
-                Ok(match script_type {
-                    PSScript::RefreshExplorer => Box::new(RefreshExplorerStrategy),
-                    PSScript::QueryQuickAccess => Box::new(QueryQuickAccessStrategy),
-                    PSScript::QueryRecentFile => Box::new(QueryRecentFileStrategy),
-                    PSScript::QueryFrequentFolder => Box::new(QueryFrequentFolderStrategy),
-                    PSScript::AddRecentFile => Box::new(AddRecentFileStrategy),
-                    PSScript::RemoveRecentFile => Box::new(RemoveRecentFileStrategy),
-                    PSScript::PinToFrequentFolder => Box::new(PinToFrequentFolderStrategy),
-                    PSScript::UnpinFromFrequentFolder => Box::new(UnpinFromFrequentFolderStrategy),
-                    PSScript::CheckQueryFeasible => Box::new(CheckQueryFeasibleStrategy),
-                    PSScript::CheckPinUnpinFeasible => Box::new(CheckPinUnpinFeasibleStrategy),
-                    PSScript::EmptyPinnedFolders => Box::new(EmptyPinnedFoldersStrategy),
-                })
-            }
-            None => Err(WincentError::ScriptStrategyNotFound(format!(
-                "{:?}",
-                script_type
-            ))),
-        }
+        Ok(match script_type {
+            PSScript::RefreshExplorer => Box::new(RefreshExplorerStrategy),
+            PSScript::QueryQuickAccess => Box::new(QueryQuickAccessStrategy),
+            PSScript::QueryRecentFile => Box::new(QueryRecentFileStrategy),
+            PSScript::QueryFrequentFolder => Box::new(QueryFrequentFolderStrategy),
+            PSScript::AddRecentFile => Box::new(AddRecentFileStrategy),
+            PSScript::RemoveRecentFile => Box::new(RemoveRecentFileStrategy),
+            PSScript::PinToFrequentFolder => Box::new(PinToFrequentFolderStrategy),
+            PSScript::UnpinFromFrequentFolder => Box::new(UnpinFromFrequentFolderStrategy),
+            PSScript::CheckQueryFeasible => Box::new(CheckQueryFeasibleStrategy),
+            PSScript::CheckPinUnpinFeasible => Box::new(CheckPinUnpinFeasibleStrategy),
+            PSScript::EmptyPinnedFolders => Box::new(EmptyPinnedFoldersStrategy),
+        })
     }
 
     /// Generates script content
@@ -441,6 +377,14 @@ mod tests {
         // Win11 branch must also be present
         assert!(script.contains("pintohome"));
         assert!(script.contains(ShellNamespaces::FREQUENT_FOLDERS));
+        assert!(script.contains(&format!(
+            "$shell.Namespace('{}').Self.InvokeVerb('pintohome')",
+            path
+        )));
+        assert!(
+            !script.contains("{path}"),
+            "Win11 unpin branch must not contain an unsubstituted path placeholder"
+        );
     }
 
     #[test]
@@ -664,6 +608,10 @@ mod tests {
             unpin_script.contains(&win11_fragment),
             "UnpinFromFrequentFolder Win11 branch: expected fragment not found.\nExpected: {}\nScript: {}",
             win11_fragment, unpin_script
+        );
+        assert!(
+            !unpin_script.contains("{path}"),
+            "UnpinFromFrequentFolder Win11 branch must not leave a literal {{path}} placeholder"
         );
     }
 }

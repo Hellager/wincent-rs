@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
 
+const RECENT_FILES_AUTOMATIC_DESTINATION: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
+
 /// PowerShell script executor.
 pub(crate) struct ScriptExecutor;
 
@@ -26,6 +28,9 @@ impl ScriptExecutor {
 
         Command::new("powershell")
             .args([
+                // Process-scoped policy override for generated temp scripts.
+                // This does not change machine or user policy, but environments
+                // that forbid Bypass may still reject script execution.
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
@@ -113,7 +118,10 @@ impl QuickAccessDataFiles {
         let automatic_dest_dir = Path::new(&recent_folder).join("AutomaticDestinations");
 
         Ok(Self {
-            recent_files_path: automatic_dest_dir.join("5f7b5f1e01b83767.automaticDestinations-ms"),
+            // Explorer's Recent Files automatic destination AppID hash on
+            // supported Windows 10/11 builds. This is an implementation detail
+            // of the shell and may need updating if Windows changes the AppID.
+            recent_files_path: automatic_dest_dir.join(RECENT_FILES_AUTOMATIC_DESTINATION),
         })
     }
 
