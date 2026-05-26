@@ -50,7 +50,13 @@ impl ComGuard {
             let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_APARTMENTTHREADED);
 
             match classify_coinit_result(hr) {
-                ComInitStatus::Success | ComInitStatus::AlreadyInitialized => Ok(Self {
+                ComInitStatus::Success => Ok(Self {
+                    should_uninitialize: true,
+                }),
+                // S_FALSE still represents a successful CoInitializeEx call.
+                // COM requires every successful call, including S_FALSE, to be
+                // balanced by CoUninitialize on the same thread.
+                ComInitStatus::AlreadyInitialized => Ok(Self {
                     should_uninitialize: true,
                 }),
                 other => Err(other),
@@ -73,6 +79,16 @@ impl Drop for ComGuard {
 mod tests {
     use super::*;
     use windows::Win32::System::Com::COINIT_MULTITHREADED;
+
+    struct TestComGuard;
+
+    impl Drop for TestComGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+    }
 
     #[test]
     fn test_classify_s_ok() {
@@ -110,13 +126,60 @@ mod tests {
     }
 
     #[test]
+    fn test_guard_balances_already_initialized_sta() {
+        unsafe {
+            {
+                let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_APARTMENTTHREADED);
+                if hr.0 != 0 {
+                    if hr.is_ok() {
+                        CoUninitialize();
+                    }
+                    eprintln!(
+                        "skipping test_guard_balances_already_initialized_sta: initial STA setup returned HRESULT {}",
+                        hr.0
+                    );
+                    return;
+                }
+                let _initial_guard = TestComGuard;
+
+                {
+                    let guard = ComGuard::try_initialize()
+                        .expect("ComGuard should accept an already initialized STA thread");
+                    assert!(guard.should_uninitialize);
+                }
+
+                let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_MULTITHREADED);
+                assert!(
+                    matches!(classify_coinit_result(hr), ComInitStatus::ApartmentMismatch),
+                    "dropping the S_FALSE guard must not uninitialize the original STA reference"
+                );
+            }
+
+            // If the S_FALSE guard failed to call CoUninitialize, the leaked
+            // STA reference would keep this thread in STA and MTA init would fail.
+            let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_MULTITHREADED);
+            assert!(
+                hr.is_ok(),
+                "S_FALSE guard should balance its own COM reference; got HRESULT {}",
+                hr.0
+            );
+            let _mta_guard = TestComGuard;
+        }
+    }
+
+    #[test]
     fn test_guard_apartment_mismatch() {
         unsafe {
             let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_MULTITHREADED);
             if hr.is_ok() {
+                let _mta_guard = TestComGuard;
                 let result = ComGuard::try_initialize();
                 assert!(matches!(result, Err(ComInitStatus::ApartmentMismatch)));
-                CoUninitialize();
+            } else {
+                eprintln!(
+                    "skipping test_guard_apartment_mismatch: MTA initialization failed with HRESULT {}",
+                    hr.0
+                );
             }
         }
     }
