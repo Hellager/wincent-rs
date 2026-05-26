@@ -367,7 +367,11 @@ fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
 pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     // Try native COM first (fast path)
     let qa_type_clone = qa_type.clone();
-    query_recent_native(qa_type).or_else(|_| {
+    query_recent_native(qa_type).or_else(|native_error| {
+        eprintln!(
+            "Warning: native Quick Access query for {:?} failed; falling back to PowerShell: {}",
+            qa_type_clone, native_error
+        );
         // Fallback to PowerShell if COM fails (compatibility)
         query_recent_powershell(qa_type_clone)
     })
@@ -498,8 +502,10 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 
 /// Checks if an exact file path exists in the Windows Recent Files list.
 ///
-/// This function performs **exact path comparison** (case-sensitive on the full path).
-/// For partial/fuzzy matching, use [`is_in_recent_files()`] instead.
+/// This function performs **full-path comparison using Windows path semantics**:
+/// case-insensitive, slash-normalized, and canonicalized when the path exists.
+/// It does not do substring matching. For partial/fuzzy matching, use
+/// [`is_in_recent_files()`] instead.
 ///
 /// # Arguments
 ///
@@ -519,7 +525,7 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 /// use wincent::query::is_recent_file_exact;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     // Exact match only - must match the full path exactly
+///     // Full path match using Windows path semantics.
 ///     let exists = is_recent_file_exact("C:\\Users\\Documents\\report.docx")?;
 ///     if exists {
 ///         println!("Exact file path found in recent files");
@@ -544,6 +550,11 @@ pub fn is_recent_file_exact(path: &str) -> WincentResult<bool> {
 ///
 /// **Note**: This function performs **substring matching** (fuzzy match). If you need
 /// exact path matching, use [`is_recent_file_exact()`] instead.
+///
+/// Substring matching can produce false positives for path checks. For example,
+/// searching for `"C:\\Work"` also matches `"C:\\WorkBackup\\report.docx"`.
+/// Matching is also case-sensitive because it uses Rust's plain string
+/// containment, not Windows path comparison.
 ///
 /// # Arguments
 ///
@@ -595,8 +606,10 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
 
 /// Checks if an exact folder path exists in the Windows Frequent Folders list.
 ///
-/// This function performs **exact path comparison** (case-sensitive on the full path).
-/// For partial/fuzzy matching, use [`is_in_frequent_folders()`] instead.
+/// This function performs **full-path comparison using Windows path semantics**:
+/// case-insensitive, slash-normalized, and canonicalized when the path exists.
+/// It does not do substring matching. For partial/fuzzy matching, use
+/// [`is_in_frequent_folders()`] instead.
 ///
 /// # Arguments
 ///
@@ -616,7 +629,7 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
 /// use wincent::query::is_frequent_folder_exact;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     // Exact match - must match the full path exactly
+///     // Full path match using Windows path semantics.
 ///     let folder_exists = is_frequent_folder_exact("C:\\Users\\Documents")?;
 ///     if folder_exists {
 ///         println!("Exact folder path found in frequent folders list");
@@ -641,6 +654,11 @@ pub fn is_frequent_folder_exact(path: &str) -> WincentResult<bool> {
 ///
 /// **Note**: This function performs **substring matching** (fuzzy match). If you need
 /// exact path matching, use [`is_frequent_folder_exact()`] instead.
+///
+/// Substring matching can produce false positives for path checks. For example,
+/// searching for `"C:\\Work"` also matches `"C:\\WorkBackup"`.
+/// Matching is also case-sensitive because it uses Rust's plain string
+/// containment, not Windows path comparison.
 ///
 /// # Arguments
 ///
@@ -688,8 +706,10 @@ pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 
 /// Checks if an exact path exists in the Windows Quick Access list (Recent Items namespace).
 ///
-/// This function performs **exact path comparison** (case-sensitive on the full path).
-/// For partial/fuzzy matching, use [`is_in_quick_access()`] instead.
+/// This function performs **full-path comparison using Windows path semantics**:
+/// case-insensitive, slash-normalized, and canonicalized when the path exists.
+/// It does not do substring matching. For partial/fuzzy matching, use
+/// [`is_in_quick_access()`] instead.
 ///
 /// # Arguments
 ///
@@ -743,6 +763,11 @@ pub fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
 ///
 /// **Note**: This function performs **substring matching** (fuzzy match). If you need
 /// exact path matching, use [`is_in_quick_access_exact()`] instead.
+///
+/// Substring matching can produce false positives for path checks. For example,
+/// searching for `"C:\\Work"` also matches `"C:\\WorkBackup\\report.docx"`.
+/// Matching is also case-sensitive because it uses Rust's plain string
+/// containment, not Windows path comparison.
 ///
 /// # Arguments
 ///
@@ -799,7 +824,18 @@ pub fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
 mod tests {
     use super::*;
 
+    fn contains_exact_path(items: &[String], path: &str) -> bool {
+        items
+            .iter()
+            .any(|item| crate::utils::paths_equal(item, path))
+    }
+
+    fn contains_substring(items: &[String], keyword: &str) -> bool {
+        items.iter().any(|item| item.contains(keyword))
+    }
+
     #[test]
+    #[ignore = "Integration test; depends on current user Quick Access state"]
     fn test_query_recent_files() -> WincentResult<()> {
         let files = query_recent(QuickAccess::RecentFiles)?;
 
@@ -823,6 +859,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Integration test; depends on current user Quick Access state"]
     fn test_query_frequent_folders() -> WincentResult<()> {
         let folders = query_recent(QuickAccess::FrequentFolders)?;
 
@@ -846,6 +883,7 @@ mod tests {
     }
 
     #[test_log::test]
+    #[ignore = "Integration test; depends on current user Quick Access state"]
     fn test_query_quick_access() -> WincentResult<()> {
         let items = query_recent(QuickAccess::All)?;
 
@@ -868,6 +906,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Integration test; depends on current user Quick Access state"]
     fn test_exact_vs_fuzzy_matching() -> WincentResult<()> {
         let items = query_recent(QuickAccess::All)?;
 
@@ -901,6 +940,99 @@ mod tests {
         let non_existent = "Z:\\Invalid\\Path\\Test.txt";
         assert!(!is_in_quick_access_exact(non_existent)?);
         assert!(!is_in_quick_access(non_existent)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_matching_uses_windows_case_insensitive_paths() {
+        let items = vec!["C:\\Users\\Alice\\Documents\\Report.docx".to_string()];
+
+        assert!(contains_exact_path(
+            &items,
+            "c:/users/alice/documents/report.docx"
+        ));
+        assert!(contains_exact_path(
+            &items,
+            "C:\\USERS\\ALICE\\DOCUMENTS\\REPORT.DOCX"
+        ));
+        assert!(!contains_exact_path(
+            &items,
+            "C:\\Users\\Alice\\Documents\\Report.doc"
+        ));
+    }
+
+    #[test]
+    fn test_exact_matching_handles_unicode_case_folding() {
+        let items = vec!["C:\\Users\\Alice\\Café\\Résumé.txt".to_string()];
+
+        assert!(contains_exact_path(
+            &items,
+            "c:\\users\\alice\\CAFÉ\\RÉSUMÉ.TXT"
+        ));
+    }
+
+    #[test]
+    fn test_fuzzy_matching_is_plain_substring_and_can_false_positive() {
+        let items = vec!["C:\\WorkBackup\\report.docx".to_string()];
+
+        assert!(
+            contains_substring(&items, "C:\\Work"),
+            "substring matching intentionally matches prefixes inside longer path components"
+        );
+        assert!(
+            !contains_exact_path(&items, "C:\\Work"),
+            "exact path matching should not treat C:\\WorkBackup as C:\\Work"
+        );
+    }
+
+    #[test]
+    #[ignore = "Integration test; depends on current user Recent Files state"]
+    fn test_recent_file_exact_public_api_is_case_insensitive() -> WincentResult<()> {
+        let files = get_recent_files()?;
+        let Some(path) = files.first() else {
+            println!("No recent files available; skipping case-insensitive public API check");
+            return Ok(());
+        };
+
+        assert!(
+            is_recent_file_exact(&path.to_uppercase())?,
+            "is_recent_file_exact should use Windows case-insensitive path semantics"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Integration test; depends on current user Frequent Folders state"]
+    fn test_frequent_folder_exact_public_api_is_case_insensitive() -> WincentResult<()> {
+        let folders = get_frequent_folders()?;
+        let Some(path) = folders.first() else {
+            println!("No frequent folders available; skipping case-insensitive public API check");
+            return Ok(());
+        };
+
+        assert!(
+            is_frequent_folder_exact(&path.to_uppercase())?,
+            "is_frequent_folder_exact should use Windows case-insensitive path semantics"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Integration test; depends on current user Quick Access state"]
+    fn test_quick_access_exact_public_api_is_case_insensitive() -> WincentResult<()> {
+        let items = get_quick_access_items()?;
+        let Some(path) = items.first() else {
+            println!("No Quick Access items available; skipping case-insensitive public API check");
+            return Ok(());
+        };
+
+        assert!(
+            is_in_quick_access_exact(&path.to_uppercase())?,
+            "is_in_quick_access_exact should use Windows case-insensitive path semantics"
+        );
 
         Ok(())
     }
