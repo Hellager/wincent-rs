@@ -33,6 +33,8 @@ use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// SHARD_PATHW — registers a wide-string path in the recent documents list.
+const SHARD_PATHW: u32 = 0x0000_0003;
 
 /// Options for adding a file to Windows Recent Files.
 #[derive(Debug, Clone, Copy, Default)]
@@ -496,8 +498,7 @@ pub(crate) fn add_file_to_recent_native(path: &str) -> WincentResult<()> {
             .chain(std::iter::once(0))
             .collect();
 
-        // 0x0000_0003 equals SHARD_PATHW
-        SHAddToRecentDocs(0x0000_0003, Some(file_path_wide.as_ptr() as *const _));
+        SHAddToRecentDocs(SHARD_PATHW, Some(file_path_wide.as_ptr() as *const _));
     }
 
     Ok(())
@@ -960,8 +961,12 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
 
     // Try native COM first (fast path), fallback to PowerShell if it fails
-    remove_recent_file_native(path, DEFAULT_COM_TIMEOUT)
-        .or_else(|_| remove_recent_file_powershell(path))
+    match remove_recent_file_native(path, DEFAULT_COM_TIMEOUT) {
+        Ok(()) => Ok(()),
+        Err(e @ WincentError::NotInRecent(_)) => Err(e),
+        Err(e @ WincentError::InvalidPath(_)) => Err(e),
+        Err(_) => remove_recent_file_powershell(path),
+    }
 }
 
 /// Pins a folder to Windows Quick Access (Frequent Folders).
@@ -1075,7 +1080,7 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
     pin_frequent_folder(path, DEFAULT_COM_TIMEOUT)
 }
 
-/// Unpins or remove a folder from Windows Quick Access (Frequent Folders).
+/// Unpins or removes a folder from Windows Quick Access (Frequent Folders).
 ///
 /// This function uses a **two-tier fallback strategy** to maximize compatibility
 /// across different Windows versions (Windows 10, Windows 11) and system configurations:
@@ -1246,7 +1251,12 @@ pub fn remove_from_recent_files_with_timeout(
         ));
     }
     validate_path(path, PathType::File)?;
-    remove_recent_file_native(path, timeout).or_else(|_| remove_recent_file_powershell(path))
+    match remove_recent_file_native(path, timeout) {
+        Ok(()) => Ok(()),
+        Err(e @ WincentError::NotInRecent(_)) => Err(e),
+        Err(e @ WincentError::InvalidPath(_)) => Err(e),
+        Err(_) => remove_recent_file_powershell(path),
+    }
 }
 
 /// Pins a folder to Windows Quick Access with a custom COM STA thread timeout.
@@ -1300,6 +1310,11 @@ mod tests {
     use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
     use std::{thread, time::Duration};
     use windows::Win32::UI::Shell::FolderItem;
+
+    fn path_to_str(path: &std::path::Path) -> WincentResult<&str> {
+        path.to_str()
+            .ok_or_else(|| WincentError::InvalidPath(path.display().to_string()))
+    }
 
     fn wait_for_folder_status(
         path: &str,
@@ -1373,7 +1388,7 @@ mod tests {
     }
 
     #[test]
-    fn test_path_normalization_stages() {
+    fn test_path_normalization_stages() -> WincentResult<()> {
         // Tests the two-stage path comparison logic in paths_equal()
         // Stage 1: Lightweight normalization (no I/O) - fast path
         // Stage 2: Canonicalization (with I/O) - for symlinks/relative paths
@@ -1395,7 +1410,7 @@ mod tests {
         // Stage 2 tests - require canonicalization
         // Note: These tests use real paths to trigger canonicalization
         let temp_dir = std::env::temp_dir();
-        let temp_str = temp_dir.to_str().unwrap();
+        let temp_str = path_to_str(&temp_dir)?;
 
         // Test with different representations of the same path
         assert!(paths_equal(temp_str, temp_str), "Same path should be equal");
@@ -1405,13 +1420,15 @@ mod tests {
             !paths_equal("C:\\Windows", "C:\\Users"),
             "Different paths should not be equal"
         );
+
+        Ok(())
     }
 
     #[test]
     #[ignore = "Modifies system state"]
     fn test_pin_unpin_frequent_folder() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
-        let test_path = test_dir.to_str().unwrap();
+        let test_path = path_to_str(&test_dir)?;
 
         pin_frequent_folder(test_path, DEFAULT_COM_TIMEOUT)?;
 
@@ -1463,7 +1480,7 @@ mod tests {
         // 3. If pinned, try unpinfromhome first, then fallback to pintohome
 
         let test_dir = setup_test_env()?;
-        let test_path = test_dir.to_str().unwrap();
+        let test_path = path_to_str(&test_dir)?;
 
         // Scenario 1: Unpin a folder that is NOT in frequent folders
         // Expected: Should return NotInRecent error immediately (after fix)
@@ -1523,7 +1540,7 @@ mod tests {
             .as_millis();
         let filename = format!("recent_test_{}.txt", timestamp);
         let test_file = create_test_file(&test_dir, &filename, "test content")?;
-        let test_path = test_file.to_str().unwrap();
+        let test_path = path_to_str(&test_file)?;
 
         // Use public API consistently
         add_to_recent_files(test_path)?;
@@ -1573,7 +1590,7 @@ mod tests {
             .as_millis();
         let filename = format!("native_remove_test_{}.txt", timestamp);
         let test_file = create_test_file(&test_dir, &filename, "test content")?;
-        let test_path = test_file.to_str().unwrap();
+        let test_path = path_to_str(&test_file)?;
 
         // Add file to recent using native API
         add_file_to_recent_native(test_path)?;
@@ -1655,7 +1672,29 @@ mod tests {
 
     #[test]
     #[ignore = "Modifies system state"]
-    fn test_add_file_to_recent_with_unicode() -> WincentResult<()> {
+    fn test_remove_from_recent_files_preserves_not_in_recent() -> WincentResult<()> {
+        let test_dir = setup_test_env()?;
+        let test_file =
+            create_test_file(&test_dir, "not_in_recent_wrapper_test.txt", "test content")?;
+        let test_path = path_to_str(&test_file)?;
+
+        let _ = remove_recent_file_native(test_path, DEFAULT_COM_TIMEOUT);
+        let result = remove_from_recent_files(test_path);
+
+        cleanup_test_env(&test_dir)?;
+
+        assert!(
+            matches!(result, Err(WincentError::NotInRecent(_))),
+            "public wrapper should preserve NotInRecent instead of falling back to PowerShell: {:?}",
+            result
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Modifies system state"]
+    fn test_add_file_to_recent_with_spaces() -> WincentResult<()> {
         // Tests that add_to_recent_files() works for filenames that contain spaces.
         // Uses timestamp-suffixed names to avoid Windows Shell deduplication:
         // repeated additions of the same filename within a short window may be silently ignored.
@@ -1673,13 +1712,13 @@ mod tests {
         // Test regular file
         let filename1 = format!("test_file_{}.txt", timestamp);
         let test_file = create_test_file(&test_dir, &filename1, "test content")?;
-        let test_path = test_file.to_str().unwrap();
+        let test_path = path_to_str(&test_file)?;
         add_to_recent_files(test_path)?;
 
         // Test file with spaces
         let filename2 = format!("test file with spaces {}.txt", timestamp);
         let test_file2 = create_test_file(&test_dir, &filename2, "test content")?;
-        let test_path2 = test_file2.to_str().unwrap();
+        let test_path2 = path_to_str(&test_file2)?;
         add_to_recent_files(test_path2)?;
 
         // Wait for both files to appear (20 retries × 500ms = 10 seconds)
@@ -1721,7 +1760,7 @@ mod tests {
         use crate::QuickAccess;
 
         let test_dir = setup_test_env()?;
-        let test_path = test_dir.to_str().unwrap();
+        let test_path = path_to_str(&test_dir)?;
 
         // Pin a folder
         pin_frequent_folder(test_path, DEFAULT_COM_TIMEOUT)?;
@@ -1796,7 +1835,7 @@ mod tests {
         use std::time::Instant;
 
         let test_dir = setup_test_env()?;
-        let test_path = test_dir.to_str().unwrap();
+        let test_path = path_to_str(&test_dir)?;
 
         // Benchmark native API
         let start = Instant::now();
@@ -1834,7 +1873,7 @@ mod tests {
 
         let test_dir = setup_test_env()?;
         let test_file = create_test_file(&test_dir, "s_false_test.txt", "content")?;
-        let test_path = test_file.to_str().unwrap();
+        let test_path = path_to_str(&test_file)?;
 
         unsafe {
             // Cycle 1: User init -> library call -> user uninit
