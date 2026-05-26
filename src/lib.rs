@@ -102,11 +102,6 @@ pub mod prelude {
         set_frequent_folders_visible, set_recent_files_visible, set_visible,
     };
 
-    #[cfg(feature = "visible")]
-    #[allow(deprecated)]
-    pub use crate::visible::{
-        is_recent_files_visiable, set_frequent_folders_visiable, set_recent_files_visiable,
-    };
     pub use crate::{QuickAccess, WincentResult};
 
     #[cfg(feature = "destlist")]

@@ -121,21 +121,6 @@ pub fn set_frequent_folders_visible(visible: bool) -> WincentResult<()> {
     set_visible(QuickAccess::FrequentFolders, visible)
 }
 
-#[deprecated(note = "use is_recent_files_visible instead")]
-pub fn is_recent_files_visiable() -> WincentResult<bool> {
-    is_recent_files_visible()
-}
-
-#[deprecated(note = "use set_recent_files_visible instead")]
-pub fn set_recent_files_visiable(visible: bool) -> WincentResult<()> {
-    set_recent_files_visible(visible)
-}
-
-#[deprecated(note = "use set_frequent_folders_visible instead")]
-pub fn set_frequent_folders_visiable(visible: bool) -> WincentResult<()> {
-    set_frequent_folders_visible(visible)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
