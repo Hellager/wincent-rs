@@ -20,6 +20,11 @@ pub struct BatchResult {
     /// Successfully processed items.
     pub succeeded: Vec<String>,
     /// Failed items with error details.
+    ///
+    /// `AlreadyExists` and `NotInRecent` may come from best-effort preflight
+    /// checks. Explorer state can still change between the preflight query and
+    /// the shell operation, so callers should treat those errors as a snapshot
+    /// of the attempted operation rather than a durable global truth.
     pub failed: Vec<(String, WincentError)>,
 }
 
@@ -58,6 +63,11 @@ pub struct BatchOptions {
     ///
     /// Batch mode coalesces this into one post-batch data-file refresh instead of
     /// deleting the Recent Files data file for every individual item.
+    ///
+    /// This option is intentionally add-only: `remove_items_batch` ignores it.
+    /// Removal paths operate on the shell item directly, while deleting backing
+    /// data files as a removal refresh would be more destructive than the
+    /// requested per-item operation.
     pub force_update: bool,
 }
 
@@ -140,6 +150,12 @@ fn should_force_update_recent_files(options: BatchOptions, recent_files_succeede
 }
 
 /// Adds multiple items to Quick Access, collecting per-item failures.
+///
+/// Each item performs a best-effort existence preflight before invoking the
+/// shell operation. If Explorer changes between those two steps, batch results
+/// may report `AlreadyExists` or a later operation error that reflects that
+/// race. Successful Recent Files additions can be coalesced into one display
+/// refresh with [`BatchOptions::force_update`].
 pub fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
@@ -166,6 +182,13 @@ pub fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -
 }
 
 /// Removes multiple items from Quick Access, collecting per-item failures.
+///
+/// Each item performs a best-effort existence preflight before invoking the
+/// shell operation. If Explorer changes between those two steps, batch results
+/// may report `NotInRecent` or a later operation error that reflects that race.
+/// `BatchOptions::force_update` is intentionally ignored for removals because
+/// the remove operations target shell items directly and should not delete
+/// Recent Files or Frequent Folders backing data as a broad refresh side effect.
 pub fn remove_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
