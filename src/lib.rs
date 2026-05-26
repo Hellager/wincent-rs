@@ -80,6 +80,9 @@ pub mod script_strategy;
 mod test_utils;
 mod utils;
 
+#[cfg(feature = "visible")]
+pub mod visible;
+
 #[cfg(feature = "destlist")]
 pub mod destlist;
 
@@ -92,13 +95,25 @@ pub mod prelude {
     pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
     pub use crate::retry::RetryPolicy;
     pub use crate::script_strategy::PSScript;
+
+    #[cfg(feature = "visible")]
+    pub use crate::visible::{
+        is_frequent_folders_visible, is_recent_files_visible, is_visible,
+        set_frequent_folders_visible, set_recent_files_visible, set_visible,
+    };
+
+    #[cfg(feature = "visible")]
+    #[allow(deprecated)]
+    pub use crate::visible::{
+        is_recent_files_visiable, set_frequent_folders_visiable, set_recent_files_visiable,
+    };
     pub use crate::{QuickAccess, WincentResult};
 
     #[cfg(feature = "destlist")]
     pub use crate::destlist::{
-        filetime_to_system_time, frequent_folders_dest_path,
+        entries, filetime_to_system_time, frequent_folders_dest_path,
         parse_bytes as parse_dest_bytes, parse_file as parse_dest_file, recent_files_dest_path,
-        entries, AutomaticDestinations, CfbInfo, DestList, DestListEntry,
+        AutomaticDestinations, CfbInfo, DestList, DestListEntry,
     };
 
     // Commonly used query functions

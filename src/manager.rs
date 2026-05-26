@@ -1,5 +1,7 @@
 //! Synchronous facade for Windows Quick Access operations.
 
+#[cfg(feature = "visible")]
+use crate::visible;
 use crate::{
     batch::{self, BatchOptions, BatchResult},
     empty::{self, EmptyOptions},
@@ -200,14 +202,24 @@ impl QuickAccessManager {
     ///
     /// The v0.2 manager no longer owns a script-result cache, so this is a no-op.
     pub fn clear_cache(&self) {}
+
+    /// Checks whether a Quick Access section is visible in Explorer.
+    #[cfg(feature = "visible")]
+    pub fn is_visible(&self, qa_type: QuickAccess) -> WincentResult<bool> {
+        visible::is_visible(qa_type)
+    }
+
+    /// Sets whether a Quick Access section is visible in Explorer.
+    #[cfg(feature = "visible")]
+    pub fn set_visible(&self, qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
+        visible::set_visible(qa_type, visible)
+    }
 }
 
 #[cfg(feature = "destlist")]
 impl QuickAccessManager {
     /// Parses the recent-files `.automaticDestinations-ms` file and returns all entries.
-    pub fn get_recent_files_metadata(
-        &self,
-    ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
+    pub fn get_recent_files_metadata(&self) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
         let parsed = crate::destlist::parse_file(crate::destlist::recent_files_dest_path()?)?;
         Ok(crate::destlist::entries(&parsed.dest_list))
     }
