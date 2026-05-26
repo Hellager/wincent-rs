@@ -1,8 +1,8 @@
 //! Experimental removal by forcing Explorer to rebuild `.automaticDestinations-ms`.
 //!
 //! This module implements an observed, risky strategy:
-//! 1. Delete matching `.lnk` files from the Windows Recent folder.
-//! 2. Delete the matching Explorer `.automaticDestinations-ms` backing file.
+//! 1. Delete the matching Explorer `.automaticDestinations-ms` backing file.
+//! 2. Delete matching `.lnk` files from the Windows Recent folder.
 //! 3. Wait briefly for Explorer to rebuild it.
 //! 4. Parse the rebuilt file and verify the target entries are gone.
 //!
@@ -11,7 +11,9 @@
 //! This touches Shell-maintained files directly. Windows may change this behavior,
 //! Explorer may rebuild asynchronously, and deleting the backing file can temporarily
 //! affect Quick Access state. Callers should treat this as best-effort experimental
-//! functionality and keep their own backups when the data matters.
+//! functionality and keep their own backups when the data matters. The operation is
+//! not transactional; if the process is interrupted after deletion starts, no rollback
+//! is attempted.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,15 +38,20 @@ pub enum AutomaticDestinationsKind {
 /// Options for the experimental remove-and-rebuild flow.
 #[derive(Debug, Clone, Copy)]
 pub struct ExperimentalRemoveOptions {
-    /// Delay after deleting the `.automaticDestinations-ms` file before parsing
-    /// the rebuilt file.
+    /// Initial grace delay after deleting the `.automaticDestinations-ms` file
+    /// before polling for the rebuilt file.
+    ///
+    /// This is not the total rebuild timeout. After this delay, the implementation
+    /// still polls for the rebuilt destination file for up to 5 seconds. Increase
+    /// this value on slow or busy systems to give Explorer a quieter rebuild window
+    /// before parsing begins.
     pub rebuild_delay: Duration,
 }
 
 impl Default for ExperimentalRemoveOptions {
     fn default() -> Self {
         Self {
-            rebuild_delay: Duration::from_millis(100),
+            rebuild_delay: Duration::from_millis(500),
         }
     }
 }
@@ -75,7 +82,11 @@ pub struct ExperimentalRemoveReport {
 ///
 /// This function deletes Shell-maintained files. It should be used only when the
 /// caller accepts that Windows may rebuild Quick Access state asynchronously or
-/// differently across versions.
+/// differently across versions. The delete sequence is ordered to remove the
+/// backing `.automaticDestinations-ms` file before deleting matching `.lnk`
+/// files, avoiding a state where `.lnk` files are deleted but the backing file
+/// deletion fails. This still is not atomic and has no rollback if the process
+/// is interrupted after deletion starts.
 pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     kind: AutomaticDestinationsKind,
     target_paths: &[P],
@@ -97,6 +108,9 @@ pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     let before = parse_file_with_retries(&dest_path, Duration::from_secs(2))?;
     let matching_paths_before = matching_dest_paths(&before.dest_list.entries, &requested_paths);
 
+    fs::remove_file(&dest_path).map_err(WincentError::Io)?;
+    let dest_deleted = true;
+
     let deleted_links = delete_matching_recent_links(&recent_folder, &requested_paths)?;
     let missing_lnk_target_paths = requested_paths
         .iter()
@@ -111,9 +125,6 @@ pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
         .iter()
         .map(|link| link.lnk_path.clone())
         .collect();
-
-    fs::remove_file(&dest_path).map_err(WincentError::Io)?;
-    let dest_deleted = true;
 
     crate::utils::refresh_explorer_window()?;
     thread::sleep(options.rebuild_delay);
@@ -332,6 +343,14 @@ mod tests {
         );
 
         assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn default_rebuild_delay_allows_explorer_grace_period() {
+        assert_eq!(
+            ExperimentalRemoveOptions::default().rebuild_delay,
+            Duration::from_millis(500)
+        );
     }
 
     #[test]
