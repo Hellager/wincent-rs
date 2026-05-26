@@ -1,3 +1,5 @@
+//! PowerShell script execution and output parsing helpers.
+
 use crate::error::WincentError;
 use crate::script_storage::ScriptStorage;
 use crate::script_strategy::PSScript;

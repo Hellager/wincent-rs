@@ -652,53 +652,70 @@ impl std::fmt::Display for PowerShellError {
     }
 }
 
+/// Error type returned by wincent operations.
 #[derive(Error, Debug)]
 pub enum WincentError {
+    /// Filesystem or process I/O failed.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// UTF-8 decoding failed.
     #[error("UTF-8 conversion error: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
 
+    /// A generated PowerShell script failed or could not be started.
     #[error("PowerShell execution failed: {0}")]
     PowerShellExecution(PowerShellError),
 
+    /// A supplied path is empty, malformed, missing, or has the wrong type.
     #[error("Invalid path: {0}")]
     InvalidPath(String),
 
+    /// A function argument is outside the supported range.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// The requested operation is not supported by this implementation.
     #[error("Operation not supported: {0}")]
     UnsupportedOperation(String),
 
+    /// A non-I/O system operation failed.
     #[error("System error: {0}")]
     SystemError(String),
 
+    /// Fixed-size array conversion failed while parsing binary data.
     #[error("Array conversion error: {0}")]
     ArrayConversion(#[from] std::array::TryFromSliceError),
 
+    /// A generated script reported failure.
     #[error("Script failed error: {0}")]
     ScriptFailed(String),
 
+    /// A numeric Quick Access category value is unknown.
     #[error("Unknown quick access type: {0}")]
     UnknownQuickAccessType(u32),
 
+    /// A numeric script method value is unknown.
     #[error("Unknown script method: {0}")]
     UnknownScriptMethod(u32),
 
+    /// A required script or API parameter was not provided.
     #[error("Missing function parameter")]
     MissingParameter,
 
+    /// A Windows API call returned a failing HRESULT or status code.
     #[error("Windows API error: {0}")]
     WindowsApi(i32),
 
+    /// No script generation strategy exists for the requested script.
     #[error("Script strategy not found: {0}")]
     ScriptStrategyNotFound(String),
 
+    /// An operation exceeded its caller-provided timeout.
     #[error("Operation timed out: {0}")]
     Timeout(String),
 
+    /// A clear operation completed some categories before a later category failed.
     #[error(
         "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"
     )]
@@ -716,18 +733,23 @@ pub enum WincentError {
         source: Box<WincentError>,
     },
 
+    /// The item is already present in the requested Quick Access category.
     #[error("Item already exists in Quick Access: {0}")]
     AlreadyExists(String),
 
+    /// The item is not present in the requested Quick Access category.
     #[error("Item not found in Quick Access: {0}")]
     NotInRecent(String),
 
+    /// COM is already initialized on the current thread with an incompatible apartment model.
     #[error("COM apartment model mismatch: {0}")]
     ComApartmentMismatch(String),
 
+    /// A DestList or Compound File Binary parse operation failed.
     #[error("DestList parse error: {0}")]
     DestListParse(String),
 
+    /// The DestList file uses a version that this parser does not support.
     #[error("Unsupported DestList version: {0}")]
     DestListUnsupportedVersion(u32),
 }

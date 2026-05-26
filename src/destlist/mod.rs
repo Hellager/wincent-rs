@@ -22,11 +22,13 @@
 //! # Known Limitations
 //!
 //! **DestList versions 1, 3, 4 and 6 are supported.** Other versions return
-//! [`WincentError::DestListUnsupportedVersion`].
+//! [`crate::error::WincentError::DestListUnsupportedVersion`].
 
 pub(super) mod cfb;
 pub mod experimental_remove;
+/// Parser for Explorer `.automaticDestinations-ms` Jump List files.
 pub mod parser;
+/// FILETIME conversion helpers for DestList timestamps.
 pub mod time;
 
 pub use experimental_remove::{

@@ -74,8 +74,10 @@ pub mod handle;
 pub mod manager;
 pub mod query;
 pub mod retry;
+/// PowerShell execution helpers used by fallback Quick Access operations.
 pub mod script_executor;
 mod script_storage;
+/// PowerShell script generation strategies used by Shell fallbacks.
 pub mod script_strategy;
 mod test_utils;
 mod utils;
@@ -87,6 +89,7 @@ pub mod visible;
 pub mod destlist;
 
 #[allow(unused)]
+/// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
     pub use crate::batch::{BatchOptions, BatchResult};
     pub use crate::empty::EmptyOptions;
@@ -122,10 +125,15 @@ pub mod prelude {
 use crate::error::WincentError;
 
 #[derive(Debug, PartialEq, Clone)]
+/// Quick Access categories supported by this crate.
 pub enum QuickAccess {
+    /// Frequently used or pinned folders shown by Quick Access.
     FrequentFolders,
+    /// Recently used files shown by Quick Access.
     RecentFiles,
+    /// Both Recent Files and Frequent Folders.
     All,
 }
 
+/// Result type used by wincent APIs.
 pub type WincentResult<T> = Result<T, WincentError>;

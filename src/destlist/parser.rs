@@ -7,58 +7,83 @@ use crate::WincentResult;
 
 use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, CompoundFile};
 
+/// Explorer Recent Files automatic destination AppID hash.
 pub const RECENT_FILES_APPID: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
+/// Explorer Frequent Folders automatic destination AppID hash.
 pub const FREQUENT_FOLDERS_APPID: &str = "f01b4d95cf55d32a.automaticDestinations-ms";
 
 /// Parsed `.automaticDestinations-ms` file.
 #[derive(Debug, Clone)]
 pub struct AutomaticDestinations {
+    /// Compound File Binary container metadata.
     pub cfb_info: CfbInfo,
+    /// Parsed DestList stream.
     pub dest_list: DestList,
 }
 
 /// CFB container metadata.
 #[derive(Debug, Clone)]
 pub struct CfbInfo {
+    /// Regular sector size in bytes.
     pub sector_size: usize,
+    /// Mini-sector size in bytes.
     pub mini_sector_size: usize,
+    /// Stream-size threshold below which CFB mini streams are used.
     pub mini_cutoff_size: u32,
+    /// Directory entries found in the CFB container.
     pub directory_entries: Vec<CfbDirectoryEntry>,
 }
 
 /// A single CFB directory entry (stream or storage).
 #[derive(Debug, Clone)]
 pub struct CfbDirectoryEntry {
+    /// Directory entry name.
     pub name: String,
+    /// Raw CFB object type.
     pub object_type: u8,
+    /// First sector of the entry stream.
     pub start_sector: u32,
+    /// Stream size in bytes.
     pub stream_size: u64,
 }
 
 /// Parsed DestList stream header + entries.
 #[derive(Debug, Clone)]
 pub struct DestList {
+    /// DestList format version.
     pub version: u32,
+    /// Entry count declared by the DestList header.
     pub declared_entry_count: usize,
+    /// Number of pinned entries declared by the DestList header.
     pub pinned_entry_count: u32,
     /// Compatibility alias for [`DestList::last_entry_number`].
     pub last_entry_id: u64,
+    /// Last entry number assigned by Explorer.
     pub last_entry_number: u32,
+    /// Unknown header field adjacent to [`DestList::last_entry_number`].
     pub last_entry_number_unknown: u32,
+    /// Last revision number assigned by Explorer.
     pub last_revision_number: u32,
+    /// Unknown header field adjacent to [`DestList::last_revision_number`].
     pub last_revision_number_unknown: u32,
+    /// Parsed DestList entries.
     pub entries: Vec<DestListEntry>,
 }
 
 /// A single DestList entry.
 #[derive(Debug, Clone)]
 pub struct DestListEntry {
+    /// Byte offset of this entry inside the DestList stream.
     pub entry_offset: usize,
+    /// Parsed byte length of this entry.
     pub entry_len: usize,
     /// Compatibility alias for [`DestListEntry::entry_number`].
     pub entry_id: u64,
+    /// Explorer entry number.
     pub entry_number: u32,
+    /// Unknown field adjacent to [`DestListEntry::entry_number`].
     pub entry_number_unknown: u32,
+    /// CFB stream name containing the Shell Link payload for this entry.
     pub stream_name: String,
     /// Raw path as stored; may be `"knownfolder:{GUID}"`.
     pub raw_path: String,
@@ -66,17 +91,23 @@ pub struct DestListEntry {
     pub path: String,
     /// `-1` if not pinned.
     pub pin_status: i32,
+    /// Pin order when the entry is pinned, if known.
     pub pin_order: Option<i32>,
     /// Compatibility alias for [`DestListEntry::recent_rank`].
     pub rank: i32,
+    /// Recent rank reported by the DestList entry.
     pub recent_rank: i32,
     /// `0` means hidden in v4.
     pub count: u32,
+    /// Access count reported by the DestList entry.
     pub access_count: u32,
+    /// Explorer score value reported by the DestList entry.
     pub score: f32,
     /// Compatibility alias for [`DestListEntry::last_interaction_filetime`].
     pub last_access_filetime: Option<u64>,
+    /// Last interaction timestamp as a raw Windows FILETIME value.
     pub last_interaction_filetime: Option<u64>,
+    /// Serialized property-store size when present.
     pub sps_size: Option<u32>,
 }
 

@@ -1240,7 +1240,7 @@ pub fn add_to_recent_files_with_timeout(
 ///
 /// * `path` - The full path to the file to be removed
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
-///   passing [`Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
+///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
 pub fn remove_from_recent_files_with_timeout(
     path: &str,
     timeout: std::time::Duration,
@@ -1268,7 +1268,7 @@ pub fn remove_from_recent_files_with_timeout(
 ///
 /// * `path` - The full path to the folder to be pinned. Must be an existing directory.
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
-///   passing [`Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
+///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
 pub fn add_to_frequent_folders_with_timeout(
     path: &str,
     timeout: std::time::Duration,
@@ -1290,7 +1290,7 @@ pub fn add_to_frequent_folders_with_timeout(
 ///
 /// * `path` - The full path to the folder to be unpinned. Must be an existing directory.
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
-///   passing [`Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
+///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
 pub fn remove_from_frequent_folders_with_timeout(
     path: &str,
     timeout: std::time::Duration,

@@ -29,9 +29,12 @@ use super::parser::{
     AutomaticDestinations, DestListEntry,
 };
 
+/// Explorer automatic destination file family to modify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutomaticDestinationsKind {
+    /// Recent Files automatic destination.
     RecentFiles,
+    /// Frequent Folders automatic destination.
     FrequentFolders,
 }
 
@@ -59,18 +62,31 @@ impl Default for ExperimentalRemoveOptions {
 /// Result of the experimental remove-and-rebuild flow.
 #[derive(Debug, Clone)]
 pub struct ExperimentalRemoveReport {
+    /// Automatic destination kind that was processed.
     pub kind: AutomaticDestinationsKind,
+    /// Current user's Windows Recent folder.
     pub recent_folder: PathBuf,
+    /// `.automaticDestinations-ms` file that was deleted and then monitored.
     pub dest_path: PathBuf,
+    /// Target paths requested by the caller.
     pub requested_paths: Vec<String>,
+    /// DestList paths that matched before deletion started.
     pub matching_paths_before: Vec<String>,
+    /// `.lnk` files deleted from the Recent folder.
     pub deleted_lnk_paths: Vec<PathBuf>,
+    /// Requested target paths that had no matching `.lnk` file.
     pub missing_lnk_target_paths: Vec<String>,
+    /// Whether the backing automatic destination file was deleted.
     pub dest_deleted: bool,
+    /// Whether Explorer rebuilt the automatic destination file during polling.
     pub rebuilt: bool,
+    /// Time spent waiting until the rebuilt file could be parsed.
     pub rebuild_parse_elapsed: Option<Duration>,
+    /// Last parse error observed while waiting for the rebuilt file.
     pub rebuild_parse_error: Option<String>,
+    /// Matching paths still present after Explorer rebuilt the file.
     pub remaining_paths_after_rebuild: Vec<String>,
+    /// Whether all requested entries were absent after rebuild.
     pub success: bool,
 }
 
