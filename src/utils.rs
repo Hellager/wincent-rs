@@ -27,19 +27,13 @@ pub(crate) fn normalize_path_lightweight(path: &str) -> String {
 pub(crate) fn normalize_path_for_comparison(path: &str) -> String {
     let path_obj = Path::new(path);
 
-    let normalized = if let Ok(canonical) = path_obj.canonicalize() {
-        canonical.to_string_lossy().to_string()
+    let normalized = if let Ok(canonical_path) = path_obj.canonicalize() {
+        canonical_path.to_string_lossy().to_string()
     } else {
         path.to_string()
     };
 
-    let mut result = normalized.to_lowercase().replace('/', "\\");
-
-    if result.len() > 3 && result.ends_with('\\') {
-        result.pop();
-    }
-
-    result
+    normalize_path_lightweight(&normalized)
 }
 
 /// Checks whether two Windows paths refer to the same location.
@@ -57,24 +51,14 @@ pub(crate) fn paths_equal(path1: &str, path2: &str) -> bool {
 
     normalize_path_for_comparison(path1) == normalize_path_for_comparison(path2)
 }
-use windows::Wdk::System::SystemServices::RtlGetVersion;
-use windows::Win32::Foundation::{BOOL, HANDLE};
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::System::Diagnostics::Debug::VER_PLATFORM_WIN32_NT;
-use windows::Win32::System::SystemInformation::OSVERSIONINFOEXW;
-use windows::Win32::UI::Shell::IsUserAnAdmin;
 use windows::Win32::UI::Shell::{FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum PathType {
     File,
     Directory,
-}
-
-/// Checks if the current user has administrative privileges.
-#[allow(dead_code)]
-pub(crate) fn is_admin() -> bool {
-    unsafe { IsUserAnAdmin() == BOOL(1) }
 }
 
 /// Refreshes the Windows Explorer windows.
@@ -169,49 +153,9 @@ pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
     Ok(recent_folder)
 }
 
-/// Get Windows OS Version
-#[allow(dead_code)]
-fn get_os_version() -> WincentResult<OSVERSIONINFOEXW> {
-    let mut info = OSVERSIONINFOEXW {
-        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOEXW>() as u32,
-        ..Default::default()
-    };
-
-    unsafe {
-        RtlGetVersion(&mut info as *mut _ as *mut _).ok()?;
-    }
-
-    Ok(info)
-}
-
-/// Check Whether Win11
-#[allow(dead_code)]
-pub(crate) fn is_win11() -> WincentResult<bool> {
-    let version_info = get_os_version()?;
-
-    if version_info.dwPlatformId != VER_PLATFORM_WIN32_NT.0 {
-        return Err(WincentError::SystemError(
-            "No Windows NT system".to_string(),
-        ));
-    }
-
-    match (version_info.dwMajorVersion, version_info.dwMinorVersion) {
-        (10, 0) if version_info.dwBuildNumber >= 22000 => Ok(true),
-        (10, 0) => Ok(false),
-        _ => Ok(false),
-    }
-}
-
 #[cfg(test)]
 mod utils_test {
     use super::*;
-
-    #[test]
-    fn test_check_admin() {
-        let is_admin = is_admin();
-        // At least verify the function doesn't panic
-        println!("Running as admin: {}", is_admin);
-    }
 
     #[test]
     #[ignore = "Requires desktop session and may need elevated privileges"]
@@ -275,10 +219,22 @@ mod utils_test {
     }
 
     #[test]
-    fn test_is_win11() -> WincentResult<()> {
-        let is_win11 = is_win11()?;
-        println!("Running on Windows 11: {}", is_win11);
-        Ok(())
+    fn test_nonexistent_path_normalization_is_consistent() {
+        let path = "Z:/NonExistent/Path/";
+
+        assert_eq!(
+            normalize_path_for_comparison(path),
+            normalize_path_lightweight(path),
+            "nonexistent paths should use the same lightweight normalization fallback"
+        );
+    }
+
+    #[test]
+    fn test_paths_equal_nonexistent_paths_use_lightweight_fallback() {
+        assert!(
+            paths_equal("Z:/NonExistent/Path/", "z:\\nonexistent\\path"),
+            "nonexistent paths should still compare case-insensitively with slash normalization"
+        );
     }
 
     #[test]
