@@ -160,7 +160,7 @@ fn should_force_update_recent_files(options: BatchOptions, recent_files_succeede
 /// may report `AlreadyExists` or a later operation error that reflects that
 /// race. Successful Recent Files additions can be coalesced into one display
 /// refresh with [`BatchOptions::force_update`].
-pub fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -> BatchResult {
+pub(crate) fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
     let mut recent_files_succeeded = false;
@@ -193,7 +193,10 @@ pub fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -
 /// `BatchOptions::force_update` is intentionally ignored for removals because
 /// the remove operations target shell items directly and should not delete
 /// Recent Files or Frequent Folders backing data as a broad refresh side effect.
-pub fn remove_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -> BatchResult {
+pub(crate) fn remove_items_batch(
+    items: &[(String, QuickAccess)],
+    options: BatchOptions,
+) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 

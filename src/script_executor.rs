@@ -56,7 +56,7 @@ impl ScriptExecutor {
 
                 WincentError::PowerShellExecution(PowerShellError {
                     kind,
-                    script_type,
+                    operation: script_type.operation(),
                     exit_code: None,
                     stdout: String::new(),
                     stderr: e.to_string(),
@@ -85,7 +85,7 @@ impl ScriptExecutor {
 
             return Err(WincentError::PowerShellExecution(PowerShellError {
                 kind,
-                script_type,
+                operation: script_type.operation(),
                 exit_code: output.status.code(),
                 stdout,
                 stderr,
@@ -144,6 +144,7 @@ impl QuickAccessDataFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::PowerShellOperation;
     use std::os::windows::process::ExitStatusExt;
 
     #[test]
@@ -187,7 +188,7 @@ mod tests {
         if let Err(WincentError::PowerShellExecution(ps_err)) = result {
             assert_eq!(ps_err.stderr, "Error message");
             assert_eq!(ps_err.exit_code, Some(1));
-            assert_eq!(ps_err.script_type, PSScript::QueryQuickAccess);
+            assert_eq!(ps_err.operation, PowerShellOperation::QueryQuickAccess);
             assert_eq!(
                 ps_err.kind,
                 crate::error::PowerShellErrorKind::ExecutionFailed

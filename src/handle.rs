@@ -1,4 +1,4 @@
-//! Windows Quick Access item management
+﻿//! Windows Quick Access item management
 //!
 //! Provides system-level manipulation of Quick Access locations including:
 //! - Recent files management
@@ -32,8 +32,9 @@ use windows::core::{Interface, VARIANT};
 use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations
+#[cfg(test)]
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-/// SHARD_PATHW — registers a wide-string path in the recent documents list.
+/// SHARD_PATHW 鈥?registers a wide-string path in the recent documents list.
 const SHARD_PATHW: u32 = 0x0000_0003;
 
 /// Options for adding a file to Windows Recent Files.
@@ -229,7 +230,7 @@ fn find_and_invoke_verb(path: &str, verb: &str, timeout: std::time::Duration) ->
 /// - [`invoke_verb_on_self()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     // Pre-check: if the folder is already pinned, return Ok(()) immediately.
-    // On Windows 11 "pintohome" acts as a toggle — calling it on an already-pinned
+    // On Windows 11 "pintohome" acts as a toggle 鈥?calling it on an already-pinned
     // folder would silently unpin it, violating the documented no-op contract.
     if is_in_frequent_folders_native(path, timeout)? {
         return Ok(());
@@ -452,7 +453,7 @@ pub(crate) fn execute_script_with_validation(
 
             Err(WincentError::PowerShellExecution(PowerShellError {
                 kind,
-                script_type: script,
+                operation: script.operation(),
                 exit_code: output.status.code(),
                 stdout,
                 stderr,
@@ -856,20 +857,16 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::{handle::add_to_recent_files, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
-///     add_to_recent_files("C:\\Documents\\report.docx")?;
+///     add_file_to_recent_native("C:\\Documents\\report.docx")?;
 ///     Ok(())
 /// }
 /// ```
-pub fn add_to_recent_files(path: &str) -> WincentResult<()> {
-    add_file_to_recent_native(path)
-}
-
 /// Adds a file to Windows Recent Files with explicit display refresh behavior.
-pub fn add_to_recent_files_with_options(
+pub(crate) fn add_to_recent_files_with_options(
     path: &str,
     options: AddRecentFileOptions,
 ) -> WincentResult<()> {
@@ -927,7 +924,7 @@ pub fn add_to_recent_files_with_options(
 ///
 /// Basic usage:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::handle::remove_from_recent_files;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -939,7 +936,7 @@ pub fn add_to_recent_files_with_options(
 ///
 /// Error handling:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::{handle::remove_from_recent_files, error::WincentError};
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -954,10 +951,11 @@ pub fn add_to_recent_files_with_options(
 ///
 /// # See Also
 ///
-/// - [`add_to_recent_files()`] - Add a file to Recent Files
+/// - [`add_file_to_recent_native()`] - Add a file to Recent Files
 /// - [`crate::query::get_recent_files()`] - Query all recent files
 /// - [`crate::query::is_recent_file_exact()`] - Check if a file is in Recent Files
-pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
+#[cfg(test)]
+pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
 
     // Try native COM first (fast path), fallback to PowerShell if it fails
@@ -1008,7 +1006,7 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// - **Asynchronous Processing**: The folder may not appear immediately in Quick Access.
 ///   Windows Shell processes these updates asynchronously.
-/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op — an
+/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op 鈥?an
 ///   explicit pre-check queries the Frequent Folders namespace before invoking the Shell
 ///   verb, preventing the Windows 11 `pintohome`-toggle problem where calling the verb
 ///   on an already-pinned folder would silently unpin it.
@@ -1025,7 +1023,7 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// Basic usage:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::handle::add_to_frequent_folders;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1037,7 +1035,7 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// Pin multiple folders:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::handle::add_to_frequent_folders;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1058,7 +1056,7 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// Error handling:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::{handle::add_to_frequent_folders, error::WincentError};
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1076,10 +1074,6 @@ pub fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// - [`remove_from_frequent_folders()`] - Unpin a folder from Quick Access
 /// - [`crate::query::get_frequent_folders()`] - Query all frequent folders
 /// - [`crate::query::is_frequent_folder_exact()`] - Check if a folder is pinned
-pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
-    pin_frequent_folder(path, DEFAULT_COM_TIMEOUT)
-}
-
 /// Unpins or removes a folder from Windows Quick Access (Frequent Folders).
 ///
 /// This function uses a **two-tier fallback strategy** to maximize compatibility
@@ -1142,7 +1136,7 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 ///
 /// Basic usage:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::handle::remove_from_frequent_folders;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1154,7 +1148,7 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 ///
 /// Unpin multiple folders:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::handle::remove_from_frequent_folders;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1177,7 +1171,7 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 ///
 /// Error handling:
 ///
-/// ```no_run
+/// ```ignore
 /// use wincent::handle::remove_from_frequent_folders;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1194,10 +1188,6 @@ pub fn add_to_frequent_folders(path: &str) -> WincentResult<()> {
 /// - [`add_to_frequent_folders()`] - Pin a folder to Quick Access
 /// - [`crate::query::get_frequent_folders()`] - Query all frequent folders
 /// - [`crate::query::is_frequent_folder_exact()`] - Check if a folder is pinned
-pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
-    unpin_frequent_folder(path, DEFAULT_COM_TIMEOUT)
-}
-
 /// Adds a file to Windows Recent Files with a custom timeout.
 ///
 /// # Timeout Behavior
@@ -1224,13 +1214,6 @@ pub fn remove_from_frequent_folders(path: &str) -> WincentResult<()> {
 ///
 /// * `path` - The full path to the file to be added
 /// * `_timeout` - Accepted for API consistency; currently has no effect
-pub fn add_to_recent_files_with_timeout(
-    path: &str,
-    _timeout: std::time::Duration,
-) -> WincentResult<()> {
-    add_file_to_recent_native(path)
-}
-
 /// Removes a file from Windows Recent Files with a custom COM STA thread timeout.
 ///
 /// Identical to [`remove_from_recent_files()`] but allows specifying the timeout
@@ -1241,7 +1224,7 @@ pub fn add_to_recent_files_with_timeout(
 /// * `path` - The full path to the file to be removed
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
 ///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
-pub fn remove_from_recent_files_with_timeout(
+pub(crate) fn remove_from_recent_files_with_timeout(
     path: &str,
     timeout: std::time::Duration,
 ) -> WincentResult<()> {
@@ -1269,7 +1252,7 @@ pub fn remove_from_recent_files_with_timeout(
 /// * `path` - The full path to the folder to be pinned. Must be an existing directory.
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
 ///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
-pub fn add_to_frequent_folders_with_timeout(
+pub(crate) fn add_to_frequent_folders_with_timeout(
     path: &str,
     timeout: std::time::Duration,
 ) -> WincentResult<()> {
@@ -1291,7 +1274,7 @@ pub fn add_to_frequent_folders_with_timeout(
 /// * `path` - The full path to the folder to be unpinned. Must be an existing directory.
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
 ///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
-pub fn remove_from_frequent_folders_with_timeout(
+pub(crate) fn remove_from_frequent_folders_with_timeout(
     path: &str,
     timeout: std::time::Duration,
 ) -> WincentResult<()> {
@@ -1425,7 +1408,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
     fn test_pin_unpin_frequent_folder() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?;
@@ -1468,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
     fn test_unpin_native_error_classification() -> WincentResult<()> {
         // Tests the critical error classification logic in unpin_frequent_folder_native()
         // After fix: The function now checks if folder is pinned BEFORE attempting to unpin
@@ -1522,7 +1505,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
     fn test_add_remove_file_in_recent() -> WincentResult<()> {
         // Note: This test depends on Windows Shell's asynchronous behavior
         // SHAddToRecentDocs API does not guarantee immediate visibility
@@ -1543,7 +1526,7 @@ mod tests {
         let test_path = path_to_str(&test_file)?;
 
         // Use public API consistently
-        add_to_recent_files(test_path)?;
+        add_file_to_recent_native(test_path)?;
 
         // Wait longer for Windows Shell to process the recent item (20 retries = 10 seconds)
         assert!(
@@ -1563,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
     fn test_remove_recent_file_native_direct() -> WincentResult<()> {
         // Tests the native removal logic directly to verify the "find item and invoke remove verb" path
         // Implementation: src/handle.rs:400-451
@@ -1644,13 +1627,13 @@ mod tests {
         // Both implementations should fail consistently for the same invalid inputs
 
         // Test add errors
-        let result = add_to_recent_files("Z:\\NonExistentFile.txt");
+        let result = add_file_to_recent_native("Z:\\NonExistentFile.txt");
         assert!(result.is_err(), "Should fail with non-existent file");
 
-        let result = add_to_recent_files("");
+        let result = add_file_to_recent_native("");
         assert!(result.is_err(), "Should fail with empty path");
 
-        let result = add_to_recent_files("\0invalid\0path");
+        let result = add_file_to_recent_native("\0invalid\0path");
         assert!(
             result.is_err(),
             "Invalid path characters should not be allowed"
@@ -1671,7 +1654,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
     fn test_remove_from_recent_files_preserves_not_in_recent() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_file =
@@ -1693,9 +1676,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
     fn test_add_file_to_recent_with_spaces() -> WincentResult<()> {
-        // Tests that add_to_recent_files() works for filenames that contain spaces.
+        // Tests that add_file_to_recent_native() works for filenames that contain spaces.
         // Uses timestamp-suffixed names to avoid Windows Shell deduplication:
         // repeated additions of the same filename within a short window may be silently ignored.
         //
@@ -1713,15 +1696,15 @@ mod tests {
         let filename1 = format!("test_file_{}.txt", timestamp);
         let test_file = create_test_file(&test_dir, &filename1, "test content")?;
         let test_path = path_to_str(&test_file)?;
-        add_to_recent_files(test_path)?;
+        add_file_to_recent_native(test_path)?;
 
         // Test file with spaces
         let filename2 = format!("test file with spaces {}.txt", timestamp);
         let test_file2 = create_test_file(&test_dir, &filename2, "test content")?;
         let test_path2 = path_to_str(&test_file2)?;
-        add_to_recent_files(test_path2)?;
+        add_file_to_recent_native(test_path2)?;
 
-        // Wait for both files to appear (20 retries × 500ms = 10 seconds)
+        // Wait for both files to appear (20 retries 脳 500ms = 10 seconds)
         if !wait_for_file_status(test_path, true, 20)? {
             cleanup_test_env(&test_dir)?;
             println!(
@@ -1743,7 +1726,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
     fn test_unpin_folder_item_compatibility() -> WincentResult<()> {
         // Tests the Windows 10/11 compatibility logic in unpin_folder_item()
         // Implementation: src/handle.rs:258-272
@@ -1830,7 +1813,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Performance benchmark — run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
+    #[ignore = "Performance benchmark 鈥?run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
     fn test_native_pin_unpin_performance() -> WincentResult<()> {
         use std::time::Instant;
 
@@ -1859,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state — run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 鈥?run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
     fn test_com_s_false_reference_counting() -> WincentResult<()> {
         // Tests that add_file_to_recent_native() correctly handles S_FALSE
         // and properly calls CoUninitialize to balance reference counts.
@@ -2001,3 +1984,4 @@ mod tests {
         );
     }
 }
+

@@ -175,10 +175,39 @@
 //! checked first by methods like `is_access_denied()`, so localized I/O errors
 //! are handled automatically without custom classifiers.
 
-use crate::script_strategy::PSScript;
 use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;
+
+/// User-facing operation associated with a PowerShell failure.
+///
+/// This describes the Quick Access operation that failed without exposing the
+/// internal script generation strategy used to implement it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PowerShellOperation {
+    /// Refresh open Explorer windows.
+    RefreshExplorer,
+    /// Query both Recent Files and Frequent Folders.
+    QueryQuickAccess,
+    /// Query Recent Files.
+    QueryRecentFiles,
+    /// Query Frequent Folders.
+    QueryFrequentFolders,
+    /// Add a file to Recent Files.
+    AddRecentFile,
+    /// Remove a file from Recent Files.
+    RemoveRecentFile,
+    /// Pin a folder to Frequent Folders.
+    PinFrequentFolder,
+    /// Unpin a folder from Frequent Folders.
+    UnpinFrequentFolder,
+    /// Unpin every pinned folder.
+    EmptyPinnedFolders,
+    /// Check whether query operations are available.
+    CheckQueryFeasible,
+    /// Check whether pin and unpin operations are available.
+    CheckPinUnpinFeasible,
+}
 
 /// PowerShell error classification
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,8 +230,8 @@ pub struct PowerShellError {
     /// Error classification
     pub kind: PowerShellErrorKind,
 
-    /// Type of script that failed
-    pub script_type: PSScript,
+    /// Quick Access operation that failed.
+    pub operation: PowerShellOperation,
 
     /// Exit code from PowerShell process
     pub exit_code: Option<i32>,
@@ -310,7 +339,7 @@ impl PowerShellError {
     /// # use wincent::error::PowerShellError;
     /// # let err = PowerShellError {
     /// #     kind: wincent::error::PowerShellErrorKind::ExecutionFailed,
-    /// #     script_type: wincent::script_strategy::PSScript::QueryQuickAccess,
+    /// #     operation: wincent::error::PowerShellOperation::QueryQuickAccess,
     /// #     exit_code: Some(1),
     /// #     stdout: String::new(),
     /// #     stderr: "拒绝访问".to_string(),
@@ -343,7 +372,7 @@ impl PowerShellError {
     /// # use wincent::error::PowerShellError;
     /// # let err = PowerShellError {
     /// #     kind: wincent::error::PowerShellErrorKind::ExecutionFailed,
-    /// #     script_type: wincent::script_strategy::PSScript::QueryQuickAccess,
+    /// #     operation: wincent::error::PowerShellOperation::QueryQuickAccess,
     /// #     exit_code: Some(1),
     /// #     stdout: String::new(),
     /// #     stderr: "拒绝访问".to_string(),
@@ -381,7 +410,7 @@ impl PowerShellError {
     /// # use wincent::error::{PowerShellError, PowerShellErrorKind};
     /// # let err = PowerShellError {
     /// #     kind: PowerShellErrorKind::ExecutionFailed,
-    /// #     script_type: wincent::script_strategy::PSScript::QueryQuickAccess,
+    /// #     operation: wincent::error::PowerShellOperation::QueryQuickAccess,
     /// #     exit_code: Some(1),
     /// #     stdout: String::new(),
     /// #     stderr: "拒绝访问".to_string(),
@@ -400,7 +429,7 @@ impl PowerShellError {
     /// # use wincent::error::{PowerShellError, PowerShellErrorKind};
     /// # let mut err = PowerShellError {
     /// #     kind: PowerShellErrorKind::AccessDenied,
-    /// #     script_type: wincent::script_strategy::PSScript::QueryQuickAccess,
+    /// #     operation: wincent::error::PowerShellOperation::QueryQuickAccess,
     /// #     exit_code: Some(1),
     /// #     stdout: String::new(),
     /// #     stderr: "Access denied".to_string(),
@@ -444,7 +473,7 @@ impl PowerShellError {
     /// # use wincent::error::{PowerShellError, PowerShellErrorKind};
     /// # let err = PowerShellError {
     /// #     kind: PowerShellErrorKind::ExecutionFailed,
-    /// #     script_type: wincent::script_strategy::PSScript::QueryQuickAccess,
+    /// #     operation: wincent::error::PowerShellOperation::QueryQuickAccess,
     /// #     exit_code: Some(1),
     /// #     stdout: String::new(),
     /// #     stderr: "拒绝访问".to_string(),
@@ -471,7 +500,7 @@ impl PowerShellError {
     /// # use wincent::error::{PowerShellError, PowerShellErrorKind};
     /// # let mut err = PowerShellError {
     /// #     kind: PowerShellErrorKind::AccessDenied,
-    /// #     script_type: wincent::script_strategy::PSScript::QueryQuickAccess,
+    /// #     operation: wincent::error::PowerShellOperation::QueryQuickAccess,
     /// #     exit_code: Some(1),
     /// #     stdout: String::new(),
     /// #     stderr: "timeout error".to_string(),
@@ -646,7 +675,7 @@ impl std::fmt::Display for PowerShellError {
              Script: {}\n\
              Parameters: {}\n\
              Error: {}",
-            self.script_type,
+            self.operation,
             self.exit_code
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
@@ -791,7 +820,7 @@ mod tests {
 
         let ps_error = WincentError::PowerShellExecution(PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "access denied".to_string(),
@@ -829,7 +858,7 @@ mod tests {
     fn test_powershell_error_is_access_denied() {
         let err = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "Access to the path is denied.".to_string(),
@@ -843,7 +872,7 @@ mod tests {
 
         let err2 = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "UnauthorizedAccessException: Access denied".to_string(),
@@ -860,7 +889,7 @@ mod tests {
     fn test_powershell_error_is_execution_policy() {
         let err = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "execution policy does not allow this script".to_string(),
@@ -874,7 +903,7 @@ mod tests {
 
         let err2 = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "Set-ExecutionPolicy required".to_string(),
@@ -891,7 +920,7 @@ mod tests {
     fn test_powershell_error_is_cmdlet_not_found() {
         let err = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "Get-Item is not recognized as a cmdlet".to_string(),
@@ -905,7 +934,7 @@ mod tests {
 
         let err2 = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "CommandNotFoundException: The term 'Get-Item' is not recognized".to_string(),
@@ -922,7 +951,7 @@ mod tests {
     fn test_powershell_error_suggest_fix() {
         let err = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "UnauthorizedAccessException".to_string(),
@@ -938,7 +967,7 @@ mod tests {
 
         let err2 = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "execution policy blocks this script".to_string(),
@@ -954,7 +983,7 @@ mod tests {
 
         let err3 = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "CommandNotFoundException".to_string(),
@@ -973,7 +1002,7 @@ mod tests {
     fn test_powershell_error_is_transient() {
         let err = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "The file is locked by another process".to_string(),
@@ -987,7 +1016,7 @@ mod tests {
 
         let err2 = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "The file is in use".to_string(),
@@ -1001,7 +1030,7 @@ mod tests {
 
         let err3 = PowerShellError {
             kind: PowerShellErrorKind::ExecutionFailed,
-            script_type: PSScript::QueryQuickAccess,
+            operation: PowerShellOperation::QueryQuickAccess,
             exit_code: Some(1),
             stdout: String::new(),
             stderr: "Access denied".to_string(),
@@ -1018,7 +1047,7 @@ mod tests {
     fn test_powershell_error_display() {
         let err = PowerShellError {
             kind: PowerShellErrorKind::AccessDenied,
-            script_type: PSScript::PinToFrequentFolder,
+            operation: PowerShellOperation::PinFrequentFolder,
             exit_code: Some(1),
             stdout: "Some output".to_string(),
             stderr: "Access denied".to_string(),
@@ -1030,7 +1059,7 @@ mod tests {
         };
 
         let display = format!("{}", err);
-        assert!(display.contains("PinToFrequentFolder"));
+        assert!(display.contains("PinFrequentFolder"));
         assert!(display.contains("Exit code: 1"));
         assert!(display.contains("C:\\scripts\\test.ps1"));
         assert!(display.contains("C:\\test\\folder"));

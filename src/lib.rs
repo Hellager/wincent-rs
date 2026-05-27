@@ -64,21 +64,19 @@
 //! - Consider `also_pinned_folders` carefully when clearing frequent folders
 //!
 
-pub mod batch;
+mod batch;
 mod com;
 mod com_thread;
-pub mod empty;
+mod empty;
 pub mod error;
 mod explorer_window;
-pub mod handle;
+mod handle;
 pub mod manager;
-pub mod query;
-pub mod retry;
-/// PowerShell execution helpers used by fallback Quick Access operations.
-pub mod script_executor;
+mod query;
+mod retry;
+mod script_executor;
 mod script_storage;
-/// PowerShell script generation strategies used by Shell fallbacks.
-pub mod script_strategy;
+mod script_strategy;
 mod test_utils;
 mod utils;
 
@@ -91,13 +89,10 @@ pub mod destlist;
 #[allow(unused)]
 /// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
-    pub use crate::batch::{BatchOptions, BatchResult};
-    pub use crate::empty::EmptyOptions;
-    pub use crate::error::{PowerShellError, PowerShellErrorKind, WincentError};
-    pub use crate::handle::AddRecentFileOptions;
+    pub use crate::error::{
+        PowerShellError, PowerShellErrorKind, PowerShellOperation, WincentError,
+    };
     pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
-    pub use crate::retry::RetryPolicy;
-    pub use crate::script_strategy::PSScript;
 
     #[cfg(feature = "visible")]
     pub use crate::visible::{
@@ -105,7 +100,9 @@ pub mod prelude {
         set_frequent_folders_visible, set_recent_files_visible, set_visible,
     };
 
-    pub use crate::{QuickAccess, WincentResult};
+    pub use crate::{
+        BatchOptions, BatchResult, EmptyOptions, QuickAccess, RetryPolicy, WincentResult,
+    };
 
     #[cfg(feature = "destlist")]
     pub use crate::destlist::{
@@ -114,15 +111,13 @@ pub mod prelude {
         AutomaticDestinations, CfbInfo, DestList, DestListEntry,
     };
 
-    // Commonly used query functions
-    pub use crate::query::{
-        get_frequent_folders, get_quick_access_items, get_recent_files, is_frequent_folder_exact,
-        is_in_frequent_folders, is_in_quick_access, is_in_quick_access_exact, is_in_recent_files,
-        is_recent_file_exact,
-    };
 }
 
 use crate::error::WincentError;
+
+pub use crate::batch::{BatchOptions, BatchResult};
+pub use crate::empty::EmptyOptions;
+pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

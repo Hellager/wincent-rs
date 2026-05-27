@@ -1,4 +1,4 @@
-//! Windows Quick Access item retrieval and inspection
+﻿//! Windows Quick Access item retrieval and inspection
 //!
 //! Provides read-only access to system Quick Access metadata including:
 //! - Recent file tracking
@@ -398,7 +398,7 @@ pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::get_recent_files;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -411,7 +411,7 @@ pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
 ///     Ok(())
 /// }
 /// ```
-pub fn get_recent_files() -> WincentResult<Vec<String>> {
+pub(crate) fn get_recent_files() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::RecentFiles)
 }
 
@@ -434,7 +434,7 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::get_frequent_folders;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -447,7 +447,7 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 ///     Ok(())
 /// }
 /// ```
-pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
+pub(crate) fn get_frequent_folders() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::FrequentFolders)
 }
 
@@ -472,7 +472,7 @@ pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::get_quick_access_items;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -494,7 +494,7 @@ pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
 /// This function queries the "Recent Items" namespace (`shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}`),
 /// which is different from the "Frequent Folders" namespace. To query frequent folders specifically,
 /// use [`get_frequent_folders()`] instead.
-pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
+pub(crate) fn get_quick_access_items() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::All)
 }
 
@@ -521,7 +521,7 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::is_recent_file_exact;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -539,7 +539,8 @@ pub fn get_quick_access_items() -> WincentResult<Vec<String>> {
 /// # See Also
 ///
 /// - [`is_in_recent_files()`] - For fuzzy/substring matching
-pub fn is_recent_file_exact(path: &str) -> WincentResult<bool> {
+#[cfg(test)]
+fn is_recent_file_exact(path: &str) -> WincentResult<bool> {
     let items = get_recent_files()?;
     Ok(items
         .iter()
@@ -570,7 +571,7 @@ pub fn is_recent_file_exact(path: &str) -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::is_in_recent_files;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -598,7 +599,9 @@ pub fn is_recent_file_exact(path: &str) -> WincentResult<bool> {
 /// # See Also
 ///
 /// - [`is_recent_file_exact()`] - For exact path matching
-pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
+#[cfg(test)]
+#[allow(dead_code)]
+fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
     let items = get_recent_files()?;
 
     Ok(items.iter().any(|item| item.contains(keyword)))
@@ -625,7 +628,7 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::is_frequent_folder_exact;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -643,7 +646,8 @@ pub fn is_in_recent_files(keyword: &str) -> WincentResult<bool> {
 /// # See Also
 ///
 /// - [`is_in_frequent_folders()`] - For fuzzy/substring matching
-pub fn is_frequent_folder_exact(path: &str) -> WincentResult<bool> {
+#[cfg(test)]
+pub(crate) fn is_frequent_folder_exact(path: &str) -> WincentResult<bool> {
     let items = get_frequent_folders()?;
     Ok(items
         .iter()
@@ -674,7 +678,7 @@ pub fn is_frequent_folder_exact(path: &str) -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::is_in_frequent_folders;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -698,7 +702,9 @@ pub fn is_frequent_folder_exact(path: &str) -> WincentResult<bool> {
 /// # See Also
 ///
 /// - [`is_frequent_folder_exact()`] - For exact path matching
-pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
+#[cfg(test)]
+#[allow(dead_code)]
+fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
     let items = get_frequent_folders()?;
 
     Ok(items.iter().any(|item| item.contains(keyword)))
@@ -725,7 +731,7 @@ pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::is_in_quick_access_exact;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -752,7 +758,8 @@ pub fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 /// # See Also
 ///
 /// - [`is_in_quick_access()`] - For fuzzy/substring matching
-pub fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
+#[cfg(test)]
+fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
     let items = get_quick_access_items()?;
     Ok(items
         .iter()
@@ -784,7 +791,7 @@ pub fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use wincent::query::is_in_quick_access;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -814,7 +821,8 @@ pub fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
 /// # See Also
 ///
 /// - [`is_in_quick_access_exact()`] - For exact path matching
-pub fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
+#[cfg(test)]
+fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
     let items = get_quick_access_items()?;
 
     Ok(items.iter().any(|item| item.contains(keyword)))
@@ -1455,3 +1463,4 @@ mod tests {
         Ok(())
     }
 }
+

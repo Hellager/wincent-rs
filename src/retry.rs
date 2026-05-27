@@ -1,4 +1,4 @@
-//! Retry policy and strategy for handling transient errors
+﻿//! Retry policy and strategy for handling transient errors
 //!
 //! Provides configurable retry mechanisms with exponential backoff and jitter
 //! to improve reliability when dealing with temporary failures.
@@ -11,7 +11,7 @@
 //!
 //! # Example
 //! ```rust
-//! use wincent::retry::RetryPolicy;
+//! use wincent::RetryPolicy;
 //! use std::time::Duration;
 //!
 //! // Use default policy (3 retries, exponential backoff)
@@ -91,7 +91,7 @@ impl RetryPolicy {
     ///
     /// # Example
     /// ```rust
-    /// use wincent::retry::RetryPolicy;
+    /// use wincent::RetryPolicy;
     ///
     /// let policy = RetryPolicy::no_retry();
     /// assert_eq!(policy.max_attempts, 0);
@@ -117,7 +117,7 @@ impl RetryPolicy {
     ///
     /// # Example
     /// ```rust
-    /// use wincent::retry::RetryPolicy;
+    /// use wincent::RetryPolicy;
     ///
     /// let policy = RetryPolicy::fast();
     /// assert_eq!(policy.max_attempts, 2);
@@ -137,7 +137,7 @@ impl RetryPolicy {
     ///
     /// # Example
     /// ```rust
-    /// use wincent::retry::RetryPolicy;
+    /// use wincent::RetryPolicy;
     ///
     /// let policy = RetryPolicy::standard();
     /// assert_eq!(policy.max_attempts, 3);
@@ -157,7 +157,7 @@ impl RetryPolicy {
     ///
     /// # Example
     /// ```rust
-    /// use wincent::retry::RetryPolicy;
+    /// use wincent::RetryPolicy;
     ///
     /// let policy = RetryPolicy::aggressive();
     /// assert_eq!(policy.max_attempts, 5);
@@ -183,7 +183,7 @@ impl RetryPolicy {
     ///
     /// # Example
     /// ```rust
-    /// use wincent::retry::RetryPolicy;
+    /// use wincent::RetryPolicy;
     ///
     /// let policy = RetryPolicy::default();
     /// let delay1 = policy.calculate_delay(0);
@@ -325,3 +325,4 @@ mod tests {
         assert_eq!(standard.jitter, default.jitter);
     }
 }
+
