@@ -54,6 +54,12 @@ impl EmptyOptions {
         self
     }
 
+    /// Also removes pinned folders when clearing Frequent Folders or all items.
+    #[must_use]
+    pub fn remove_pinned_folders(self) -> Self {
+        self.with_also_pinned_folders(true)
+    }
+
     /// Whether open Explorer windows should be refreshed after a successful clear.
     #[must_use]
     pub fn force_refresh(&self) -> bool {
@@ -67,11 +73,10 @@ impl EmptyOptions {
         self
     }
 
-    pub(crate) fn from_parts(also_pinned_folders: bool, force_refresh: bool) -> Self {
-        Self {
-            also_pinned_folders,
-            force_refresh,
-        }
+    /// Refreshes open Explorer windows after a successful clear.
+    #[must_use]
+    pub fn refresh_explorer(self) -> Self {
+        self.with_force_refresh(true)
     }
 }
 

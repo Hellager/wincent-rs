@@ -17,6 +17,43 @@ use crate::{
 };
 use std::time::Duration;
 
+/// Options for adding a single item to Quick Access.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AddOptions {
+    /// Refresh Recent Files display data after adding a recent file.
+    ///
+    /// This option only applies to [`QuickAccess::RecentFiles`]. Frequent
+    /// folders are pinned through Explorer's shell verb and ignore this value.
+    force_update: bool,
+}
+
+impl AddOptions {
+    /// Creates default add options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether Recent Files display data is refreshed after adding a recent file.
+    #[must_use]
+    pub fn force_update(&self) -> bool {
+        self.force_update
+    }
+
+    /// Sets whether Recent Files display data is refreshed after adding a recent file.
+    #[must_use]
+    pub fn with_force_update(mut self, force_update: bool) -> Self {
+        self.force_update = force_update;
+        self
+    }
+
+    /// Refreshes Recent Files display data after adding a recent file.
+    #[must_use]
+    pub fn refresh_recent_files(self) -> Self {
+        self.with_force_update(true)
+    }
+}
+
 /// Builder for configuring [`QuickAccessManager`].
 #[derive(Debug, Clone)]
 #[must_use]
@@ -128,7 +165,7 @@ impl QuickAccessManager {
         &self,
         path: &str,
         qa_type: QuickAccess,
-        force_update: bool,
+        options: AddOptions,
     ) -> WincentResult<()> {
         if matches!(qa_type, QuickAccess::All) {
             return Err(WincentError::UnsupportedOperation(format!(
@@ -144,9 +181,12 @@ impl QuickAccessManager {
         }
 
         match qa_type {
-            QuickAccess::RecentFiles => {
-                add_to_recent_files_with_options(path, AddRecentFileOptions { force_update })
-            }
+            QuickAccess::RecentFiles => add_to_recent_files_with_options(
+                path,
+                AddRecentFileOptions {
+                    force_update: options.force_update(),
+                },
+            ),
             QuickAccess::FrequentFolders => {
                 add_to_frequent_folders_with_timeout(path, self.timeout)
             }
@@ -182,9 +222,12 @@ impl QuickAccessManager {
     pub fn add_items_batch(
         &self,
         items: &[(String, QuickAccess)],
-        force_update: bool,
+        options: BatchOptions,
     ) -> BatchResult {
-        batch::add_items_batch(items, BatchOptions::from_parts(self.timeout, force_update))
+        batch::add_items_batch(
+            items,
+            BatchOptions::from_parts(self.timeout, options.force_update()),
+        )
     }
 
     /// Removes multiple items from Quick Access, collecting per-item failures.
@@ -193,16 +236,8 @@ impl QuickAccessManager {
     }
 
     /// Clears Quick Access items.
-    pub fn empty_items(
-        &self,
-        qa_type: QuickAccess,
-        force_refresh: bool,
-        also_pinned_folders: bool,
-    ) -> WincentResult<()> {
-        empty::empty_items(
-            qa_type,
-            EmptyOptions::from_parts(also_pinned_folders, force_refresh),
-        )
+    pub fn empty_items(&self, qa_type: QuickAccess, options: EmptyOptions) -> WincentResult<()> {
+        empty::empty_items(qa_type, options)
     }
 
     /// Clears internal caches.
@@ -220,6 +255,18 @@ impl QuickAccessManager {
     #[cfg(feature = "visible")]
     pub fn set_visible(&self, qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
         visible::set_visible(qa_type, visible)
+    }
+
+    /// Shows a Quick Access section in Explorer.
+    #[cfg(feature = "visible")]
+    pub fn show_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
+        self.set_visible(qa_type, true)
+    }
+
+    /// Hides a Quick Access section in Explorer.
+    #[cfg(feature = "visible")]
+    pub fn hide_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
+        self.set_visible(qa_type, false)
     }
 }
 
@@ -283,7 +330,7 @@ mod tests {
     fn unsupported_add_all_returns_error() {
         let manager = QuickAccessManager::new();
         let error = manager
-            .add_item("C:\\test.txt", QuickAccess::All, false)
+            .add_item("C:\\test.txt", QuickAccess::All, AddOptions::new())
             .unwrap_err();
 
         assert!(matches!(error, WincentError::UnsupportedOperation(_)));

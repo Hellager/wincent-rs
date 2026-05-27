@@ -180,6 +180,12 @@ impl BatchOptions {
         self
     }
 
+    /// Refreshes Recent Files display data after successful additions.
+    #[must_use]
+    pub fn refresh_recent_files(self) -> Self {
+        self.with_force_update(true)
+    }
+
     pub(crate) fn from_parts(timeout: Duration, force_update: bool) -> Self {
         Self {
             timeout,

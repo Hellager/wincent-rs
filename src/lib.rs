@@ -34,7 +34,7 @@
 //!     manager.add_item(
 //!         "C:\\path\\to\\file.txt",
 //!         QuickAccess::RecentFiles,
-//!         true // force update Explorer
+//!         AddOptions::new().refresh_recent_files(),
 //!     )?;
 //!     
 //!     // Query all Quick Access items
@@ -92,7 +92,7 @@ pub mod prelude {
     pub use crate::error::{
         PowerShellError, PowerShellErrorKind, PowerShellOperation, WincentError,
     };
-    pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
+    pub use crate::manager::{AddOptions, QuickAccessManager, QuickAccessManagerBuilder};
 
     #[cfg(feature = "visible")]
     pub use crate::visible::{
@@ -116,6 +116,7 @@ use crate::error::WincentError;
 
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::empty::EmptyOptions;
+pub use crate::manager::AddOptions;
 pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.
