@@ -1,3 +1,33 @@
+## [0.2.2] - 2026-05-27
+
+### Added
+- Optional `visible` feature for reading and updating Explorer Quick Access section visibility
+- Experimental `destlist` rebuild-based removal helpers for deleting matching Recent Files or Frequent Folders entries
+- DestList parser support for Explorer DestList versions 1, 3, 4, and 6
+- Explorer navigation refresh cycle for the Recent Files page
+- Interactive CLI example replacing the previous collection of small sample programs
+
+### Changed
+- Aligned public types with Rust API Guidelines by hiding implementation fields behind accessors and marking public enums as non-exhaustive
+- Made `QuickAccessManager` the primary facade for lower-level Quick Access operations and hidden implementation modules
+- Updated manager APIs to accept path-like inputs and use typed options instead of boolean flags
+- Moved shell timeout configuration out of `BatchOptions`; batch options now focus on batch behavior only
+- Improved README and rustdoc coverage, including clearer examples, failure ordering, batch preflight behavior, and force-update semantics
+- Refactored Explorer refresh logic and internal PowerShell error construction
+
+### Fixed
+- Hardened PowerShell script generation and cached script handling
+- Avoided localized Explorer window title matching when refreshing windows
+- Reduced partial-state risks in experimental DestList removal
+- Preserved partial frequent-folder clear state in failure cases
+- Hardened Recent Files handling tests and fallback behavior
+- Returned `UnsupportedOperation` for unknown mutation targets such as `QuickAccess::All` removal
+- Clarified COM STA timeout, cleanup, and `S_FALSE` guard behavior
+
+### Removed
+- Removed misspelled public visibility API aliases
+- Removed unused internal Windows utility helpers
+
 ## [0.2.1] - 2026-05-22
 
 ### Added
