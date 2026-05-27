@@ -1,3 +1,21 @@
+## [0.2.3] - 2026-05-27
+
+### Added
+- `RemoveOptions` for optional deep cleanup after Quick Access removals
+- `QuickAccessManager::remove_item_with_options` and `remove_items_batch_with_options`
+- Deep cleanup of matching Windows Recent `.lnk` shortcuts for Recent Files and Frequent Folders removals
+- `QuickAccessLock` APIs for locking Recent Files, Frequent Folders, or both Explorer automatic destination backing files
+- Unlock reporting for initial, current, new, deleted, and failed Recent `.lnk` cleanup paths
+- Example CLI support for `--deep-clean` removal and `lock [recent|frequent|all] [--cleanup-new-links]`
+
+### Changed
+- Batch remove can now run optional deep cleanup and reports cleanup failures as per-item failures
+- Shared Windows wide-string conversion helper across shortcut parsing and backing-file locking code
+
+### Fixed
+- Compared lock/unlock Recent `.lnk` snapshots with Windows path semantics instead of case-sensitive `PathBuf` equality
+- Made unlock cleanup best-effort so successful and failed `.lnk` deletions are both visible in the report
+
 ## [0.2.2] - 2026-05-27
 
 ### Added
