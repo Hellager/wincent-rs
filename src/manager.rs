@@ -473,10 +473,7 @@ impl QuickAccessManager {
     /// ```
     pub fn add_items_batch(&self, items: &[QuickAccessItem], options: BatchOptions) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
-        let result = batch::add_items_batch(
-            &items,
-            BatchOptions::from_parts(self.timeout, options.force_update()),
-        );
+        let result = batch::add_items_batch(&items, options, self.timeout);
         merge_batch_failures(result, failures)
     }
 
@@ -486,8 +483,7 @@ impl QuickAccessManager {
     /// Per-item failures are collected in [`BatchResult::failed`].
     pub fn remove_items_batch(&self, items: &[QuickAccessItem]) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
-        let result =
-            batch::remove_items_batch(&items, BatchOptions::from_parts(self.timeout, false));
+        let result = batch::remove_items_batch(&items, self.timeout);
         merge_batch_failures(result, failures)
     }
 

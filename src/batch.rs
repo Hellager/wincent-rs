@@ -137,27 +137,21 @@ impl BatchResult {
 
 /// Options for batch operations.
 ///
-/// `BatchOptions` applies to manager batch operations and lower-level batch
-/// helpers. Refreshing Recent Files is coalesced across the batch so callers do
-/// not pay the refresh cost for every item.
+/// `BatchOptions` controls batch behavior. Shell operation timeout is supplied
+/// by [`crate::manager::QuickAccessManager`] configuration rather than this
+/// type.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use std::time::Duration;
 /// use wincent::BatchOptions;
 ///
-/// let options = BatchOptions::new()
-///     .with_timeout(Duration::from_secs(20))
-///     .refresh_recent_files();
+/// let options = BatchOptions::new().refresh_recent_files();
 ///
-/// assert_eq!(options.timeout(), Duration::from_secs(20));
 /// assert!(options.force_update());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatchOptions {
-    /// Timeout for shell operations that support timeout control.
-    timeout: Duration,
     /// Refresh Recent Files display data once after successful Recent Files add operations.
     ///
     /// Batch mode coalesces this into one post-batch data-file refresh instead of
@@ -173,7 +167,6 @@ pub struct BatchOptions {
 impl Default for BatchOptions {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(10),
             force_update: false,
         }
     }
@@ -184,39 +177,6 @@ impl BatchOptions {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Timeout for shell operations that support timeout control.
-    #[must_use]
-    pub fn timeout(&self) -> Duration {
-        self.timeout
-    }
-
-    /// Sets the shell operation timeout.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `timeout` is zero.
-    #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        assert!(!timeout.is_zero(), "timeout must be greater than zero");
-        self.timeout = timeout;
-        self
-    }
-
-    /// Tries to set the shell operation timeout.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidArgument`] when `timeout` is zero.
-    pub fn try_with_timeout(mut self, timeout: Duration) -> WincentResult<Self> {
-        if timeout.is_zero() {
-            return Err(WincentError::InvalidArgument(
-                "timeout must be greater than zero".to_string(),
-            ));
-        }
-        self.timeout = timeout;
-        Ok(self)
     }
 
     /// Whether Recent Files display data is refreshed after successful additions.
@@ -236,13 +196,6 @@ impl BatchOptions {
     #[must_use]
     pub fn refresh_recent_files(self) -> Self {
         self.with_force_update(true)
-    }
-
-    pub(crate) fn from_parts(timeout: Duration, force_update: bool) -> Self {
-        Self {
-            timeout,
-            force_update,
-        }
     }
 }
 
@@ -267,38 +220,46 @@ fn check_item_exact(path: &str, qa_type: QuickAccess) -> WincentResult<bool> {
     Ok(items.iter().any(|item| paths_equal(item, path)))
 }
 
-fn add_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentResult<()> {
+fn add_item(path: &str, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
     match qa_type {
-        QuickAccess::RecentFiles => {
-            ensure_not_present(path, qa_type)?;
-            add_to_recent_files_with_options(
-                path,
-                AddRecentFileOptions {
-                    // Batch force_update is handled once after all Recent Files adds.
-                    force_update: false,
-                },
-            )
-        }
-        QuickAccess::FrequentFolders => {
-            ensure_not_present(path, qa_type)?;
-            add_to_frequent_folders_with_timeout(path, options.timeout())
-        }
+        QuickAccess::RecentFiles => add_recent_file(path),
+        QuickAccess::FrequentFolders => add_frequent_folder(path, timeout),
         unsupported => Err(unsupported_add(unsupported)),
     }
 }
 
-fn remove_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentResult<()> {
+fn remove_item(path: &str, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
     match qa_type {
-        QuickAccess::RecentFiles => {
-            ensure_present(path, qa_type)?;
-            remove_from_recent_files_with_timeout(path, options.timeout())
-        }
-        QuickAccess::FrequentFolders => {
-            ensure_present(path, qa_type)?;
-            remove_from_frequent_folders_with_timeout(path, options.timeout())
-        }
+        QuickAccess::RecentFiles => remove_recent_file(path, timeout),
+        QuickAccess::FrequentFolders => remove_frequent_folder(path, timeout),
         unsupported => Err(unsupported_remove(unsupported)),
     }
+}
+
+fn add_recent_file(path: &str) -> WincentResult<()> {
+    ensure_not_present(path, QuickAccess::RecentFiles)?;
+    add_to_recent_files_with_options(
+        path,
+        AddRecentFileOptions {
+            // Batch force_update is handled once after all Recent Files adds.
+            force_update: false,
+        },
+    )
+}
+
+fn add_frequent_folder(path: &str, timeout: Duration) -> WincentResult<()> {
+    ensure_not_present(path, QuickAccess::FrequentFolders)?;
+    add_to_frequent_folders_with_timeout(path, timeout)
+}
+
+fn remove_recent_file(path: &str, timeout: Duration) -> WincentResult<()> {
+    ensure_present(path, QuickAccess::RecentFiles)?;
+    remove_from_recent_files_with_timeout(path, timeout)
+}
+
+fn remove_frequent_folder(path: &str, timeout: Duration) -> WincentResult<()> {
+    ensure_present(path, QuickAccess::FrequentFolders)?;
+    remove_from_frequent_folders_with_timeout(path, timeout)
 }
 
 fn ensure_not_present(path: &str, qa_type: QuickAccess) -> WincentResult<()> {
@@ -335,13 +296,14 @@ fn should_force_update_recent_files(options: BatchOptions, recent_files_succeede
 pub(crate) fn add_items_batch(
     items: &[(String, QuickAccess)],
     options: BatchOptions,
+    timeout: Duration,
 ) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
     let mut recent_files_succeeded = false;
 
     for (path, qa_type) in items {
-        match add_item(path, *qa_type, options) {
+        match add_item(path, *qa_type, timeout) {
             Ok(()) => {
                 if matches!(qa_type, QuickAccess::RecentFiles) {
                     recent_files_succeeded = true;
@@ -370,13 +332,13 @@ pub(crate) fn add_items_batch(
 /// Recent Files or Frequent Folders backing data as a broad refresh side effect.
 pub(crate) fn remove_items_batch(
     items: &[(String, QuickAccess)],
-    options: BatchOptions,
+    timeout: Duration,
 ) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
     for (path, qa_type) in items {
-        match remove_item(path, *qa_type, options) {
+        match remove_item(path, *qa_type, timeout) {
             Ok(()) => succeeded.push(path.clone()),
             Err(error) => failed.push(BatchFailure::new(path.clone(), error)),
         }
