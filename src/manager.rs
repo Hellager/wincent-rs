@@ -392,30 +392,21 @@ impl QuickAccessManager {
     ) -> WincentResult<()> {
         let path = path_to_shell_string(path.as_ref())?;
 
-        if matches!(qa_type, QuickAccess::All) {
-            return Err(WincentError::UnsupportedOperation(format!(
-                "Unsupported add operation for {:?}",
-                qa_type
-            )));
-        }
-
-        // This preflight check is best-effort; Explorer state may still change
-        // before the shell operation runs.
-        if self.check_item_exact(&path, qa_type)? {
-            return Err(WincentError::already_exists(path, qa_type));
-        }
-
         match qa_type {
-            QuickAccess::RecentFiles => add_to_recent_files_with_options(
-                &path,
-                AddRecentFileOptions {
-                    force_update: options.force_update(),
-                },
-            ),
+            QuickAccess::RecentFiles => {
+                self.ensure_not_present(&path, qa_type)?;
+                add_to_recent_files_with_options(
+                    &path,
+                    AddRecentFileOptions {
+                        force_update: options.force_update(),
+                    },
+                )
+            }
             QuickAccess::FrequentFolders => {
+                self.ensure_not_present(&path, qa_type)?;
                 add_to_frequent_folders_with_timeout(&path, self.timeout)
             }
-            QuickAccess::All => unreachable!(),
+            unsupported => Err(unsupported_add(unsupported)),
         }
     }
 
@@ -446,25 +437,16 @@ impl QuickAccessManager {
     pub fn remove_item<P: AsRef<Path>>(&self, path: P, qa_type: QuickAccess) -> WincentResult<()> {
         let path = path_to_shell_string(path.as_ref())?;
 
-        if matches!(qa_type, QuickAccess::All) {
-            return Err(WincentError::UnsupportedOperation(format!(
-                "Unsupported remove operation for {:?}",
-                qa_type
-            )));
-        }
-
-        // This preflight check is best-effort; Explorer state may still change
-        // before the shell operation runs.
-        if !self.check_item_exact(&path, qa_type)? {
-            return Err(WincentError::not_in_quick_access(path, qa_type));
-        }
-
         match qa_type {
-            QuickAccess::RecentFiles => remove_from_recent_files_with_timeout(&path, self.timeout),
+            QuickAccess::RecentFiles => {
+                self.ensure_present(&path, qa_type)?;
+                remove_from_recent_files_with_timeout(&path, self.timeout)
+            }
             QuickAccess::FrequentFolders => {
+                self.ensure_present(&path, qa_type)?;
                 remove_from_frequent_folders_with_timeout(&path, self.timeout)
             }
-            QuickAccess::All => unreachable!(),
+            unsupported => Err(unsupported_remove(unsupported)),
         }
     }
 
@@ -607,6 +589,34 @@ impl QuickAccessManager {
 
         (converted, failures)
     }
+
+    fn ensure_not_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+        // This preflight check is best-effort; Explorer state may still change
+        // before the shell operation runs.
+        if self.check_item_exact(path, qa_type)? {
+            return Err(WincentError::already_exists(path, qa_type));
+        }
+
+        Ok(())
+    }
+
+    fn ensure_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+        // This preflight check is best-effort; Explorer state may still change
+        // before the shell operation runs.
+        if !self.check_item_exact(path, qa_type)? {
+            return Err(WincentError::not_in_quick_access(path, qa_type));
+        }
+
+        Ok(())
+    }
+}
+
+fn unsupported_add(qa_type: QuickAccess) -> WincentError {
+    WincentError::UnsupportedOperation(format!("Unsupported add operation for {:?}", qa_type))
+}
+
+fn unsupported_remove(qa_type: QuickAccess) -> WincentError {
+    WincentError::UnsupportedOperation(format!("Unsupported remove operation for {:?}", qa_type))
 }
 
 fn merge_batch_failures(

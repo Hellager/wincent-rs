@@ -268,49 +268,57 @@ fn check_item_exact(path: &str, qa_type: QuickAccess) -> WincentResult<bool> {
 }
 
 fn add_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentResult<()> {
-    if matches!(qa_type, QuickAccess::All) {
-        return Err(unsupported_add(qa_type));
+    match qa_type {
+        QuickAccess::RecentFiles => {
+            ensure_not_present(path, qa_type)?;
+            add_to_recent_files_with_options(
+                path,
+                AddRecentFileOptions {
+                    // Batch force_update is handled once after all Recent Files adds.
+                    force_update: false,
+                },
+            )
+        }
+        QuickAccess::FrequentFolders => {
+            ensure_not_present(path, qa_type)?;
+            add_to_frequent_folders_with_timeout(path, options.timeout())
+        }
+        unsupported => Err(unsupported_add(unsupported)),
     }
+}
 
+fn remove_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentResult<()> {
+    match qa_type {
+        QuickAccess::RecentFiles => {
+            ensure_present(path, qa_type)?;
+            remove_from_recent_files_with_timeout(path, options.timeout())
+        }
+        QuickAccess::FrequentFolders => {
+            ensure_present(path, qa_type)?;
+            remove_from_frequent_folders_with_timeout(path, options.timeout())
+        }
+        unsupported => Err(unsupported_remove(unsupported)),
+    }
+}
+
+fn ensure_not_present(path: &str, qa_type: QuickAccess) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
     if check_item_exact(path, qa_type)? {
         return Err(WincentError::already_exists(path, qa_type));
     }
 
-    match qa_type {
-        QuickAccess::RecentFiles => add_to_recent_files_with_options(
-            path,
-            AddRecentFileOptions {
-                // Batch force_update is handled once after all Recent Files adds.
-                force_update: false,
-            },
-        ),
-        QuickAccess::FrequentFolders => {
-            add_to_frequent_folders_with_timeout(path, options.timeout())
-        }
-        QuickAccess::All => unreachable!(),
-    }
+    Ok(())
 }
 
-fn remove_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentResult<()> {
-    if matches!(qa_type, QuickAccess::All) {
-        return Err(unsupported_remove(qa_type));
-    }
-
+fn ensure_present(path: &str, qa_type: QuickAccess) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
     if !check_item_exact(path, qa_type)? {
         return Err(WincentError::not_in_quick_access(path, qa_type));
     }
 
-    match qa_type {
-        QuickAccess::RecentFiles => remove_from_recent_files_with_timeout(path, options.timeout()),
-        QuickAccess::FrequentFolders => {
-            remove_from_frequent_folders_with_timeout(path, options.timeout())
-        }
-        QuickAccess::All => unreachable!(),
-    }
+    Ok(())
 }
 
 fn should_force_update_recent_files(options: BatchOptions, recent_files_succeeded: bool) -> bool {
