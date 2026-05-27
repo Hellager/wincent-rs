@@ -24,6 +24,7 @@ use crate::{
     script_executor::{QuickAccessDataFiles, ScriptExecutor},
     script_strategy::PSScript,
     utils::{paths_equal, validate_path, PathType},
+    QuickAccess,
     WincentResult,
 };
 use std::ffi::OsString;
@@ -34,7 +35,7 @@ use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 /// Default timeout for COM STA thread operations
 #[cfg(test)]
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-/// SHARD_PATHW 鈥?registers a wide-string path in the recent documents list.
+/// SHARD_PATHW 閳?registers a wide-string path in the recent documents list.
 const SHARD_PATHW: u32 = 0x0000_0003;
 
 /// Options for adding a file to Windows Recent Files.
@@ -134,7 +135,7 @@ fn invoke_verb_on_self(path: &str, verb: &str, timeout: std::time::Duration) -> 
 ///
 /// # Errors
 ///
-/// - `NotInRecent`: The folder was not found in the Frequent Folders namespace
+/// - `NotInQuickAccess`: The folder was not found in the Frequent Folders namespace
 /// - `SystemError`: COM operation failed (e.g., failed to get item count, invoke verb)
 ///
 /// # Path Matching
@@ -193,10 +194,10 @@ fn find_and_invoke_verb(path: &str, verb: &str, timeout: std::time::Duration) ->
                 }
             }
 
-            Err(WincentError::NotInRecent(format!(
-                "Folder not found in frequent folders: {}",
-                path
-            )))
+            Err(WincentError::not_in_quick_access(
+                path,
+                QuickAccess::FrequentFolders,
+            ))
         },
         timeout,
     )
@@ -230,7 +231,7 @@ fn find_and_invoke_verb(path: &str, verb: &str, timeout: std::time::Duration) ->
 /// - [`invoke_verb_on_self()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     // Pre-check: if the folder is already pinned, return Ok(()) immediately.
-    // On Windows 11 "pintohome" acts as a toggle 鈥?calling it on an already-pinned
+    // On Windows 11 "pintohome" acts as a toggle 閳?calling it on an already-pinned
     // folder would silently unpin it, violating the documented no-op contract.
     if is_in_frequent_folders_native(path, timeout)? {
         return Ok(());
@@ -312,7 +313,7 @@ fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> Wi
 ///
 /// 1. **Check if folder is pinned**
 ///    - Query the Frequent Folders namespace to verify the folder is pinned
-///    - If not pinned, return `NotInRecent` error immediately
+///    - If not pinned, return `NotInQuickAccess` error immediately
 ///    - This prevents accidentally pinning an unpinned folder
 ///
 /// 2. **Try "unpinfromhome" verb first** (Windows 10 style)
@@ -343,7 +344,7 @@ fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> Wi
 ///
 /// # Errors
 ///
-/// - `NotInRecent`: The folder is not in Frequent Folders (not pinned)
+/// - `NotInQuickAccess`: The folder is not in Frequent Folders (not pinned)
 /// - `SystemError`: COM operation failed (e.g., permission denied, COM error)
 ///
 /// # Windows Version Compatibility
@@ -361,10 +362,10 @@ fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Win
     // This is critical because pintohome is a toggle - it will pin if not already pinned
     // Uses pure native COM check with paths_equal() for robust path matching
     if !is_in_frequent_folders_native(path, timeout)? {
-        return Err(WincentError::NotInRecent(format!(
-            "Folder not in frequent folders: {}",
-            path
-        )));
+        return Err(WincentError::not_in_quick_access(
+            path,
+            QuickAccess::FrequentFolders,
+        ));
     }
 
     // Step 2: Try unpinfromhome first (Windows 10 style)
@@ -535,7 +536,7 @@ pub(crate) fn add_file_to_recent_native(path: &str) -> WincentResult<()> {
 ///
 /// # Errors
 ///
-/// - `NotInRecent`: The file was not found in the Recent Items namespace
+/// - `NotInQuickAccess`: The file was not found in the Recent Items namespace
 /// - `SystemError`: COM operation failed (e.g., failed to get item count, invoke verb)
 ///
 /// # Path Matching
@@ -612,10 +613,10 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
                 }
             }
 
-            Err(WincentError::NotInRecent(format!(
-                "File not found in recent items: {}",
-                path
-            )))
+            Err(WincentError::not_in_quick_access(
+                path,
+                QuickAccess::RecentFiles,
+            ))
         },
         timeout,
     )
@@ -783,10 +784,10 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
 /// # Errors
 ///
 /// - `InvalidPath`: Path validation failed (not a directory, doesn't exist)
-/// - `NotInRecent`: Folder not in Frequent Folders (returned immediately, no PowerShell fallback)
+/// - `NotInQuickAccess`: Folder not in Frequent Folders (returned immediately, no PowerShell fallback)
 /// - `SystemError` or `PowerShellExecution`: Both native COM and PowerShell strategies failed
 ///
-/// Note: When the folder is not pinned, this function returns `NotInRecent` immediately
+/// Note: When the folder is not pinned, this function returns `NotInQuickAccess` immediately
 /// without attempting the PowerShell fallback, ensuring the caller receives accurate
 /// error information. Similarly, `InvalidPath` errors are returned directly without
 /// fallback, as the path is definitively wrong.
@@ -813,11 +814,11 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
     // Try native COM first (fast path)
     match unpin_frequent_folder_native(path, timeout) {
         Ok(()) => Ok(()),
-        // NotInRecent means the folder is not pinned - this is a semantic error,
+        // NotInQuickAccess means the folder is not pinned - this is a semantic error,
         // not a system failure. Falling back to PowerShell would not help and
         // could mask the real cause from the caller.
         // InvalidPath should also not fallback as the path is definitively wrong.
-        Err(e @ WincentError::NotInRecent(_)) => Err(e),
+        Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
         Err(e @ WincentError::InvalidPath(_)) => Err(e),
         // For system/COM errors, fallback to PowerShell for broader compatibility
         Err(_) => unpin_frequent_folder_powershell(path),
@@ -942,7 +943,7 @@ pub(crate) fn add_to_recent_files_with_options(
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     match remove_from_recent_files("C:\\Documents\\report.docx") {
 ///         Ok(()) => println!("Successfully removed"),
-///         Err(WincentError::NotInRecent(_)) => println!("File not in Recent Files"),
+///         Err(WincentError::NotInQuickAccess(_)) => println!("File not in Recent Files"),
 ///         Err(e) => eprintln!("Error: {}", e),
 ///     }
 ///     Ok(())
@@ -961,7 +962,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     // Try native COM first (fast path), fallback to PowerShell if it fails
     match remove_recent_file_native(path, DEFAULT_COM_TIMEOUT) {
         Ok(()) => Ok(()),
-        Err(e @ WincentError::NotInRecent(_)) => Err(e),
+        Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
         Err(e @ WincentError::InvalidPath(_)) => Err(e),
         Err(_) => remove_recent_file_powershell(path),
     }
@@ -1006,7 +1007,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// - **Asynchronous Processing**: The folder may not appear immediately in Quick Access.
 ///   Windows Shell processes these updates asynchronously.
-/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op 鈥?an
+/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op 閳?an
 ///   explicit pre-check queries the Frequent Folders namespace before invoking the Shell
 ///   verb, preventing the Windows 11 `pintohome`-toggle problem where calling the verb
 ///   on an already-pinned folder would silently unpin it.
@@ -1106,7 +1107,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// - **Both strategies fail**: Native COM and PowerShell both fail to unpin the folder
 /// - **Permission denied**: Insufficient permissions to modify Quick Access
 ///
-/// Note: When the folder is not pinned, this function returns `NotInRecent`
+/// Note: When the folder is not pinned, this function returns `NotInQuickAccess`
 /// immediately without attempting the PowerShell fallback, ensuring the
 /// caller receives accurate error information.
 ///
@@ -1121,7 +1122,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// - **Asynchronous Processing**: The folder may not disappear immediately from Quick Access.
 ///   Windows Shell processes these updates asynchronously.
 /// - **Not Pinned**: The native COM implementation checks if the folder is pinned before
-///   attempting to unpin. If not pinned, it returns `NotInRecent` immediately without
+///   attempting to unpin. If not pinned, it returns `NotInQuickAccess` immediately without
 ///   falling back to PowerShell.
 /// - **Case Insensitive**: Path matching is case-insensitive on Windows.
 /// - **Automatic Tracking**: Unpinning removes the folder from the permanent Quick Access list,
@@ -1236,7 +1237,7 @@ pub(crate) fn remove_from_recent_files_with_timeout(
     validate_path(path, PathType::File)?;
     match remove_recent_file_native(path, timeout) {
         Ok(()) => Ok(()),
-        Err(e @ WincentError::NotInRecent(_)) => Err(e),
+        Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
         Err(e @ WincentError::InvalidPath(_)) => Err(e),
         Err(_) => remove_recent_file_powershell(path),
     }
@@ -1296,7 +1297,7 @@ mod tests {
 
     fn path_to_str(path: &std::path::Path) -> WincentResult<&str> {
         path.to_str()
-            .ok_or_else(|| WincentError::InvalidPath(path.display().to_string()))
+            .ok_or_else(|| WincentError::invalid_path(path, "Invalid path encoding"))
     }
 
     fn wait_for_folder_status(
@@ -1408,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
     fn test_pin_unpin_frequent_folder() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?;
@@ -1451,7 +1452,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
     fn test_unpin_native_error_classification() -> WincentResult<()> {
         // Tests the critical error classification logic in unpin_frequent_folder_native()
         // After fix: The function now checks if folder is pinned BEFORE attempting to unpin
@@ -1459,14 +1460,14 @@ mod tests {
         //
         // Key logic:
         // 1. Check if folder is pinned (is_frequent_folder_exact)
-        // 2. If not pinned, return NotInRecent immediately
+        // 2. If not pinned, return NotInQuickAccess immediately
         // 3. If pinned, try unpinfromhome first, then fallback to pintohome
 
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?;
 
         // Scenario 1: Unpin a folder that is NOT in frequent folders
-        // Expected: Should return NotInRecent error immediately (after fix)
+        // Expected: Should return NotInQuickAccess error immediately (after fix)
         // This prevents accidentally pinning the folder
         let result = unpin_frequent_folder_native(test_path, DEFAULT_COM_TIMEOUT);
 
@@ -1477,8 +1478,8 @@ mod tests {
 
         if let Err(e) = result {
             assert!(
-                matches!(e, WincentError::NotInRecent(_)),
-                "Unpinning a non-pinned folder should return NotInRecent, got: {:?}",
+                matches!(e, WincentError::NotInQuickAccess { .. }),
+                "Unpinning a non-pinned folder should return NotInQuickAccess, got: {:?}",
                 e
             );
         }
@@ -1505,7 +1506,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
     fn test_add_remove_file_in_recent() -> WincentResult<()> {
         // Note: This test depends on Windows Shell's asynchronous behavior
         // SHAddToRecentDocs API does not guarantee immediate visibility
@@ -1546,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
     fn test_remove_recent_file_native_direct() -> WincentResult<()> {
         // Tests the native removal logic directly to verify the "find item and invoke remove verb" path
         // Implementation: src/handle.rs:400-451
@@ -1558,7 +1559,7 @@ mod tests {
         // This test validates that remove_recent_file_native() correctly:
         // - Finds the file in the Recent Items namespace
         // - Invokes the remove verb on the correct item
-        // - Returns NotInRecent when file is not found
+        // - Returns NotInQuickAccess when file is not found
         //
         // Note: This test depends on Windows Shell's asynchronous behavior
         // SHAddToRecentDocs API does not guarantee immediate visibility
@@ -1602,16 +1603,16 @@ mod tests {
             "File should be removed from recent items"
         );
 
-        // Test removing non-existent file - should return NotInRecent
+        // Test removing non-existent file - should return NotInQuickAccess
         let result = remove_recent_file_native(test_path, DEFAULT_COM_TIMEOUT);
         assert!(result.is_err(), "Should fail when file not in recent");
 
         if let Err(e) = result {
             let error_msg = format!("{:?}", e);
             assert!(
-                error_msg.contains("NotInRecent")
+                error_msg.contains("NotInQuickAccess")
                     || error_msg.contains("not found in recent items"),
-                "Should return NotInRecent error when file not found: {:?}",
+                "Should return NotInQuickAccess error when file not found: {:?}",
                 e
             );
         }
@@ -1654,7 +1655,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
     fn test_remove_from_recent_files_preserves_not_in_recent() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_file =
@@ -1667,8 +1668,8 @@ mod tests {
         cleanup_test_env(&test_dir)?;
 
         assert!(
-            matches!(result, Err(WincentError::NotInRecent(_))),
-            "public wrapper should preserve NotInRecent instead of falling back to PowerShell: {:?}",
+            matches!(result, Err(WincentError::NotInQuickAccess { .. })),
+            "public wrapper should preserve NotInQuickAccess instead of falling back to PowerShell: {:?}",
             result
         );
 
@@ -1676,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
     fn test_add_file_to_recent_with_spaces() -> WincentResult<()> {
         // Tests that add_file_to_recent_native() works for filenames that contain spaces.
         // Uses timestamp-suffixed names to avoid Windows Shell deduplication:
@@ -1704,7 +1705,7 @@ mod tests {
         let test_path2 = path_to_str(&test_file2)?;
         add_file_to_recent_native(test_path2)?;
 
-        // Wait for both files to appear (20 retries 脳 500ms = 10 seconds)
+        // Wait for both files to appear (20 retries 鑴?500ms = 10 seconds)
         if !wait_for_file_status(test_path, true, 20)? {
             cleanup_test_env(&test_dir)?;
             println!(
@@ -1726,7 +1727,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
     fn test_unpin_folder_item_compatibility() -> WincentResult<()> {
         // Tests the Windows 10/11 compatibility logic in unpin_folder_item()
         // Implementation: src/handle.rs:258-272
@@ -1813,7 +1814,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Performance benchmark 鈥?run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
+    #[ignore = "Performance benchmark 閳?run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
     fn test_native_pin_unpin_performance() -> WincentResult<()> {
         use std::time::Instant;
 
@@ -1842,7 +1843,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 鈥?run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 閳?run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
     fn test_com_s_false_reference_counting() -> WincentResult<()> {
         // Tests that add_file_to_recent_native() correctly handles S_FALSE
         // and properly calls CoUninitialize to balance reference counts.

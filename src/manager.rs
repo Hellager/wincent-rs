@@ -20,7 +20,7 @@ use std::time::Duration;
 
 fn path_to_shell_string(path: &Path) -> WincentResult<String> {
     if path.as_os_str().is_empty() {
-        return Err(WincentError::InvalidPath("Empty path provided".to_string()));
+        return Err(WincentError::invalid_path_reason("Empty path provided"));
     }
 
     Ok(path.to_string_lossy().into_owned())
@@ -247,7 +247,7 @@ impl QuickAccessManager {
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
         if self.check_item_exact(&path, qa_type)? {
-            return Err(WincentError::AlreadyExists(path));
+            return Err(WincentError::already_exists(path, qa_type));
         }
 
         match qa_type {
@@ -278,7 +278,7 @@ impl QuickAccessManager {
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
         if !self.check_item_exact(&path, qa_type)? {
-            return Err(WincentError::NotInRecent(path));
+            return Err(WincentError::not_in_quick_access(path, qa_type));
         }
 
         match qa_type {

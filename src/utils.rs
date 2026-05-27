@@ -109,25 +109,20 @@ pub(crate) fn validate_path(path: &str, expected_type: PathType) -> WincentResul
     let path_buf = Path::new(path);
 
     if path.is_empty() {
-        return Err(WincentError::InvalidPath("Empty path provided".to_string()));
+        return Err(WincentError::invalid_path_reason("Empty path provided"));
     }
 
     if !path_buf.exists() {
-        return Err(WincentError::InvalidPath(format!(
-            "Path does not exist: {}",
-            path
-        )));
+        return Err(WincentError::invalid_path(path, "Path does not exist"));
     }
 
     match expected_type {
-        PathType::File if !path_buf.is_file() => Err(WincentError::InvalidPath(format!(
-            "Not a valid file: {}",
-            path
-        ))),
-        PathType::Directory if !path_buf.is_dir() => Err(WincentError::InvalidPath(format!(
-            "Not a valid directory: {}",
-            path
-        ))),
+        PathType::File if !path_buf.is_file() => {
+            Err(WincentError::invalid_path(path, "Not a valid file"))
+        }
+        PathType::Directory if !path_buf.is_dir() => {
+            Err(WincentError::invalid_path(path, "Not a valid directory"))
+        }
         _ => Ok(()),
     }
 }
@@ -278,8 +273,11 @@ mod utils_test {
         let result = validate_path("", PathType::File);
         assert!(result.is_err(), "Empty path should fail validation");
 
-        if let Err(WincentError::InvalidPath(msg)) = result {
-            assert!(msg.contains("Empty"), "Error should mention empty path");
+        if let Err(WincentError::InvalidPath(error)) = result {
+            assert!(
+                error.reason_text().contains("Empty"),
+                "Error should mention empty path"
+            );
         } else {
             panic!("Expected InvalidPath error");
         }
@@ -290,9 +288,9 @@ mod utils_test {
         let result = validate_path("Z:\\NonExistent\\Path.txt", PathType::File);
         assert!(result.is_err(), "Non-existent path should fail validation");
 
-        if let Err(WincentError::InvalidPath(msg)) = result {
+        if let Err(WincentError::InvalidPath(error)) = result {
             assert!(
-                msg.contains("does not exist"),
+                error.reason_text().contains("does not exist"),
                 "Error should mention path doesn't exist"
             );
         } else {
@@ -312,9 +310,9 @@ mod utils_test {
         let result = validate_path(&recent_folder, PathType::File);
         assert!(result.is_err(), "Directory should not validate as file");
 
-        if let Err(WincentError::InvalidPath(msg)) = result {
+        if let Err(WincentError::InvalidPath(error)) = result {
             assert!(
-                msg.contains("Not a valid file"),
+                error.reason_text().contains("Not a valid file"),
                 "Error should mention type mismatch"
             );
         }

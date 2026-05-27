@@ -21,7 +21,7 @@ pub struct BatchResult {
     succeeded: Vec<String>,
     /// Failed items with error details.
     ///
-    /// `AlreadyExists` and `NotInRecent` may come from best-effort preflight
+    /// `AlreadyExists` and `NotInQuickAccess` may come from best-effort preflight
     /// checks. Explorer state can still change between the preflight query and
     /// the shell operation, so callers should treat those errors as a snapshot
     /// of the attempted operation rather than a durable global truth.
@@ -223,7 +223,7 @@ fn add_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentR
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
     if check_item_exact(path, qa_type)? {
-        return Err(WincentError::AlreadyExists(path.to_string()));
+        return Err(WincentError::already_exists(path, qa_type));
     }
 
     match qa_type {
@@ -249,7 +249,7 @@ fn remove_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> Wince
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
     if !check_item_exact(path, qa_type)? {
-        return Err(WincentError::NotInRecent(path.to_string()));
+        return Err(WincentError::not_in_quick_access(path, qa_type));
     }
 
     match qa_type {
@@ -304,7 +304,7 @@ pub(crate) fn add_items_batch(
 ///
 /// Each item performs a best-effort existence preflight before invoking the
 /// shell operation. If Explorer changes between those two steps, batch results
-/// may report `NotInRecent` or a later operation error that reflects that race.
+/// may report `NotInQuickAccess` or a later operation error that reflects that race.
 /// `BatchOptions::force_update` is intentionally ignored for removals because
 /// the remove operations target shell items directly and should not delete
 /// Recent Files or Frequent Folders backing data as a broad refresh side effect.
@@ -345,7 +345,10 @@ mod tests {
             vec!["file1.txt".to_string(), "file2.txt".to_string()],
             vec![BatchFailure::new(
                 "file3.txt".to_string(),
-                WincentError::NotInRecent("file3.txt".to_string()),
+                WincentError::NotInQuickAccess {
+                    path: "file3.txt".to_string(),
+                    qa_type: QuickAccess::RecentFiles,
+                },
             )],
         );
 

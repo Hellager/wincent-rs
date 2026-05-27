@@ -375,7 +375,7 @@ mod tests {
 
     fn path_to_str(path: &std::path::Path) -> WincentResult<&str> {
         path.to_str()
-            .ok_or_else(|| WincentError::InvalidPath(path.display().to_string()))
+            .ok_or_else(|| WincentError::invalid_path(path, "Invalid path encoding"))
     }
 
     fn unique_millis() -> WincentResult<u128> {

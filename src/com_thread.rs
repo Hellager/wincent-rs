@@ -167,7 +167,7 @@ mod tests {
     fn test_run_on_sta_thread_error_propagation() {
         // Tests that errors from the closure are properly propagated
         let result: WincentResult<()> = run_on_sta_thread(
-            || Err(WincentError::InvalidPath("test".to_string())),
+            || Err(WincentError::invalid_path_reason("test")),
             std::time::Duration::from_secs(10),
         );
         assert!(matches!(result, Err(WincentError::InvalidPath(_))));

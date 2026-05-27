@@ -22,9 +22,9 @@
 //! For other languages, you can use custom classifiers to handle localized
 //! PowerShell error messages.
 //!
-//! ## Approach 1: Using `reclassify_with()`
+//! ## Approach 1: Using `classification_with()`
 //!
-//! Reclassify errors after they occur:
+//! Classify errors after they occur:
 //!
 //! ```rust
 //! use wincent::prelude::*;
@@ -54,8 +54,8 @@
 //! match manager.add_item("C:\\test", QuickAccess::FrequentFolders, AddOptions::new()) {
 //!     Ok(_) => println!("Success"),
 //!     Err(WincentError::PowerShellExecution(err)) => {
-//!         let err = err.reclassify_with(classify_chinese_error);
-//!         if err.is_access_denied() {
+//!         let kind = err.classification_with(classify_chinese_error);
+//!         if kind == PowerShellErrorKind::AccessDenied {
 //!             println!("需要管理员权限");
 //!         }
 //!     }
@@ -175,7 +175,8 @@
 //! checked first by methods like `is_access_denied()`, so localized I/O errors
 //! are handled automatically without custom classifiers.
 
-use std::path::PathBuf;
+use crate::QuickAccess;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -212,8 +213,8 @@ pub enum PowerShellOperation {
 /// PowerShell error classification
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PowerShellErrorKind {
-    /// Script execution failed
-    ExecutionFailed,
+    /// PowerShell process failed without a more specific classification.
+    ProcessFailed,
     /// Operation timed out
     Timeout,
     /// Access denied error
@@ -256,6 +257,54 @@ pub struct PowerShellError {
 
     /// OS error code (if available)
     os_error: Option<i32>,
+}
+
+/// Structured invalid path details.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidPathError {
+    path: Option<PathBuf>,
+    reason: String,
+}
+
+impl InvalidPathError {
+    /// Creates an invalid path error with a path and reason.
+    #[must_use]
+    pub fn new<P: Into<PathBuf>, S: Into<String>>(path: P, reason: S) -> Self {
+        Self {
+            path: Some(path.into()),
+            reason: reason.into(),
+        }
+    }
+
+    /// Creates an invalid path error with only a reason.
+    #[must_use]
+    pub fn reason<S: Into<String>>(reason: S) -> Self {
+        Self {
+            path: None,
+            reason: reason.into(),
+        }
+    }
+
+    /// Returns the invalid path, if one was recorded.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Returns the reason the path is invalid.
+    #[must_use]
+    pub fn reason_text(&self) -> &str {
+        &self.reason
+    }
+}
+
+impl std::fmt::Display for InvalidPathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.path {
+            Some(path) => write!(f, "{}: {}", self.reason, path.display()),
+            None => f.write_str(&self.reason),
+        }
+    }
 }
 
 impl PowerShellError {
@@ -336,7 +385,7 @@ impl PowerShellError {
     /// Infers error kind from stderr content (English only)
     ///
     /// For localized error messages, use `classify_with()` with a custom classifier
-    /// or use `reclassify_with()` to reclassify an existing error.
+    /// or use `classification_with()` to classify an existing error.
     pub fn infer_kind_from_stderr(stderr: &str) -> PowerShellErrorKind {
         let stderr_lower = stderr.to_lowercase();
 
@@ -364,8 +413,8 @@ impl PowerShellError {
             return PowerShellErrorKind::Timeout;
         }
 
-        // Default to execution failed
-        PowerShellErrorKind::ExecutionFailed
+        // Default to a generic process failure.
+        PowerShellErrorKind::ProcessFailed
     }
 
     /// Classifies error with optional custom classifier
@@ -517,6 +566,10 @@ impl PowerShellError {
     /// # }
     /// ```
     #[must_use]
+    #[deprecated(
+        since = "0.1.2",
+        note = "use classification_with to classify without mutating the error"
+    )]
     pub fn with_kind(mut self, kind: PowerShellErrorKind) -> Self {
         // Only allow reclassification if there's no strong evidence from OS/IO errors
         if self.os_error.is_none() && self.io_error.is_none() {
@@ -589,6 +642,10 @@ impl PowerShellError {
     /// # }
     /// ```
     #[must_use]
+    #[deprecated(
+        since = "0.1.2",
+        note = "use classification_with to classify without mutating the error"
+    )]
     pub fn reclassify_with<F>(mut self, classifier: F) -> Self
     where
         F: Fn(&str) -> Option<PowerShellErrorKind>,
@@ -605,6 +662,19 @@ impl PowerShellError {
         // If os_error or io_error exists, ignore the classification result
         // to maintain state consistency
         self
+    }
+
+    /// Classifies this error using a custom classifier without modifying it.
+    #[must_use]
+    pub fn classification_with<F>(&self, classifier: F) -> PowerShellErrorKind
+    where
+        F: Fn(&str) -> Option<PowerShellErrorKind>,
+    {
+        if self.os_error.is_some() || self.io_error.is_some() {
+            return self.kind();
+        }
+
+        classifier(&self.stderr).unwrap_or_else(|| self.kind())
     }
 
     /// Normalizes stderr for case-insensitive matching
@@ -740,7 +810,7 @@ impl std::fmt::Display for PowerShellError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PowerShell script failed: {:?}\n\
+            "PowerShell {:?} failed\n\
              Exit code: {}\n\
              Script: {}\n\
              Parameters: {}\n\
@@ -779,7 +849,7 @@ pub enum WincentError {
 
     /// A supplied path is empty, malformed, missing, or has the wrong type.
     #[error("Invalid path: {0}")]
-    InvalidPath(String),
+    InvalidPath(InvalidPathError),
 
     /// A function argument is outside the supported range.
     #[error("Invalid argument: {0}")]
@@ -844,12 +914,22 @@ pub enum WincentError {
     },
 
     /// The item is already present in the requested Quick Access category.
-    #[error("Item already exists in Quick Access: {0}")]
-    AlreadyExists(String),
+    #[error("Item already exists in {qa_type:?}: {path}")]
+    AlreadyExists {
+        /// Path that was already present.
+        path: String,
+        /// Quick Access category where the item was found.
+        qa_type: QuickAccess,
+    },
 
     /// The item is not present in the requested Quick Access category.
-    #[error("Item not found in Quick Access: {0}")]
-    NotInRecent(String),
+    #[error("Item not found in {qa_type:?}: {path}")]
+    NotInQuickAccess {
+        /// Path that was not found.
+        path: String,
+        /// Quick Access category where the item was expected.
+        qa_type: QuickAccess,
+    },
 
     /// COM is already initialized on the current thread with an incompatible apartment model.
     #[error("COM apartment model mismatch: {0}")]
@@ -870,6 +950,30 @@ impl From<windows::core::Error> for WincentError {
     }
 }
 
+impl WincentError {
+    pub(crate) fn invalid_path_reason(reason: impl Into<String>) -> Self {
+        Self::InvalidPath(InvalidPathError::reason(reason))
+    }
+
+    pub(crate) fn invalid_path(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        Self::InvalidPath(InvalidPathError::new(path, reason))
+    }
+
+    pub(crate) fn already_exists(path: impl Into<String>, qa_type: QuickAccess) -> Self {
+        Self::AlreadyExists {
+            path: path.into(),
+            qa_type,
+        }
+    }
+
+    pub(crate) fn not_in_quick_access(path: impl Into<String>, qa_type: QuickAccess) -> Self {
+        Self::NotInQuickAccess {
+            path: path.into(),
+            qa_type,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -885,11 +989,11 @@ mod tests {
         let missing_param = WincentError::MissingParameter;
         assert!(format!("{}", missing_param).contains("Missing function parameter"));
 
-        let invalid_path = WincentError::InvalidPath("test/path".to_string());
+        let invalid_path = WincentError::invalid_path("test/path", "test path");
         assert!(format!("{}", invalid_path).contains("test/path"));
 
         let ps_error = WincentError::PowerShellExecution(PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -927,7 +1031,7 @@ mod tests {
     #[test]
     fn test_powershell_error_is_access_denied() {
         let err = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -941,7 +1045,7 @@ mod tests {
         assert!(err.is_access_denied());
 
         let err2 = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -958,7 +1062,7 @@ mod tests {
     #[test]
     fn test_powershell_error_is_execution_policy() {
         let err = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -972,7 +1076,7 @@ mod tests {
         assert!(err.is_execution_policy_error());
 
         let err2 = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -989,7 +1093,7 @@ mod tests {
     #[test]
     fn test_powershell_error_is_cmdlet_not_found() {
         let err = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -1003,7 +1107,7 @@ mod tests {
         assert!(err.is_cmdlet_not_found());
 
         let err2 = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -1020,7 +1124,7 @@ mod tests {
     #[test]
     fn test_powershell_error_suggest_fix() {
         let err = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -1036,7 +1140,7 @@ mod tests {
         assert!(suggestion.unwrap().contains("administrator"));
 
         let err2 = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -1052,7 +1156,7 @@ mod tests {
         assert!(suggestion2.unwrap().contains("Set-ExecutionPolicy"));
 
         let err3 = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -1071,7 +1175,7 @@ mod tests {
     #[test]
     fn test_powershell_error_is_transient() {
         let err = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -1085,7 +1189,7 @@ mod tests {
         assert!(err.is_transient());
 
         let err2 = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),
@@ -1099,7 +1203,7 @@ mod tests {
         assert!(err2.is_transient());
 
         let err3 = PowerShellError::new(
-            PowerShellErrorKind::ExecutionFailed,
+            PowerShellErrorKind::ProcessFailed,
             PowerShellOperation::QueryQuickAccess,
             Some(1),
             String::new(),

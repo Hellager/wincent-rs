@@ -37,7 +37,7 @@ impl ScriptExecutor {
                 "Bypass",
                 "-File",
                 script_path.to_str().ok_or_else(|| {
-                    WincentError::InvalidPath("Failed to convert script path".to_string())
+                    WincentError::invalid_path_reason("Failed to convert script path")
                 })?,
             ])
             .output()
@@ -51,7 +51,7 @@ impl ScriptExecutor {
                 } else if e.kind() == std::io::ErrorKind::PermissionDenied {
                     PowerShellErrorKind::AccessDenied
                 } else {
-                    PowerShellErrorKind::ExecutionFailed
+                    PowerShellErrorKind::ProcessFailed
                 };
 
                 WincentError::PowerShellExecution(PowerShellError::new(
@@ -191,7 +191,7 @@ mod tests {
             assert_eq!(ps_err.operation(), PowerShellOperation::QueryQuickAccess);
             assert_eq!(
                 ps_err.kind(),
-                crate::error::PowerShellErrorKind::ExecutionFailed
+                crate::error::PowerShellErrorKind::ProcessFailed
             );
         } else {
             panic!("Expected PowerShellExecution error");
