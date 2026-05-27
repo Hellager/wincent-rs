@@ -54,18 +54,24 @@ impl ScriptExecutor {
                     PowerShellErrorKind::ProcessFailed
                 };
 
-                WincentError::PowerShellExecution(PowerShellError::new(
-                    kind,
-                    script_type.operation(),
-                    None,
-                    String::new(),
-                    e.to_string(),
-                    script_path.clone(),
-                    parameter.map(|s| s.to_string()),
-                    Some(start.elapsed()),
-                    io_error,
-                    os_error,
-                ))
+                let mut error = PowerShellError::builder(script_type.operation())
+                    .kind(kind)
+                    .exit_code(None)
+                    .stderr(e.to_string())
+                    .script_path(script_path.clone())
+                    .duration(start.elapsed());
+
+                if let Some(parameter) = parameter {
+                    error = error.parameters(parameter);
+                }
+                if let Some(io_error) = io_error {
+                    error = error.io_error(io_error);
+                }
+                if let Some(os_error) = os_error {
+                    error = error.os_error(os_error);
+                }
+
+                WincentError::PowerShellExecution(error.build())
             })
     }
 
@@ -83,18 +89,19 @@ impl ScriptExecutor {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let kind = PowerShellError::infer_kind_from_stderr(&stderr);
 
-            return Err(WincentError::PowerShellExecution(PowerShellError::new(
-                kind,
-                script_type.operation(),
-                output.status.code(),
-                stdout,
-                stderr,
-                script_path,
-                parameters,
-                Some(duration),
-                None,
-                None,
-            )));
+            let mut error = PowerShellError::builder(script_type.operation())
+                .kind(kind)
+                .exit_code(output.status.code())
+                .stdout(stdout)
+                .stderr(stderr)
+                .script_path(script_path)
+                .duration(duration);
+
+            if let Some(parameters) = parameters {
+                error = error.parameters(parameters);
+            }
+
+            return Err(WincentError::PowerShellExecution(error.build()));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);

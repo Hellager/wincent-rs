@@ -261,6 +261,110 @@ pub struct PowerShellError {
     os_error: Option<i32>,
 }
 
+/// Crate-private builder for readable internal PowerShell error construction.
+///
+/// This keeps production fields private while avoiding long positional
+/// constructors in tests and internal call sites.
+#[derive(Debug, Clone)]
+pub(crate) struct PowerShellErrorBuilder {
+    kind: PowerShellErrorKind,
+    operation: PowerShellOperation,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    script_path: PathBuf,
+    parameters: Option<String>,
+    duration: Option<Duration>,
+    io_error: Option<std::io::ErrorKind>,
+    os_error: Option<i32>,
+}
+
+impl Default for PowerShellErrorBuilder {
+    fn default() -> Self {
+        Self {
+            kind: PowerShellErrorKind::ProcessFailed,
+            operation: PowerShellOperation::QueryQuickAccess,
+            exit_code: Some(1),
+            stdout: String::new(),
+            stderr: String::new(),
+            script_path: PathBuf::from("test.ps1"),
+            parameters: None,
+            duration: None,
+            io_error: None,
+            os_error: None,
+        }
+    }
+}
+
+impl PowerShellErrorBuilder {
+    pub(crate) fn new(operation: PowerShellOperation) -> Self {
+        Self {
+            operation,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn kind(mut self, kind: PowerShellErrorKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub(crate) fn exit_code(mut self, exit_code: Option<i32>) -> Self {
+        self.exit_code = exit_code;
+        self
+    }
+
+    pub(crate) fn stdout(mut self, stdout: impl Into<String>) -> Self {
+        self.stdout = stdout.into();
+        self
+    }
+
+    pub(crate) fn stderr(mut self, stderr: impl Into<String>) -> Self {
+        self.stderr = stderr.into();
+        self
+    }
+
+    pub(crate) fn script_path(mut self, script_path: impl Into<PathBuf>) -> Self {
+        self.script_path = script_path.into();
+        self
+    }
+
+    pub(crate) fn parameters(mut self, parameters: impl Into<String>) -> Self {
+        self.parameters = Some(parameters.into());
+        self
+    }
+
+    pub(crate) fn duration(mut self, duration: Duration) -> Self {
+        self.duration = Some(duration);
+        self
+    }
+
+    pub(crate) fn io_error(mut self, io_error: std::io::ErrorKind) -> Self {
+        self.io_error = Some(io_error);
+        self
+    }
+
+    pub(crate) fn os_error(mut self, os_error: i32) -> Self {
+        self.os_error = Some(os_error);
+        self
+    }
+
+    pub(crate) fn build(self) -> PowerShellError {
+        PowerShellError::new(
+            self.kind,
+            self.operation,
+            self.exit_code,
+            self.stdout,
+            self.stderr,
+            self.script_path,
+            self.parameters,
+            self.duration,
+            self.io_error,
+            self.os_error,
+        )
+    }
+}
+
 /// Structured invalid path details.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidPathError {
@@ -310,6 +414,10 @@ impl std::fmt::Display for InvalidPathError {
 }
 
 impl PowerShellError {
+    pub(crate) fn builder(operation: PowerShellOperation) -> PowerShellErrorBuilder {
+        PowerShellErrorBuilder::new(operation)
+    }
+
     pub(crate) fn new(
         kind: PowerShellErrorKind,
         operation: PowerShellOperation,
@@ -986,6 +1094,12 @@ mod tests {
     use crate::WincentResult;
     use std::io::{Error, ErrorKind};
 
+    fn ps_error_with_stderr(stderr: impl Into<String>) -> PowerShellError {
+        PowerShellError::builder(PowerShellOperation::QueryQuickAccess)
+            .stderr(stderr)
+            .build()
+    }
+
     #[test]
     fn test_error_conversions() {
         let io_error = Error::new(ErrorKind::NotFound, "file not found");
@@ -998,18 +1112,7 @@ mod tests {
         let invalid_path = WincentError::invalid_path("test/path", "test path");
         assert!(format!("{}", invalid_path).contains("test/path"));
 
-        let ps_error = WincentError::PowerShellExecution(PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "access denied".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        ));
+        let ps_error = WincentError::PowerShellExecution(ps_error_with_stderr("access denied"));
         assert!(format!("{}", ps_error).contains("access denied"));
     }
 
@@ -1036,143 +1139,45 @@ mod tests {
 
     #[test]
     fn test_powershell_error_is_access_denied() {
-        let err = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "Access to the path is denied.".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err = ps_error_with_stderr("Access to the path is denied.");
         assert!(err.is_access_denied());
 
-        let err2 = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "UnauthorizedAccessException: Access denied".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err2 = ps_error_with_stderr("UnauthorizedAccessException: Access denied");
         assert!(err2.is_access_denied());
     }
 
     #[test]
     fn test_powershell_error_is_execution_policy() {
-        let err = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "execution policy does not allow this script".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err = ps_error_with_stderr("execution policy does not allow this script");
         assert!(err.is_execution_policy_error());
 
-        let err2 = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "Set-ExecutionPolicy required".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err2 = ps_error_with_stderr("Set-ExecutionPolicy required");
         assert!(err2.is_execution_policy_error());
     }
 
     #[test]
     fn test_powershell_error_is_cmdlet_not_found() {
-        let err = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "Get-Item is not recognized as a cmdlet".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err = ps_error_with_stderr("Get-Item is not recognized as a cmdlet");
         assert!(err.is_cmdlet_not_found());
 
-        let err2 = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "CommandNotFoundException: The term 'Get-Item' is not recognized".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err2 =
+            ps_error_with_stderr("CommandNotFoundException: The term 'Get-Item' is not recognized");
         assert!(err2.is_cmdlet_not_found());
     }
 
     #[test]
     fn test_powershell_error_suggest_fix() {
-        let err = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "UnauthorizedAccessException".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err = ps_error_with_stderr("UnauthorizedAccessException");
         let suggestion = err.suggest_fix();
         assert!(suggestion.is_some());
         assert!(suggestion.unwrap().contains("administrator"));
 
-        let err2 = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "execution policy blocks this script".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err2 = ps_error_with_stderr("execution policy blocks this script");
         let suggestion2 = err2.suggest_fix();
         assert!(suggestion2.is_some());
         assert!(suggestion2.unwrap().contains("Set-ExecutionPolicy"));
 
-        let err3 = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "CommandNotFoundException".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err3 = ps_error_with_stderr("CommandNotFoundException");
         let suggestion3 = err3.suggest_fix();
         assert!(suggestion3.is_some());
         assert!(suggestion3.unwrap().contains("PowerShell version"));
@@ -1180,63 +1185,27 @@ mod tests {
 
     #[test]
     fn test_powershell_error_is_transient() {
-        let err = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "The file is locked by another process".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err = ps_error_with_stderr("The file is locked by another process");
         assert!(err.is_transient());
 
-        let err2 = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "The file is in use".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err2 = ps_error_with_stderr("The file is in use");
         assert!(err2.is_transient());
 
-        let err3 = PowerShellError::new(
-            PowerShellErrorKind::ProcessFailed,
-            PowerShellOperation::QueryQuickAccess,
-            Some(1),
-            String::new(),
-            "Access denied".to_string(),
-            PathBuf::from("test.ps1"),
-            None,
-            None,
-            None,
-            None,
-        );
+        let err3 = ps_error_with_stderr("Access denied");
         assert!(!err3.is_transient());
     }
 
     #[test]
     fn test_powershell_error_display() {
-        let err = PowerShellError::new(
-            PowerShellErrorKind::AccessDenied,
-            PowerShellOperation::PinFrequentFolder,
-            Some(1),
-            "Some output".to_string(),
-            "Access denied".to_string(),
-            PathBuf::from("C:\\scripts\\test.ps1"),
-            Some("C:\\test\\folder".to_string()),
-            Some(Duration::from_millis(150)),
-            None,
-            Some(5),
-        );
+        let err = PowerShellError::builder(PowerShellOperation::PinFrequentFolder)
+            .kind(PowerShellErrorKind::AccessDenied)
+            .stdout("Some output")
+            .stderr("Access denied")
+            .script_path("C:\\scripts\\test.ps1")
+            .parameters("C:\\test\\folder")
+            .duration(Duration::from_millis(150))
+            .os_error(5)
+            .build();
 
         let display = format!("{}", err);
         assert!(display.contains("PinFrequentFolder"));

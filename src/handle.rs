@@ -451,18 +451,17 @@ pub(crate) fn execute_script_with_validation(
             // Infer error kind from stderr content
             let kind = PowerShellError::infer_kind_from_stderr(&stderr);
 
-            Err(WincentError::PowerShellExecution(PowerShellError::new(
-                kind,
-                script.operation(),
-                output.status.code(),
-                stdout,
-                stderr,
-                script_path,
-                Some(path.to_string()),
-                Some(duration),
-                None,
-                None,
-            )))
+            Err(WincentError::PowerShellExecution(
+                PowerShellError::builder(script.operation())
+                    .kind(kind)
+                    .exit_code(output.status.code())
+                    .stdout(stdout)
+                    .stderr(stderr)
+                    .script_path(script_path)
+                    .parameters(path)
+                    .duration(duration)
+                    .build(),
+            ))
         }
     }
 }
