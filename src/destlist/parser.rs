@@ -350,11 +350,36 @@ impl DestListEntry {
 }
 
 /// Returns all entries from a parsed DestList.
+///
+/// This clones the parsed entries. Use [`DestList::entries`] when borrowing is
+/// enough.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # #[cfg(feature = "destlist")]
+/// # fn main() -> wincent::WincentResult<()> {
+/// use wincent::destlist::{entries, parse_file, recent_files_dest_path};
+///
+/// let parsed = parse_file(recent_files_dest_path()?)?;
+/// for entry in entries(parsed.dest_list()) {
+///     println!("{}", entry.path());
+/// }
+/// Ok(())
+/// # }
+/// # #[cfg(not(feature = "destlist"))]
+/// # fn main() {}
+/// ```
 pub fn entries(dest_list: &DestList) -> Vec<DestListEntry> {
     dest_list.entries.clone()
 }
 
 /// Returns the path to the Explorer recent-files `.automaticDestinations-ms` file.
+///
+/// # Errors
+///
+/// Returns an error if the current user's Windows Recent folder cannot be
+/// resolved.
 pub fn recent_files_dest_path() -> WincentResult<PathBuf> {
     Ok(PathBuf::from(get_windows_recent_folder()?)
         .join("AutomaticDestinations")
@@ -362,6 +387,11 @@ pub fn recent_files_dest_path() -> WincentResult<PathBuf> {
 }
 
 /// Returns the path to the Explorer frequent-folders `.automaticDestinations-ms` file.
+///
+/// # Errors
+///
+/// Returns an error if the current user's Windows Recent folder cannot be
+/// resolved.
 pub fn frequent_folders_dest_path() -> WincentResult<PathBuf> {
     Ok(PathBuf::from(get_windows_recent_folder()?)
         .join("AutomaticDestinations")
@@ -369,6 +399,29 @@ pub fn frequent_folders_dest_path() -> WincentResult<PathBuf> {
 }
 
 /// Parses an `.automaticDestinations-ms` file from disk.
+///
+/// # Errors
+///
+/// Returns [`WincentError::Io`] if the file cannot be read,
+/// [`WincentError::DestListParse`] if the Compound File Binary container or
+/// DestList stream is malformed, or
+/// [`WincentError::DestListUnsupportedVersion`] if Explorer uses a DestList
+/// format version this crate does not yet support.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # #[cfg(feature = "destlist")]
+/// # fn main() -> wincent::WincentResult<()> {
+/// use wincent::destlist::{parse_file, recent_files_dest_path};
+///
+/// let parsed = parse_file(recent_files_dest_path()?)?;
+/// println!("DestList version {}", parsed.dest_list().version());
+/// Ok(())
+/// # }
+/// # #[cfg(not(feature = "destlist"))]
+/// # fn main() {}
+/// ```
 pub fn parse_file(path: impl AsRef<Path>) -> WincentResult<AutomaticDestinations> {
     let path = path.as_ref();
     let data = fs::read(path).map_err(WincentError::Io)?;
@@ -376,6 +429,13 @@ pub fn parse_file(path: impl AsRef<Path>) -> WincentResult<AutomaticDestinations
 }
 
 /// Parses an `.automaticDestinations-ms` file from an in-memory buffer.
+///
+/// # Errors
+///
+/// Returns [`WincentError::DestListParse`] if the bytes are not a supported CFB
+/// container with a readable DestList stream, or
+/// [`WincentError::DestListUnsupportedVersion`] if the DestList version is not
+/// supported.
 pub fn parse_bytes(data: Vec<u8>) -> WincentResult<AutomaticDestinations> {
     let cfb = CompoundFile::parse(data).map_err(WincentError::DestListParse)?;
     let dest_list = parse_dest_list(&cfb)?;

@@ -73,6 +73,26 @@ fn write_visibility_value(reg_key: &RegKey, value_name: &str, visible: bool) -> 
 ///
 /// `QuickAccess::All` returns `true` only when both Recent Files and Frequent
 /// Folders are visible.
+///
+/// Missing registry values are treated as visible, matching Explorer's default
+/// behavior for a new user profile.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if the current user's Explorer settings cannot
+/// be read.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use wincent::prelude::*;
+///
+/// # fn main() -> WincentResult<()> {
+/// let visible = is_visible(QuickAccess::RecentFiles)?;
+/// println!("Recent Files visible: {visible}");
+/// # Ok(())
+/// # }
+/// ```
 pub fn is_visible(qa_type: QuickAccess) -> WincentResult<bool> {
     let Some(reg_key) = open_quick_access_reg_key()? else {
         return Ok(true);
@@ -90,6 +110,14 @@ pub fn is_visible(qa_type: QuickAccess) -> WincentResult<bool> {
 ///
 /// Passing `QuickAccess::All` applies the same value to both Recent Files and
 /// Frequent Folders.
+///
+/// This updates registry values for the current user. It does not clear Quick
+/// Access history or invoke Explorer's Folder Options UI.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if the Explorer settings key cannot be created
+/// or updated.
 pub fn set_visible(qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
     let reg_key = create_quick_access_reg_key()?;
 
@@ -102,21 +130,39 @@ pub fn set_visible(qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
 }
 
 /// Checks whether Recent Files are visible in Windows Quick Access.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if Explorer visibility settings cannot be read.
 pub fn is_recent_files_visible() -> WincentResult<bool> {
     is_visible(QuickAccess::RecentFiles)
 }
 
 /// Checks whether Frequent Folders are visible in Windows Quick Access.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if Explorer visibility settings cannot be read.
 pub fn is_frequent_folders_visible() -> WincentResult<bool> {
     is_visible(QuickAccess::FrequentFolders)
 }
 
 /// Sets whether Recent Files are visible in Windows Quick Access.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if Explorer visibility settings cannot be
+/// created or updated.
 pub fn set_recent_files_visible(visible: bool) -> WincentResult<()> {
     set_visible(QuickAccess::RecentFiles, visible)
 }
 
 /// Sets whether Frequent Folders are visible in Windows Quick Access.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if Explorer visibility settings cannot be
+/// created or updated.
 pub fn set_frequent_folders_visible(visible: bool) -> WincentResult<()> {
     set_visible(QuickAccess::FrequentFolders, visible)
 }

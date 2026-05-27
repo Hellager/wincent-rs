@@ -26,6 +26,24 @@ use windows::Win32::UI::Shell::SHAddToRecentDocs;
 const SHARD_PATHW: u32 = 0x0000_0003;
 
 /// Options for clearing Quick Access items.
+///
+/// By default, clearing Frequent Folders removes user-visited frequent folders
+/// but leaves pinned folders alone. Use
+/// [`EmptyOptions::remove_pinned_folders`] only when the caller explicitly wants
+/// to unpin user-pinned folders too.
+///
+/// # Examples
+///
+/// ```rust
+/// use wincent::EmptyOptions;
+///
+/// let options = EmptyOptions::new()
+///     .remove_pinned_folders()
+///     .refresh_explorer();
+///
+/// assert!(options.also_pinned_folders());
+/// assert!(options.force_refresh());
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EmptyOptions {
     /// Also attempt to remove pinned folders from Quick Access.

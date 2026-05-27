@@ -15,6 +15,31 @@ use crate::{
 use std::time::Duration;
 
 /// Result of a batch operation containing succeeded and failed items.
+///
+/// Batch operations are best-effort: every input item is attempted, and
+/// failures are stored as `BatchFailure` values instead of aborting the whole
+/// batch.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use wincent::prelude::*;
+///
+/// let manager = QuickAccessManager::new();
+/// let items = [
+///     QuickAccessItem::recent_file("C:\\Work\\report.docx"),
+///     QuickAccessItem::recent_file("Z:\\missing.txt"),
+/// ];
+///
+/// let result = manager.add_items_batch(&items, BatchOptions::new());
+/// if result.has_partial_success() {
+///     println!("{} of {} succeeded", result.succeeded().len(), result.total());
+/// }
+///
+/// for failure in result.failed() {
+///     eprintln!("{} failed: {}", failure.path(), failure.error());
+/// }
+/// ```
 #[derive(Debug, Default)]
 pub struct BatchResult {
     /// Successfully processed items.
@@ -29,6 +54,11 @@ pub struct BatchResult {
 }
 
 /// Failed item from a batch operation.
+///
+/// The error describes the operation as it was attempted. For example,
+/// [`WincentError::AlreadyExists`] and [`WincentError::NotInQuickAccess`] can
+/// come from best-effort preflight checks, and Explorer state may have changed
+/// by the time the caller inspects the result.
 #[derive(Debug)]
 pub struct BatchFailure {
     path: String,
@@ -106,6 +136,24 @@ impl BatchResult {
 }
 
 /// Options for batch operations.
+///
+/// `BatchOptions` applies to manager batch operations and lower-level batch
+/// helpers. Refreshing Recent Files is coalesced across the batch so callers do
+/// not pay the refresh cost for every item.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::time::Duration;
+/// use wincent::BatchOptions;
+///
+/// let options = BatchOptions::new()
+///     .with_timeout(Duration::from_secs(20))
+///     .refresh_recent_files();
+///
+/// assert_eq!(options.timeout(), Duration::from_secs(20));
+/// assert!(options.force_update());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatchOptions {
     /// Timeout for shell operations that support timeout control.
@@ -157,6 +205,10 @@ impl BatchOptions {
     }
 
     /// Tries to set the shell operation timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidArgument`] when `timeout` is zero.
     pub fn try_with_timeout(mut self, timeout: Duration) -> WincentResult<Self> {
         if timeout.is_zero() {
             return Err(WincentError::InvalidArgument(

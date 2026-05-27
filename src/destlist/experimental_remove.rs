@@ -40,6 +40,21 @@ pub enum AutomaticDestinationsKind {
 }
 
 /// Options for the experimental remove-and-rebuild flow.
+///
+/// The delay is only the initial grace period after deleting Explorer's backing
+/// file. The implementation still polls for a rebuilt file afterwards.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::time::Duration;
+/// use wincent::destlist::ExperimentalRemoveOptions;
+///
+/// let options = ExperimentalRemoveOptions::new()
+///     .with_rebuild_delay(Duration::from_secs(1));
+///
+/// assert_eq!(options.rebuild_delay(), Duration::from_secs(1));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExperimentalRemoveOptions {
     /// Initial grace delay after deleting the `.automaticDestinations-ms` file
@@ -82,6 +97,11 @@ impl ExperimentalRemoveOptions {
 }
 
 /// Result of the experimental remove-and-rebuild flow.
+///
+/// A successful function call means the delete-and-rebuild sequence completed
+/// without an immediate API error. Check [`ExperimentalRemoveReport::success`]
+/// to learn whether the requested entries were absent after Explorer rebuilt
+/// the backing file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExperimentalRemoveReport {
     /// Automatic destination kind that was processed.
@@ -205,6 +225,39 @@ impl ExperimentalRemoveReport {
 /// files, avoiding a state where `.lnk` files are deleted but the backing file
 /// deletion fails. This still is not atomic and has no rollback if the process
 /// is interrupted after deletion starts.
+///
+/// # Errors
+///
+/// Returns [`WincentError::InvalidArgument`] when `target_paths` is empty.
+/// Returns I/O errors when the backing destination file or matching `.lnk`
+/// files cannot be removed. Returns DestList parse errors if the backing file
+/// cannot be parsed before deletion or while waiting for Explorer to rebuild it.
+/// Refreshing Explorer windows may also return Shell/PowerShell errors.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # #[cfg(feature = "destlist")]
+/// # fn main() -> wincent::WincentResult<()> {
+/// use wincent::destlist::{
+///     experimental_remove_entry_paths_by_rebuild, AutomaticDestinationsKind,
+///     ExperimentalRemoveOptions,
+/// };
+///
+/// let report = experimental_remove_entry_paths_by_rebuild(
+///     AutomaticDestinationsKind::RecentFiles,
+///     &["C:\\Work\\old-report.docx"],
+///     ExperimentalRemoveOptions::new(),
+/// )?;
+///
+/// if !report.success() {
+///     eprintln!("remaining entries: {:?}", report.remaining_paths_after_rebuild());
+/// }
+/// Ok(())
+/// # }
+/// # #[cfg(not(feature = "destlist"))]
+/// # fn main() {}
+/// ```
 pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     kind: AutomaticDestinationsKind,
     target_paths: &[P],
@@ -283,6 +336,10 @@ pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
 /// # Experimental and risky
 ///
 /// This has the same risks as [`experimental_remove_entry_paths_by_rebuild`].
+///
+/// # Errors
+///
+/// Returns the same errors as [`experimental_remove_entry_paths_by_rebuild`].
 pub fn experimental_remove_entries_by_rebuild(
     kind: AutomaticDestinationsKind,
     entries: &[DestListEntry],

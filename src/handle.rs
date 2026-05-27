@@ -24,8 +24,7 @@ use crate::{
     script_executor::{QuickAccessDataFiles, ScriptExecutor},
     script_strategy::PSScript,
     utils::{paths_equal, validate_path, PathType},
-    QuickAccess,
-    WincentResult,
+    QuickAccess, WincentResult,
 };
 use std::ffi::OsString;
 use std::os::windows::prelude::*;
