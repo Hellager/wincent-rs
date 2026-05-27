@@ -184,24 +184,12 @@ impl QuickAccessManager {
         items: &[(String, QuickAccess)],
         force_update: bool,
     ) -> BatchResult {
-        batch::add_items_batch(
-            items,
-            BatchOptions {
-                timeout: self.timeout,
-                force_update,
-            },
-        )
+        batch::add_items_batch(items, BatchOptions::from_parts(self.timeout, force_update))
     }
 
     /// Removes multiple items from Quick Access, collecting per-item failures.
     pub fn remove_items_batch(&self, items: &[(String, QuickAccess)]) -> BatchResult {
-        batch::remove_items_batch(
-            items,
-            BatchOptions {
-                timeout: self.timeout,
-                force_update: false,
-            },
-        )
+        batch::remove_items_batch(items, BatchOptions::from_parts(self.timeout, false))
     }
 
     /// Clears Quick Access items.
@@ -213,10 +201,7 @@ impl QuickAccessManager {
     ) -> WincentResult<()> {
         empty::empty_items(
             qa_type,
-            EmptyOptions {
-                also_pinned_folders,
-                force_refresh,
-            },
+            EmptyOptions::from_parts(also_pinned_folders, force_refresh),
         )
     }
 
@@ -243,7 +228,7 @@ impl QuickAccessManager {
     /// Parses the recent-files `.automaticDestinations-ms` file and returns all entries.
     pub fn get_recent_files_metadata(&self) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
         let parsed = crate::destlist::parse_file(crate::destlist::recent_files_dest_path()?)?;
-        Ok(crate::destlist::entries(&parsed.dest_list))
+        Ok(crate::destlist::entries(parsed.dest_list()))
     }
 
     /// Parses the frequent-folders `.automaticDestinations-ms` file and returns all entries.
@@ -251,7 +236,7 @@ impl QuickAccessManager {
         &self,
     ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
         let parsed = crate::destlist::parse_file(crate::destlist::frequent_folders_dest_path()?)?;
-        Ok(crate::destlist::entries(&parsed.dest_list))
+        Ok(crate::destlist::entries(parsed.dest_list()))
     }
 }
 

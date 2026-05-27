@@ -1,4 +1,4 @@
-﻿//! Windows Quick Access item management
+//! Windows Quick Access item management
 //!
 //! Provides system-level manipulation of Quick Access locations including:
 //! - Recent files management
@@ -451,18 +451,18 @@ pub(crate) fn execute_script_with_validation(
             // Infer error kind from stderr content
             let kind = PowerShellError::infer_kind_from_stderr(&stderr);
 
-            Err(WincentError::PowerShellExecution(PowerShellError {
+            Err(WincentError::PowerShellExecution(PowerShellError::new(
                 kind,
-                operation: script.operation(),
-                exit_code: output.status.code(),
+                script.operation(),
+                output.status.code(),
                 stdout,
                 stderr,
                 script_path,
-                parameters: Some(path.to_string()),
-                duration: Some(duration),
-                io_error: None,
-                os_error: None,
-            }))
+                Some(path.to_string()),
+                Some(duration),
+                None,
+                None,
+            )))
         }
     }
 }
@@ -1984,4 +1984,3 @@ mod tests {
         );
     }
 }
-

@@ -48,7 +48,7 @@ pub struct ExperimentalRemoveOptions {
     /// still polls for the rebuilt destination file for up to 5 seconds. Increase
     /// this value on slow or busy systems to give Explorer a quieter rebuild window
     /// before parsing begins.
-    pub rebuild_delay: Duration,
+    rebuild_delay: Duration,
 }
 
 impl Default for ExperimentalRemoveOptions {
@@ -59,35 +59,136 @@ impl Default for ExperimentalRemoveOptions {
     }
 }
 
+impl ExperimentalRemoveOptions {
+    /// Creates default experimental remove options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Initial grace delay after deleting the `.automaticDestinations-ms` file.
+    #[must_use]
+    pub fn rebuild_delay(&self) -> Duration {
+        self.rebuild_delay
+    }
+
+    /// Sets the initial grace delay after deleting the `.automaticDestinations-ms` file.
+    #[must_use]
+    pub fn with_rebuild_delay(mut self, rebuild_delay: Duration) -> Self {
+        self.rebuild_delay = rebuild_delay;
+        self
+    }
+}
+
 /// Result of the experimental remove-and-rebuild flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExperimentalRemoveReport {
     /// Automatic destination kind that was processed.
-    pub kind: AutomaticDestinationsKind,
+    kind: AutomaticDestinationsKind,
     /// Current user's Windows Recent folder.
-    pub recent_folder: PathBuf,
+    recent_folder: PathBuf,
     /// `.automaticDestinations-ms` file that was deleted and then monitored.
-    pub dest_path: PathBuf,
+    dest_path: PathBuf,
     /// Target paths requested by the caller.
-    pub requested_paths: Vec<String>,
+    requested_paths: Vec<String>,
     /// DestList paths that matched before deletion started.
-    pub matching_paths_before: Vec<String>,
+    matching_paths_before: Vec<String>,
     /// `.lnk` files deleted from the Recent folder.
-    pub deleted_lnk_paths: Vec<PathBuf>,
+    deleted_lnk_paths: Vec<PathBuf>,
     /// Requested target paths that had no matching `.lnk` file.
-    pub missing_lnk_target_paths: Vec<String>,
+    missing_lnk_target_paths: Vec<String>,
     /// Whether the backing automatic destination file was deleted.
-    pub dest_deleted: bool,
+    dest_deleted: bool,
     /// Whether Explorer rebuilt the automatic destination file during polling.
-    pub rebuilt: bool,
+    rebuilt: bool,
     /// Time spent waiting until the rebuilt file could be parsed.
-    pub rebuild_parse_elapsed: Option<Duration>,
+    rebuild_parse_elapsed: Option<Duration>,
     /// Last parse error observed while waiting for the rebuilt file.
-    pub rebuild_parse_error: Option<String>,
+    rebuild_parse_error: Option<String>,
     /// Matching paths still present after Explorer rebuilt the file.
-    pub remaining_paths_after_rebuild: Vec<String>,
+    remaining_paths_after_rebuild: Vec<String>,
     /// Whether all requested entries were absent after rebuild.
-    pub success: bool,
+    success: bool,
+}
+
+impl ExperimentalRemoveReport {
+    /// Automatic destination kind that was processed.
+    #[must_use]
+    pub fn kind(&self) -> AutomaticDestinationsKind {
+        self.kind
+    }
+
+    /// Current user's Windows Recent folder.
+    #[must_use]
+    pub fn recent_folder(&self) -> &Path {
+        &self.recent_folder
+    }
+
+    /// `.automaticDestinations-ms` file that was deleted and then monitored.
+    #[must_use]
+    pub fn dest_path(&self) -> &Path {
+        &self.dest_path
+    }
+
+    /// Target paths requested by the caller.
+    #[must_use]
+    pub fn requested_paths(&self) -> &[String] {
+        &self.requested_paths
+    }
+
+    /// DestList paths that matched before deletion started.
+    #[must_use]
+    pub fn matching_paths_before(&self) -> &[String] {
+        &self.matching_paths_before
+    }
+
+    /// `.lnk` files deleted from the Recent folder.
+    #[must_use]
+    pub fn deleted_lnk_paths(&self) -> &[PathBuf] {
+        &self.deleted_lnk_paths
+    }
+
+    /// Requested target paths that had no matching `.lnk` file.
+    #[must_use]
+    pub fn missing_lnk_target_paths(&self) -> &[String] {
+        &self.missing_lnk_target_paths
+    }
+
+    /// Whether the backing automatic destination file was deleted.
+    #[must_use]
+    pub fn dest_deleted(&self) -> bool {
+        self.dest_deleted
+    }
+
+    /// Whether Explorer rebuilt the automatic destination file during polling.
+    #[must_use]
+    pub fn rebuilt(&self) -> bool {
+        self.rebuilt
+    }
+
+    /// Time spent waiting until the rebuilt file could be parsed.
+    #[must_use]
+    pub fn rebuild_parse_elapsed(&self) -> Option<Duration> {
+        self.rebuild_parse_elapsed
+    }
+
+    /// Last parse error observed while waiting for the rebuilt file.
+    #[must_use]
+    pub fn rebuild_parse_error(&self) -> Option<&str> {
+        self.rebuild_parse_error.as_deref()
+    }
+
+    /// Matching paths still present after Explorer rebuilt the file.
+    #[must_use]
+    pub fn remaining_paths_after_rebuild(&self) -> &[String] {
+        &self.remaining_paths_after_rebuild
+    }
+
+    /// Whether all requested entries were absent after rebuild.
+    #[must_use]
+    pub fn success(&self) -> bool {
+        self.success
+    }
 }
 
 /// Experimentally removes DestList entries by deleting their Recent `.lnk`
@@ -122,7 +223,7 @@ pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     let dest_path = dest_path_for_kind(kind)?;
 
     let before = parse_file_with_retries(&dest_path, Duration::from_secs(2))?;
-    let matching_paths_before = matching_dest_paths(&before.dest_list.entries, &requested_paths);
+    let matching_paths_before = matching_dest_paths(before.dest_list().entries(), &requested_paths);
 
     fs::remove_file(&dest_path).map_err(WincentError::Io)?;
     let dest_deleted = true;
@@ -143,7 +244,7 @@ pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
         .collect();
 
     crate::utils::refresh_explorer_window()?;
-    thread::sleep(options.rebuild_delay);
+    thread::sleep(options.rebuild_delay());
 
     let check = wait_for_rebuilt_dest(&dest_path, &requested_paths, Duration::from_secs(5))?;
     let (rebuilt, rebuild_parse_elapsed, rebuild_parse_error, remaining_paths_after_rebuild) =
@@ -188,7 +289,7 @@ pub fn experimental_remove_entries_by_rebuild(
 ) -> WincentResult<ExperimentalRemoveReport> {
     let paths: Vec<PathBuf> = entries
         .iter()
-        .map(|entry| PathBuf::from(&entry.path))
+        .map(|entry| PathBuf::from(entry.path()))
         .collect();
     experimental_remove_entry_paths_by_rebuild(kind, &paths, options)
 }
@@ -225,7 +326,7 @@ fn wait_for_rebuilt_dest(
                         rebuilt: Some(RebuiltDestCheck {
                             elapsed: started.elapsed(),
                             remaining_paths: matching_dest_paths(
-                                &parsed.dest_list.entries,
+                                parsed.dest_list().entries(),
                                 requested_paths,
                             ),
                         }),
@@ -274,9 +375,9 @@ fn matching_dest_paths(entries: &[DestListEntry], target_paths: &[String]) -> Ve
         .filter(|entry| {
             target_paths
                 .iter()
-                .any(|target| paths_equal(&entry.path, target))
+                .any(|target| paths_equal(entry.path(), target))
         })
-        .map(|entry| entry.path.clone())
+        .map(|entry| entry.path().to_string())
         .collect()
 }
 
@@ -364,7 +465,7 @@ mod tests {
     #[test]
     fn default_rebuild_delay_allows_explorer_grace_period() {
         assert_eq!(
-            ExperimentalRemoveOptions::default().rebuild_delay,
+            ExperimentalRemoveOptions::default().rebuild_delay(),
             Duration::from_millis(500)
         );
     }
@@ -381,7 +482,7 @@ mod tests {
     fn experimental_remove_last_recent_file_entry_rebuilds_without_entry() -> WincentResult<()> {
         let dest_path = recent_files_dest_path()?;
         let parsed = parse_recent_files_dest_for_destructive_test(&dest_path)?;
-        let Some(entry) = parsed.dest_list.entries.last().cloned() else {
+        let Some(entry) = parsed.dest_list().entries().last().cloned() else {
             println!("No entries found in {}", dest_path.display());
             return Ok(());
         };
@@ -389,7 +490,9 @@ mod tests {
         println!("recent_files_dest_path={}", dest_path.display());
         println!(
             "removing last entry: id={:#x} stream={} path={}",
-            entry.entry_id, entry.stream_name, entry.path
+            entry.entry_id(),
+            entry.stream_name(),
+            entry.path()
         );
 
         let report = experimental_remove_entries_by_rebuild(
@@ -398,22 +501,22 @@ mod tests {
             ExperimentalRemoveOptions::default(),
         )?;
 
-        println!("deleted_lnk_paths={:?}", report.deleted_lnk_paths);
-        println!("dest_deleted={}", report.dest_deleted);
-        println!("rebuilt={}", report.rebuilt);
-        println!("rebuild_parse_elapsed={:?}", report.rebuild_parse_elapsed);
-        println!("rebuild_parse_error={:?}", report.rebuild_parse_error);
+        println!("deleted_lnk_paths={:?}", report.deleted_lnk_paths());
+        println!("dest_deleted={}", report.dest_deleted());
+        println!("rebuilt={}", report.rebuilt());
+        println!("rebuild_parse_elapsed={:?}", report.rebuild_parse_elapsed());
+        println!("rebuild_parse_error={:?}", report.rebuild_parse_error());
         println!(
             "remaining_paths_after_rebuild={:?}",
-            report.remaining_paths_after_rebuild
+            report.remaining_paths_after_rebuild()
         );
 
-        assert!(report.rebuilt, "recent-files dest file was not rebuilt");
+        assert!(report.rebuilt(), "recent-files dest file was not rebuilt");
         assert!(
-            report.remaining_paths_after_rebuild.is_empty(),
+            report.remaining_paths_after_rebuild().is_empty(),
             "rebuilt recent-files dest still contains the removed entry"
         );
-        assert!(report.success, "experimental removal did not succeed");
+        assert!(report.success(), "experimental removal did not succeed");
 
         Ok(())
     }

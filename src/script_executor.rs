@@ -54,18 +54,18 @@ impl ScriptExecutor {
                     PowerShellErrorKind::ExecutionFailed
                 };
 
-                WincentError::PowerShellExecution(PowerShellError {
+                WincentError::PowerShellExecution(PowerShellError::new(
                     kind,
-                    operation: script_type.operation(),
-                    exit_code: None,
-                    stdout: String::new(),
-                    stderr: e.to_string(),
-                    script_path: script_path.clone(),
-                    parameters: parameter.map(|s| s.to_string()),
-                    duration: Some(start.elapsed()),
+                    script_type.operation(),
+                    None,
+                    String::new(),
+                    e.to_string(),
+                    script_path.clone(),
+                    parameter.map(|s| s.to_string()),
+                    Some(start.elapsed()),
                     io_error,
                     os_error,
-                })
+                ))
             })
     }
 
@@ -83,18 +83,18 @@ impl ScriptExecutor {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let kind = PowerShellError::infer_kind_from_stderr(&stderr);
 
-            return Err(WincentError::PowerShellExecution(PowerShellError {
+            return Err(WincentError::PowerShellExecution(PowerShellError::new(
                 kind,
-                operation: script_type.operation(),
-                exit_code: output.status.code(),
+                script_type.operation(),
+                output.status.code(),
                 stdout,
                 stderr,
                 script_path,
                 parameters,
-                duration: Some(duration),
-                io_error: None,
-                os_error: None,
-            }));
+                Some(duration),
+                None,
+                None,
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -186,11 +186,11 @@ mod tests {
         );
         assert!(result.is_err());
         if let Err(WincentError::PowerShellExecution(ps_err)) = result {
-            assert_eq!(ps_err.stderr, "Error message");
-            assert_eq!(ps_err.exit_code, Some(1));
-            assert_eq!(ps_err.operation, PowerShellOperation::QueryQuickAccess);
+            assert_eq!(ps_err.raw_stderr(), "Error message");
+            assert_eq!(ps_err.exit_code(), Some(1));
+            assert_eq!(ps_err.operation(), PowerShellOperation::QueryQuickAccess);
             assert_eq!(
-                ps_err.kind,
+                ps_err.kind(),
                 crate::error::PowerShellErrorKind::ExecutionFailed
             );
         } else {
@@ -219,8 +219,8 @@ mod tests {
             assert!(
                 err.is_transient(),
                 "Error with 'locked' in stderr should be transient, got kind={:?} stderr={:?}",
-                err.kind,
-                err.stderr
+                err.kind(),
+                err.raw_stderr()
             );
         } else {
             panic!("Expected PowerShellExecution error");

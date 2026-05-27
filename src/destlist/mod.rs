@@ -13,8 +13,8 @@
 //!
 //! let path = recent_files_dest_path().unwrap();
 //! let parsed = parse_file(&path).unwrap();
-//! for entry in entries(&parsed.dest_list) {
-//!     println!("{} (count={})", entry.path, entry.count);
+//! for entry in entries(parsed.dest_list()) {
+//!     println!("{} (count={})", entry.path(), entry.count());
 //! }
 //! # }
 //! ```

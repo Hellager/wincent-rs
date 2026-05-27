@@ -1,4 +1,4 @@
-﻿//! Windows Quick Access cleanup operations
+//! Windows Quick Access cleanup operations
 //!
 //! Provides unified interface for clearing Windows Quick Access items including:
 //! - Recent files
@@ -29,9 +29,50 @@ const SHARD_PATHW: u32 = 0x0000_0003;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EmptyOptions {
     /// Also attempt to remove pinned folders from Quick Access.
-    pub also_pinned_folders: bool,
+    also_pinned_folders: bool,
     /// Refresh open Explorer windows after a successful clear.
-    pub force_refresh: bool,
+    force_refresh: bool,
+}
+
+impl EmptyOptions {
+    /// Creates default clear options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether pinned folders should also be removed.
+    #[must_use]
+    pub fn also_pinned_folders(&self) -> bool {
+        self.also_pinned_folders
+    }
+
+    /// Sets whether pinned folders should also be removed.
+    #[must_use]
+    pub fn with_also_pinned_folders(mut self, also_pinned_folders: bool) -> Self {
+        self.also_pinned_folders = also_pinned_folders;
+        self
+    }
+
+    /// Whether open Explorer windows should be refreshed after a successful clear.
+    #[must_use]
+    pub fn force_refresh(&self) -> bool {
+        self.force_refresh
+    }
+
+    /// Sets whether open Explorer windows should be refreshed after a successful clear.
+    #[must_use]
+    pub fn with_force_refresh(mut self, force_refresh: bool) -> Self {
+        self.force_refresh = force_refresh;
+        self
+    }
+
+    pub(crate) fn from_parts(also_pinned_folders: bool, force_refresh: bool) -> Self {
+        Self {
+            also_pinned_folders,
+            force_refresh,
+        }
+    }
 }
 
 /// Clears the Windows Recent Files list using the Windows Shell API.
@@ -238,10 +279,13 @@ fn frequent_folders_cleared_from_error(error: &WincentError) -> bool {
 ///
 /// fn main() -> Result<(), WincentError> {
 ///     // Clear recent files and frequent folders; leave pinned folders intact.
-///     empty_items(QuickAccess::All, EmptyOptions { also_pinned_folders: false, force_refresh: false })?;
+///     empty_items(QuickAccess::All, EmptyOptions::new())?;
 ///
 ///     // Clear everything, including pinned folders.
-///     empty_items(QuickAccess::All, EmptyOptions { also_pinned_folders: true, force_refresh: false })?;
+///     empty_items(
+///         QuickAccess::All,
+///         EmptyOptions::new().with_also_pinned_folders(true),
+///     )?;
 ///
 ///     Ok(())
 /// }
@@ -255,7 +299,7 @@ fn empty_all_items(options: EmptyOptions) -> WincentResult<()> {
         });
     }
 
-    if let Err(source) = empty_frequent_folders(options.also_pinned_folders) {
+    if let Err(source) = empty_frequent_folders(options.also_pinned_folders()) {
         let frequent_folders_cleared = frequent_folders_cleared_from_error(&source);
         return Err(WincentError::PartialEmpty {
             recent_files_cleared: true,
@@ -290,11 +334,11 @@ fn refresh_policy_for_result(result: &WincentResult<()>, force_refresh: bool) ->
 pub(crate) fn empty_items(qa_type: QuickAccess, options: EmptyOptions) -> WincentResult<()> {
     let result = match qa_type {
         QuickAccess::RecentFiles => empty_recent_files(),
-        QuickAccess::FrequentFolders => empty_frequent_folders(options.also_pinned_folders),
+        QuickAccess::FrequentFolders => empty_frequent_folders(options.also_pinned_folders()),
         QuickAccess::All => empty_all_items(options),
     };
 
-    match refresh_policy_for_result(&result, options.force_refresh) {
+    match refresh_policy_for_result(&result, options.force_refresh()) {
         RefreshPolicy::PropagateFailure => refresh_explorer_window()?,
         RefreshPolicy::BestEffort => {
             // Preserve the cleanup failure while still trying to show any
@@ -808,7 +852,7 @@ mod tests {
             "Test file should appear in Recent Files before clearing"
         );
 
-        empty_items(QuickAccess::All, EmptyOptions { also_pinned_folders: false, force_refresh: false })?;
+        empty_items(QuickAccess::All, EmptyOptions::new())?;
         thread::sleep(Duration::from_secs(1));
 
         assert!(
@@ -850,7 +894,10 @@ mod tests {
             "Test folder should be pinned before clearing"
         );
 
-        empty_items(QuickAccess::All, EmptyOptions { also_pinned_folders: true, force_refresh: false })?;
+        empty_items(
+            QuickAccess::All,
+            EmptyOptions::new().with_also_pinned_folders(true),
+        )?;
         thread::sleep(Duration::from_secs(1));
 
         assert!(
@@ -865,4 +912,3 @@ mod tests {
         Ok(())
     }
 }
-

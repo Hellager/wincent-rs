@@ -16,99 +16,337 @@ pub const FREQUENT_FOLDERS_APPID: &str = "f01b4d95cf55d32a.automaticDestinations
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutomaticDestinations {
     /// Compound File Binary container metadata.
-    pub cfb_info: CfbInfo,
+    pub(crate) cfb_info: CfbInfo,
     /// Parsed DestList stream.
-    pub dest_list: DestList,
+    pub(crate) dest_list: DestList,
+}
+
+impl AutomaticDestinations {
+    /// Compound File Binary container metadata.
+    #[must_use]
+    pub fn cfb_info(&self) -> &CfbInfo {
+        &self.cfb_info
+    }
+
+    /// Parsed DestList stream.
+    #[must_use]
+    pub fn dest_list(&self) -> &DestList {
+        &self.dest_list
+    }
 }
 
 /// CFB container metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfbInfo {
     /// Regular sector size in bytes.
-    pub sector_size: usize,
+    pub(crate) sector_size: usize,
     /// Mini-sector size in bytes.
-    pub mini_sector_size: usize,
+    pub(crate) mini_sector_size: usize,
     /// Stream-size threshold below which CFB mini streams are used.
-    pub mini_cutoff_size: u32,
+    pub(crate) mini_cutoff_size: u32,
     /// Directory entries found in the CFB container.
-    pub directory_entries: Vec<CfbDirectoryEntry>,
+    pub(crate) directory_entries: Vec<CfbDirectoryEntry>,
+}
+
+impl CfbInfo {
+    /// Regular sector size in bytes.
+    #[must_use]
+    pub fn sector_size(&self) -> usize {
+        self.sector_size
+    }
+
+    /// Mini-sector size in bytes.
+    #[must_use]
+    pub fn mini_sector_size(&self) -> usize {
+        self.mini_sector_size
+    }
+
+    /// Stream-size threshold below which CFB mini streams are used.
+    #[must_use]
+    pub fn mini_cutoff_size(&self) -> u32 {
+        self.mini_cutoff_size
+    }
+
+    /// Directory entries found in the CFB container.
+    #[must_use]
+    pub fn directory_entries(&self) -> &[CfbDirectoryEntry] {
+        &self.directory_entries
+    }
 }
 
 /// A single CFB directory entry (stream or storage).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfbDirectoryEntry {
     /// Directory entry name.
-    pub name: String,
+    pub(crate) name: String,
     /// Raw CFB object type.
-    pub object_type: u8,
+    pub(crate) object_type: u8,
     /// First sector of the entry stream.
-    pub start_sector: u32,
+    pub(crate) start_sector: u32,
     /// Stream size in bytes.
-    pub stream_size: u64,
+    pub(crate) stream_size: u64,
+}
+
+impl CfbDirectoryEntry {
+    /// Directory entry name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Raw CFB object type.
+    #[must_use]
+    pub fn object_type(&self) -> u8 {
+        self.object_type
+    }
+
+    /// First sector of the entry stream.
+    #[must_use]
+    pub fn start_sector(&self) -> u32 {
+        self.start_sector
+    }
+
+    /// Stream size in bytes.
+    #[must_use]
+    pub fn stream_size(&self) -> u64 {
+        self.stream_size
+    }
 }
 
 /// Parsed DestList stream header + entries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DestList {
     /// DestList format version.
-    pub version: u32,
+    pub(crate) version: u32,
     /// Entry count declared by the DestList header.
-    pub declared_entry_count: usize,
+    pub(crate) declared_entry_count: usize,
     /// Number of pinned entries declared by the DestList header.
-    pub pinned_entry_count: u32,
+    pub(crate) pinned_entry_count: u32,
     /// Compatibility alias for [`DestList::last_entry_number`].
-    pub last_entry_id: u64,
+    pub(crate) last_entry_id: u64,
     /// Last entry number assigned by Explorer.
-    pub last_entry_number: u32,
+    pub(crate) last_entry_number: u32,
     /// Unknown header field adjacent to [`DestList::last_entry_number`].
-    pub last_entry_number_unknown: u32,
+    pub(crate) last_entry_number_unknown: u32,
     /// Last revision number assigned by Explorer.
-    pub last_revision_number: u32,
+    pub(crate) last_revision_number: u32,
     /// Unknown header field adjacent to [`DestList::last_revision_number`].
-    pub last_revision_number_unknown: u32,
+    pub(crate) last_revision_number_unknown: u32,
     /// Parsed DestList entries.
-    pub entries: Vec<DestListEntry>,
+    pub(crate) entries: Vec<DestListEntry>,
+}
+
+impl DestList {
+    /// DestList format version.
+    #[must_use]
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// Entry count declared by the DestList header.
+    #[must_use]
+    pub fn declared_entry_count(&self) -> usize {
+        self.declared_entry_count
+    }
+
+    /// Number of pinned entries declared by the DestList header.
+    #[must_use]
+    pub fn pinned_entry_count(&self) -> u32 {
+        self.pinned_entry_count
+    }
+
+    /// Compatibility alias for [`DestList::last_entry_number`].
+    #[must_use]
+    pub fn last_entry_id(&self) -> u64 {
+        self.last_entry_id
+    }
+
+    /// Last entry number assigned by Explorer.
+    #[must_use]
+    pub fn last_entry_number(&self) -> u32 {
+        self.last_entry_number
+    }
+
+    /// Unknown header field adjacent to [`DestList::last_entry_number`].
+    #[must_use]
+    pub fn last_entry_number_unknown(&self) -> u32 {
+        self.last_entry_number_unknown
+    }
+
+    /// Last revision number assigned by Explorer.
+    #[must_use]
+    pub fn last_revision_number(&self) -> u32 {
+        self.last_revision_number
+    }
+
+    /// Unknown header field adjacent to [`DestList::last_revision_number`].
+    #[must_use]
+    pub fn last_revision_number_unknown(&self) -> u32 {
+        self.last_revision_number_unknown
+    }
+
+    /// Parsed DestList entries.
+    #[must_use]
+    pub fn entries(&self) -> &[DestListEntry] {
+        &self.entries
+    }
 }
 
 /// A single DestList entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DestListEntry {
     /// Byte offset of this entry inside the DestList stream.
-    pub entry_offset: usize,
+    pub(crate) entry_offset: usize,
     /// Parsed byte length of this entry.
-    pub entry_len: usize,
+    pub(crate) entry_len: usize,
     /// Compatibility alias for [`DestListEntry::entry_number`].
-    pub entry_id: u64,
+    pub(crate) entry_id: u64,
     /// Explorer entry number.
-    pub entry_number: u32,
+    pub(crate) entry_number: u32,
     /// Unknown field adjacent to [`DestListEntry::entry_number`].
-    pub entry_number_unknown: u32,
+    pub(crate) entry_number_unknown: u32,
     /// CFB stream name containing the Shell Link payload for this entry.
-    pub stream_name: String,
+    pub(crate) stream_name: String,
     /// Raw path as stored; may be `"knownfolder:{GUID}"`.
-    pub raw_path: String,
+    pub(crate) raw_path: String,
     /// Resolved path (knownfolder GUIDs resolved via Shell Link stream).
-    pub path: String,
+    pub(crate) path: String,
     /// `-1` if not pinned.
-    pub pin_status: i32,
+    pub(crate) pin_status: i32,
     /// Pin order when the entry is pinned, if known.
-    pub pin_order: Option<i32>,
+    pub(crate) pin_order: Option<i32>,
     /// Compatibility alias for [`DestListEntry::recent_rank`].
-    pub rank: i32,
+    pub(crate) rank: i32,
     /// Recent rank reported by the DestList entry.
-    pub recent_rank: i32,
+    pub(crate) recent_rank: i32,
     /// `0` means hidden in v4.
-    pub count: u32,
+    pub(crate) count: u32,
     /// Access count reported by the DestList entry.
-    pub access_count: u32,
+    pub(crate) access_count: u32,
     /// Explorer score value reported by the DestList entry.
-    pub score: f32,
+    pub(crate) score: f32,
     /// Compatibility alias for [`DestListEntry::last_interaction_filetime`].
-    pub last_access_filetime: Option<u64>,
+    pub(crate) last_access_filetime: Option<u64>,
     /// Last interaction timestamp as a raw Windows FILETIME value.
-    pub last_interaction_filetime: Option<u64>,
+    pub(crate) last_interaction_filetime: Option<u64>,
     /// Serialized property-store size when present.
-    pub sps_size: Option<u32>,
+    pub(crate) sps_size: Option<u32>,
+}
+
+impl DestListEntry {
+    /// Byte offset of this entry inside the DestList stream.
+    #[must_use]
+    pub fn entry_offset(&self) -> usize {
+        self.entry_offset
+    }
+
+    /// Parsed byte length of this entry.
+    #[must_use]
+    pub fn entry_len(&self) -> usize {
+        self.entry_len
+    }
+
+    /// Compatibility alias for [`DestListEntry::entry_number`].
+    #[must_use]
+    pub fn entry_id(&self) -> u64 {
+        self.entry_id
+    }
+
+    /// Explorer entry number.
+    #[must_use]
+    pub fn entry_number(&self) -> u32 {
+        self.entry_number
+    }
+
+    /// Unknown field adjacent to [`DestListEntry::entry_number`].
+    #[must_use]
+    pub fn entry_number_unknown(&self) -> u32 {
+        self.entry_number_unknown
+    }
+
+    /// CFB stream name containing the Shell Link payload for this entry.
+    #[must_use]
+    pub fn stream_name(&self) -> &str {
+        &self.stream_name
+    }
+
+    /// Raw path as stored; may be `"knownfolder:{GUID}"`.
+    #[must_use]
+    pub fn raw_path(&self) -> &str {
+        &self.raw_path
+    }
+
+    /// Resolved path (knownfolder GUIDs resolved via Shell Link stream).
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Pin status; `-1` means not pinned.
+    #[must_use]
+    pub fn pin_status(&self) -> i32 {
+        self.pin_status
+    }
+
+    /// Pin order when the entry is pinned, if known.
+    #[must_use]
+    pub fn pin_order(&self) -> Option<i32> {
+        self.pin_order
+    }
+
+    /// Whether this entry is pinned.
+    #[must_use]
+    pub fn is_pinned(&self) -> bool {
+        self.pin_order.is_some()
+    }
+
+    /// Compatibility alias for [`DestListEntry::recent_rank`].
+    #[must_use]
+    pub fn rank(&self) -> i32 {
+        self.rank
+    }
+
+    /// Recent rank reported by the DestList entry.
+    #[must_use]
+    pub fn recent_rank(&self) -> i32 {
+        self.recent_rank
+    }
+
+    /// Compatibility alias for [`DestListEntry::access_count`].
+    #[must_use]
+    pub fn count(&self) -> u32 {
+        self.count
+    }
+
+    /// Access count reported by the DestList entry.
+    #[must_use]
+    pub fn access_count(&self) -> u32 {
+        self.access_count
+    }
+
+    /// Explorer score value reported by the DestList entry.
+    #[must_use]
+    pub fn score(&self) -> f32 {
+        self.score
+    }
+
+    /// Compatibility alias for [`DestListEntry::last_interaction_filetime`].
+    #[must_use]
+    pub fn last_access_filetime(&self) -> Option<u64> {
+        self.last_access_filetime
+    }
+
+    /// Last interaction timestamp as a raw Windows FILETIME value.
+    #[must_use]
+    pub fn last_interaction_filetime(&self) -> Option<u64> {
+        self.last_interaction_filetime
+    }
+
+    /// Serialized property-store size when present.
+    #[must_use]
+    pub fn sps_size(&self) -> Option<u32> {
+        self.sps_size
+    }
 }
 
 /// Returns all entries from a parsed DestList.
@@ -560,20 +798,25 @@ mod tests {
         println!("Path: {}", path.display());
 
         let parsed = parse_file(&path).expect("failed to parse recent files dest");
-        let all = entries(&parsed.dest_list);
+        let all = entries(parsed.dest_list());
 
         println!(
             "version={} declared={} pinned={} last_entry_id={:#x}",
-            parsed.dest_list.version,
-            parsed.dest_list.declared_entry_count,
-            parsed.dest_list.pinned_entry_count,
-            parsed.dest_list.last_entry_id,
+            parsed.dest_list().version(),
+            parsed.dest_list().declared_entry_count(),
+            parsed.dest_list().pinned_entry_count(),
+            parsed.dest_list().last_entry_id(),
         );
         println!("entries ({}):", all.len());
         for e in &all {
             println!(
                 "  id={:#x} pin={} rank={} count={} score={:.2} path={}",
-                e.entry_id, e.pin_status, e.rank, e.count, e.score, e.path
+                e.entry_id(),
+                e.pin_status(),
+                e.rank(),
+                e.count(),
+                e.score(),
+                e.path()
             );
         }
     }
@@ -585,20 +828,25 @@ mod tests {
         println!("Path: {}", path.display());
 
         let parsed = parse_file(&path).expect("failed to parse frequent folders dest");
-        let all = entries(&parsed.dest_list);
+        let all = entries(parsed.dest_list());
 
         println!(
             "version={} declared={} pinned={} last_entry_id={:#x}",
-            parsed.dest_list.version,
-            parsed.dest_list.declared_entry_count,
-            parsed.dest_list.pinned_entry_count,
-            parsed.dest_list.last_entry_id,
+            parsed.dest_list().version(),
+            parsed.dest_list().declared_entry_count(),
+            parsed.dest_list().pinned_entry_count(),
+            parsed.dest_list().last_entry_id(),
         );
         println!("entries ({}):", all.len());
         for e in &all {
             println!(
                 "  id={:#x} pin={} rank={} count={} score={:.2} path={}",
-                e.entry_id, e.pin_status, e.rank, e.count, e.score, e.path
+                e.entry_id(),
+                e.pin_status(),
+                e.rank(),
+                e.count(),
+                e.score(),
+                e.path()
             );
         }
     }

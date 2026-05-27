@@ -110,7 +110,6 @@ pub mod prelude {
         parse_bytes as parse_dest_bytes, parse_file as parse_dest_file, recent_files_dest_path,
         AutomaticDestinations, CfbInfo, DestList, DestListEntry,
     };
-
 }
 
 use crate::error::WincentError;

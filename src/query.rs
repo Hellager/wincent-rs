@@ -1,4 +1,4 @@
-﻿//! Windows Quick Access item retrieval and inspection
+//! Windows Quick Access item retrieval and inspection
 //!
 //! Provides read-only access to system Quick Access metadata including:
 //! - Recent file tracking
@@ -1463,4 +1463,3 @@ mod tests {
         Ok(())
     }
 }
-

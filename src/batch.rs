@@ -18,17 +18,64 @@ use std::time::Duration;
 #[derive(Debug, Default)]
 pub struct BatchResult {
     /// Successfully processed items.
-    pub succeeded: Vec<String>,
+    succeeded: Vec<String>,
     /// Failed items with error details.
     ///
     /// `AlreadyExists` and `NotInRecent` may come from best-effort preflight
     /// checks. Explorer state can still change between the preflight query and
     /// the shell operation, so callers should treat those errors as a snapshot
     /// of the attempted operation rather than a durable global truth.
-    pub failed: Vec<(String, WincentError)>,
+    failed: Vec<BatchFailure>,
+}
+
+/// Failed item from a batch operation.
+#[derive(Debug)]
+pub struct BatchFailure {
+    path: String,
+    error: WincentError,
+}
+
+impl BatchFailure {
+    pub(crate) fn new(path: String, error: WincentError) -> Self {
+        Self { path, error }
+    }
+
+    /// Path that failed to process.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Error returned for this path.
+    #[must_use]
+    pub fn error(&self) -> &WincentError {
+        &self.error
+    }
 }
 
 impl BatchResult {
+    pub(crate) fn new(succeeded: Vec<String>, failed: Vec<BatchFailure>) -> Self {
+        Self { succeeded, failed }
+    }
+
+    /// Successfully processed items.
+    #[must_use]
+    pub fn succeeded(&self) -> &[String] {
+        &self.succeeded
+    }
+
+    /// Failed items with error details.
+    #[must_use]
+    pub fn failed(&self) -> &[BatchFailure] {
+        &self.failed
+    }
+
+    /// Consumes the result and returns its raw parts.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<String>, Vec<BatchFailure>) {
+        (self.succeeded, self.failed)
+    }
+
     /// Returns true if all operations succeeded.
     #[must_use]
     pub fn is_complete_success(&self) -> bool {
@@ -62,7 +109,7 @@ impl BatchResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatchOptions {
     /// Timeout for shell operations that support timeout control.
-    pub timeout: Duration,
+    timeout: Duration,
     /// Refresh Recent Files display data once after successful Recent Files add operations.
     ///
     /// Batch mode coalesces this into one post-batch data-file refresh instead of
@@ -72,7 +119,7 @@ pub struct BatchOptions {
     /// Removal paths operate on the shell item directly, while deleting backing
     /// data files as a removal refresh would be more destructive than the
     /// requested per-item operation.
-    pub force_update: bool,
+    force_update: bool,
 }
 
 impl Default for BatchOptions {
@@ -80,6 +127,63 @@ impl Default for BatchOptions {
         Self {
             timeout: Duration::from_secs(10),
             force_update: false,
+        }
+    }
+}
+
+impl BatchOptions {
+    /// Creates default batch options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Timeout for shell operations that support timeout control.
+    #[must_use]
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Sets the shell operation timeout.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `timeout` is zero.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        assert!(!timeout.is_zero(), "timeout must be greater than zero");
+        self.timeout = timeout;
+        self
+    }
+
+    /// Tries to set the shell operation timeout.
+    pub fn try_with_timeout(mut self, timeout: Duration) -> WincentResult<Self> {
+        if timeout.is_zero() {
+            return Err(WincentError::InvalidArgument(
+                "timeout must be greater than zero".to_string(),
+            ));
+        }
+        self.timeout = timeout;
+        Ok(self)
+    }
+
+    /// Whether Recent Files display data is refreshed after successful additions.
+    #[must_use]
+    pub fn force_update(&self) -> bool {
+        self.force_update
+    }
+
+    /// Sets whether Recent Files display data is refreshed after successful additions.
+    #[must_use]
+    pub fn with_force_update(mut self, force_update: bool) -> Self {
+        self.force_update = force_update;
+        self
+    }
+
+    pub(crate) fn from_parts(timeout: Duration, force_update: bool) -> Self {
+        Self {
+            timeout,
+            force_update,
         }
     }
 }
@@ -124,7 +228,9 @@ fn add_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> WincentR
                 force_update: false,
             },
         ),
-        QuickAccess::FrequentFolders => add_to_frequent_folders_with_timeout(path, options.timeout),
+        QuickAccess::FrequentFolders => {
+            add_to_frequent_folders_with_timeout(path, options.timeout())
+        }
         QuickAccess::All => unreachable!(),
     }
 }
@@ -141,16 +247,16 @@ fn remove_item(path: &str, qa_type: QuickAccess, options: BatchOptions) -> Wince
     }
 
     match qa_type {
-        QuickAccess::RecentFiles => remove_from_recent_files_with_timeout(path, options.timeout),
+        QuickAccess::RecentFiles => remove_from_recent_files_with_timeout(path, options.timeout()),
         QuickAccess::FrequentFolders => {
-            remove_from_frequent_folders_with_timeout(path, options.timeout)
+            remove_from_frequent_folders_with_timeout(path, options.timeout())
         }
         QuickAccess::All => unreachable!(),
     }
 }
 
 fn should_force_update_recent_files(options: BatchOptions, recent_files_succeeded: bool) -> bool {
-    options.force_update && recent_files_succeeded
+    options.force_update() && recent_files_succeeded
 }
 
 /// Adds multiple items to Quick Access, collecting per-item failures.
@@ -160,7 +266,10 @@ fn should_force_update_recent_files(options: BatchOptions, recent_files_succeede
 /// may report `AlreadyExists` or a later operation error that reflects that
 /// race. Successful Recent Files additions can be coalesced into one display
 /// refresh with [`BatchOptions::force_update`].
-pub(crate) fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOptions) -> BatchResult {
+pub(crate) fn add_items_batch(
+    items: &[(String, QuickAccess)],
+    options: BatchOptions,
+) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
     let mut recent_files_succeeded = false;
@@ -173,7 +282,7 @@ pub(crate) fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOpt
                 }
                 succeeded.push(path.clone());
             }
-            Err(error) => failed.push((path.clone(), error)),
+            Err(error) => failed.push(BatchFailure::new(path.clone(), error)),
         }
     }
 
@@ -182,7 +291,7 @@ pub(crate) fn add_items_batch(items: &[(String, QuickAccess)], options: BatchOpt
         let _ = refresh_explorer_window();
     }
 
-    BatchResult { succeeded, failed }
+    BatchResult::new(succeeded, failed)
 }
 
 /// Removes multiple items from Quick Access, collecting per-item failures.
@@ -203,11 +312,11 @@ pub(crate) fn remove_items_batch(
     for (path, qa_type) in items {
         match remove_item(path, *qa_type, options) {
             Ok(()) => succeeded.push(path.clone()),
-            Err(error) => failed.push((path.clone(), error)),
+            Err(error) => failed.push(BatchFailure::new(path.clone(), error)),
         }
     }
 
-    BatchResult { succeeded, failed }
+    BatchResult::new(succeeded, failed)
 }
 
 #[cfg(test)]
@@ -216,10 +325,7 @@ mod tests {
 
     #[test]
     fn batch_result_empty_is_complete_success() {
-        let result = BatchResult {
-            succeeded: vec![],
-            failed: vec![],
-        };
+        let result = BatchResult::new(vec![], vec![]);
 
         assert!(result.is_complete_success());
         assert!(!result.has_partial_success());
@@ -229,13 +335,13 @@ mod tests {
 
     #[test]
     fn batch_result_reports_partial_success() {
-        let result = BatchResult {
-            succeeded: vec!["file1.txt".to_string(), "file2.txt".to_string()],
-            failed: vec![(
+        let result = BatchResult::new(
+            vec!["file1.txt".to_string(), "file2.txt".to_string()],
+            vec![BatchFailure::new(
                 "file3.txt".to_string(),
                 WincentError::NotInRecent("file3.txt".to_string()),
             )],
-        };
+        );
 
         assert_eq!(result.total(), 3);
         assert!(!result.is_complete_success());
@@ -245,10 +351,7 @@ mod tests {
 
     #[test]
     fn force_update_requires_recent_files_success() {
-        let options = BatchOptions {
-            force_update: true,
-            ..BatchOptions::default()
-        };
+        let options = BatchOptions::default().with_force_update(true);
 
         assert!(should_force_update_recent_files(options, true));
         assert!(!should_force_update_recent_files(options, false));
