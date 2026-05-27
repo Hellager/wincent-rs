@@ -294,6 +294,20 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns the same errors as [`QuickAccessManager::get_items`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// for path in manager.get_item_paths(QuickAccess::RecentFiles)? {
+    ///     println!("{}", path.display());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn get_item_paths(&self, qa_type: QuickAccess) -> WincentResult<Vec<PathBuf>> {
         Ok(self
             .get_items(qa_type)?
@@ -347,6 +361,20 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns query errors from [`QuickAccessManager::get_items`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// if manager.contains_item("Projects", QuickAccess::All)? {
+    ///     println!("Found a matching Quick Access item");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn contains_item(&self, keyword: &str, qa_type: QuickAccess) -> WincentResult<bool> {
         let items = self.get_items(qa_type)?;
         Ok(items.iter().any(|item| item.contains(keyword)))
@@ -491,6 +519,20 @@ impl QuickAccessManager {
     /// into shell strings are reported first, followed by failures from the
     /// underlying batch remove operations. The failure list is not guaranteed
     /// to preserve input order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// let manager = QuickAccessManager::new();
+    /// let items = [QuickAccessItem::recent_file("C:\\Work\\report.docx")];
+    ///
+    /// let result = manager.remove_items_batch(&items);
+    /// if !result.is_complete_success() {
+    ///     eprintln!("{} item(s) failed", result.failed().len());
+    /// }
+    /// ```
     pub fn remove_items_batch(&self, items: &[QuickAccessItem]) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
         let result = batch::remove_items_batch(&items, self.timeout);
@@ -530,7 +572,7 @@ impl QuickAccessManager {
 
     /// Clears internal caches.
     ///
-    /// The v0.2 manager no longer owns a script-result cache, so this is a no-op.
+    /// Currently this is a no-op retained for API compatibility.
     pub fn clear_cache(&self) {}
 
     /// Checks whether a Quick Access section is visible in Explorer.
@@ -539,6 +581,22 @@ impl QuickAccessManager {
     ///
     /// Returns registry I/O errors when the current user's Explorer settings
     /// cannot be read.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "visible")]
+    /// # fn main() -> wincent::WincentResult<()> {
+    /// use wincent::prelude::*;
+    ///
+    /// let manager = QuickAccessManager::new();
+    /// let visible = manager.is_visible(QuickAccess::RecentFiles)?;
+    /// println!("Recent Files visible: {visible}");
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "visible"))]
+    /// # fn main() {}
+    /// ```
     #[cfg(feature = "visible")]
     pub fn is_visible(&self, qa_type: QuickAccess) -> WincentResult<bool> {
         visible::is_visible(qa_type)
@@ -550,6 +608,21 @@ impl QuickAccessManager {
     ///
     /// Returns registry I/O errors when the current user's Explorer settings
     /// cannot be created or updated.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "visible")]
+    /// # fn main() -> wincent::WincentResult<()> {
+    /// use wincent::prelude::*;
+    ///
+    /// let manager = QuickAccessManager::new();
+    /// manager.set_visible(QuickAccess::RecentFiles, true)?;
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "visible"))]
+    /// # fn main() {}
+    /// ```
     #[cfg(feature = "visible")]
     pub fn set_visible(&self, qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
         visible::set_visible(qa_type, visible)
@@ -561,6 +634,20 @@ impl QuickAccessManager {
     ///
     /// Returns registry I/O errors when Explorer visibility settings cannot be
     /// updated.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "visible")]
+    /// # fn main() -> wincent::WincentResult<()> {
+    /// use wincent::prelude::*;
+    ///
+    /// QuickAccessManager::new().show_section(QuickAccess::FrequentFolders)?;
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "visible"))]
+    /// # fn main() {}
+    /// ```
     #[cfg(feature = "visible")]
     pub fn show_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
         self.set_visible(qa_type, true)
@@ -572,6 +659,20 @@ impl QuickAccessManager {
     ///
     /// Returns registry I/O errors when Explorer visibility settings cannot be
     /// updated.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "visible")]
+    /// # fn main() -> wincent::WincentResult<()> {
+    /// use wincent::prelude::*;
+    ///
+    /// QuickAccessManager::new().hide_section(QuickAccess::RecentFiles)?;
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "visible"))]
+    /// # fn main() {}
+    /// ```
     #[cfg(feature = "visible")]
     pub fn hide_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
         self.set_visible(qa_type, false)
@@ -647,6 +748,23 @@ impl QuickAccessManager {
     /// Returns I/O errors when the file cannot be read, or DestList parse errors
     /// when Explorer's backing file is missing, truncated, corrupt, or uses an
     /// unsupported format version.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "destlist")]
+    /// # fn main() -> wincent::WincentResult<()> {
+    /// use wincent::prelude::*;
+    ///
+    /// let manager = QuickAccessManager::new();
+    /// for entry in manager.get_recent_files_metadata()? {
+    ///     println!("{} ({})", entry.path(), entry.access_count());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "destlist"))]
+    /// # fn main() {}
+    /// ```
     pub fn get_recent_files_metadata(&self) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
         let parsed = crate::destlist::parse_file(crate::destlist::recent_files_dest_path()?)?;
         Ok(crate::destlist::entries(parsed.dest_list()))
@@ -659,6 +777,22 @@ impl QuickAccessManager {
     /// Returns I/O errors when the file cannot be read, or DestList parse errors
     /// when Explorer's backing file is missing, truncated, corrupt, or uses an
     /// unsupported format version.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "destlist")]
+    /// # fn main() -> wincent::WincentResult<()> {
+    /// use wincent::prelude::*;
+    ///
+    /// let manager = QuickAccessManager::new();
+    /// let entries = manager.get_frequent_folders_metadata()?;
+    /// println!("{} frequent-folder entries", entries.len());
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "destlist"))]
+    /// # fn main() {}
+    /// ```
     pub fn get_frequent_folders_metadata(
         &self,
     ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {

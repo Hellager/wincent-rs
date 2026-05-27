@@ -60,8 +60,8 @@
 //!
 //! ## Best Practices
 //!
-//! - Use `force_update` when adding recent files for immediate visibility
-//! - Consider `also_pinned_folders` carefully when clearing frequent folders
+//! - Use [`AddOptions::refresh_recent_files`] when adding recent files for immediate visibility
+//! - Use [`EmptyOptions::remove_pinned_folders`] only when you intend to remove user-pinned folders
 //!
 
 mod batch;

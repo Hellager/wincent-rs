@@ -29,14 +29,14 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wincent = "0.1.2"
+wincent = "0.2.2"
 ```
 
 Optional features:
 
 ```toml
 [dependencies]
-wincent = { version = "0.1.2", features = ["visible", "destlist"] }
+wincent = { version = "0.2.2", features = ["visible", "destlist"] }
 ```
 
 ## Quick Start
@@ -49,17 +49,21 @@ fn main() -> WincentResult<()> {
 
     // --- Add ---
     // Add a file to Recent Files. Returns Err(AlreadyExists) if already present.
-    manager.add_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles, true)?;
+    manager.add_item(
+        "C:\\Projects\\report.docx",
+        QuickAccess::RecentFiles,
+        AddOptions::new().refresh_recent_files(),
+    )?;
 
     // Pin a folder to Frequent Folders.
-    manager.add_item("C:\\Projects", QuickAccess::FrequentFolders, false)?;
+    manager.add_item("C:\\Projects", QuickAccess::FrequentFolders, AddOptions::new())?;
 
     // --- Query ---
-    // List all recent files.
-    let recent = manager.get_items(QuickAccess::RecentFiles)?;
+    // List all recent files as PathBuf values.
+    let recent = manager.get_item_paths(QuickAccess::RecentFiles)?;
     println!("Recent files ({}):", recent.len());
     for path in &recent {
-        println!("  {path}");
+        println!("  {}", path.display());
     }
 
     // Check exact membership (Windows path semantics: case-insensitive).
@@ -71,7 +75,7 @@ fn main() -> WincentResult<()> {
     println!("Any Quick Access item contains 'Projects': {any_match}");
 
     // --- Remove ---
-    // Remove a file. Returns Err(NotInRecent) if not present.
+    // Remove a file. Returns Err(NotInQuickAccess) if not present.
     manager.remove_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
 
     Ok(())
@@ -94,19 +98,20 @@ fn main() -> WincentResult<()> {
 
 | Method | Description |
 |--------|-------------|
-| `get_items(qa_type)` | Return all paths in the given category (`RecentFiles`, `FrequentFolders`, or `All`). |
-| `check_item_exact(path, qa_type)` | Return `true` if the path is present (Windows case-insensitive comparison). |
+| `get_items(qa_type)` | Return all paths as strings in the given category (`RecentFiles`, `FrequentFolders`, or `All`). |
+| `get_item_paths(qa_type)` | Return all paths as `PathBuf` values. Paths reflect Explorer state and may no longer exist on disk. |
+| `check_item_exact(path, qa_type)` | Return `true` if the path is present (accepts `impl AsRef<Path>`; Windows case-insensitive comparison). |
 | `contains_item(keyword, qa_type)` | Return `true` if any item's path string contains `keyword` (case-sensitive substring). |
 
 ### Mutation
 
 | Method | Description |
 |--------|-------------|
-| `add_item(path, qa_type, force_update)` | Add an item. `QuickAccess::All` is rejected. Returns `Err(AlreadyExists)` if already present. |
-| `remove_item(path, qa_type)` | Remove an item. `QuickAccess::All` is rejected. Returns `Err(NotInRecent)` if absent. |
-| `add_items_batch(items, force_update)` | Add multiple items, collecting failures without short-circuiting. |
-| `remove_items_batch(items)` | Remove multiple items, collecting failures without short-circuiting. |
-| `empty_items(qa_type, force_refresh, also_pinned_folders)` | Clear a category. When `also_pinned_folders` is `true`, pinned folder entries are also removed. |
+| `add_item(path, qa_type, options)` | Add an item (accepts `impl AsRef<Path>`). `QuickAccess::All` is rejected. Returns `Err(AlreadyExists)` if already present. |
+| `remove_item(path, qa_type)` | Remove an item (accepts `impl AsRef<Path>`). `QuickAccess::All` is rejected. Returns `Err(NotInQuickAccess)` if absent. |
+| `add_items_batch(items, options)` | Add multiple `QuickAccessItem` values, collecting failures without short-circuiting. |
+| `remove_items_batch(items)` | Remove multiple `QuickAccessItem` values, collecting failures without short-circuiting. |
+| `empty_items(qa_type, options)` | Clear a category. Use `EmptyOptions::remove_pinned_folders()` to include pinned folder entries. |
 
 ### Optional features
 
@@ -114,6 +119,7 @@ fn main() -> WincentResult<()> {
 |--------|---------|-------------|
 | `is_visible(qa_type)` | `visible` | Read the Explorer registry flag that controls section visibility. |
 | `set_visible(qa_type, visible)` | `visible` | Write the Explorer registry flag. |
+| `show_section(qa_type)` / `hide_section(qa_type)` | `visible` | Show or hide a section without passing a bare boolean. |
 | `get_recent_files_metadata()` | `destlist` | Parse the recent-files `.automaticDestinations-ms` file and return `DestListEntry` records. |
 | `get_frequent_folders_metadata()` | `destlist` | Parse the frequent-folders `.automaticDestinations-ms` file and return `DestListEntry` records. |
 
@@ -123,9 +129,9 @@ All fallible methods return `WincentResult<T>` (`Result<T, WincentError>`). Comm
 
 | Variant | When raised |
 |---------|-------------|
-| `AlreadyExists(path)` | `add_item` called for a path already in Quick Access. |
-| `NotInRecent(path)` | `remove_item` called for a path not in Quick Access. |
-| `InvalidPath(path)` | A supplied path is empty, malformed, or has the wrong type. |
+| `AlreadyExists { path, qa_type }` | `add_item` called for a path already in a Quick Access category. |
+| `NotInQuickAccess { path, qa_type }` | `remove_item` called for a path not in a Quick Access category. |
+| `InvalidPath(error)` | A supplied path is empty, malformed, missing, or has the wrong type. |
 | `UnsupportedOperation(msg)` | `add_item`/`remove_item` called with `QuickAccess::All`. |
 | `Timeout(msg)` | A shell operation exceeded the configured timeout. |
 | `PartialEmpty { … }` | `empty_items` cleared some categories before a later step failed. |
@@ -140,9 +146,9 @@ use wincent::prelude::*;
 fn main() -> WincentResult<()> {
     let manager = QuickAccessManager::new();
 
-    match manager.add_item("C:\\folder", QuickAccess::FrequentFolders, false) {
+    match manager.add_item("C:\\folder", QuickAccess::FrequentFolders, AddOptions::new()) {
         Ok(()) => println!("Added."),
-        Err(WincentError::AlreadyExists(p)) => println!("{p} is already pinned."),
+        Err(WincentError::AlreadyExists { path, .. }) => println!("{path} is already pinned."),
         Err(WincentError::PowerShellExecution(err)) => {
             if err.is_access_denied() {
                 println!("Access denied — try running as administrator.");
@@ -171,8 +177,8 @@ fn main() -> WincentResult<()> {
 
 ## Best Practices
 
-- Pass `force_update = true` to `add_item` when adding recent files for immediate visibility in Explorer.
-- When clearing frequent folders, set `also_pinned_folders = true` only when you intend to remove user-pinned entries.
+- Use `AddOptions::refresh_recent_files()` when adding recent files for immediate visibility in Explorer.
+- Use `EmptyOptions::remove_pinned_folders()` only when you intend to remove user-pinned entries.
 - Handle `PartialEmpty` explicitly if your code needs to distinguish "nothing cleared" from "partially cleared".
 - Use `check_item_exact` (Windows path semantics) rather than `contains_item` (case-sensitive substring) for membership tests.
 

@@ -29,14 +29,14 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 
 ```toml
 [dependencies]
-wincent = "0.1.2"
+wincent = "0.2.2"
 ```
 
 启用可选 feature：
 
 ```toml
 [dependencies]
-wincent = { version = "0.1.2", features = ["visible", "destlist"] }
+wincent = { version = "0.2.2", features = ["visible", "destlist"] }
 ```
 
 ## 快速开始
@@ -49,17 +49,21 @@ fn main() -> WincentResult<()> {
 
     // --- 添加 ---
     // 添加文件到最近文件。若已存在则返回 Err(AlreadyExists)。
-    manager.add_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles, true)?;
+    manager.add_item(
+        "C:\\Projects\\report.docx",
+        QuickAccess::RecentFiles,
+        AddOptions::new().refresh_recent_files(),
+    )?;
 
     // 固定文件夹到常用文件夹。
-    manager.add_item("C:\\Projects", QuickAccess::FrequentFolders, false)?;
+    manager.add_item("C:\\Projects", QuickAccess::FrequentFolders, AddOptions::new())?;
 
     // --- 查询 ---
-    // 列出所有最近文件。
-    let recent = manager.get_items(QuickAccess::RecentFiles)?;
+    // 以 PathBuf 形式列出所有最近文件。
+    let recent = manager.get_item_paths(QuickAccess::RecentFiles)?;
     println!("最近文件（{}个）：", recent.len());
     for path in &recent {
-        println!("  {path}");
+        println!("  {}", path.display());
     }
 
     // 精确成员检查（Windows 路径语义：不区分大小写）。
@@ -71,7 +75,7 @@ fn main() -> WincentResult<()> {
     println!("快速访问中存在包含 'Projects' 的项目：{any_match}");
 
     // --- 删除 ---
-    // 移除文件。若不存在则返回 Err(NotInRecent)。
+    // 移除文件。若不存在则返回 Err(NotInQuickAccess)。
     manager.remove_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
 
     Ok(())
@@ -95,6 +99,7 @@ fn main() -> WincentResult<()> {
 | 方法 | 说明 |
 |------|------|
 | `get_items(qa_type)` | 返回指定分类（`RecentFiles`、`FrequentFolders` 或 `All`）的所有路径。 |
+| `get_item_paths(qa_type)` | 以 `PathBuf` 形式返回所有路径。路径反映 Explorer 状态，可能已不再存在于磁盘上。 |
 | `check_item_exact(path, qa_type)` | 若路径存在则返回 `true`（Windows 不区分大小写比较）。 |
 | `contains_item(keyword, qa_type)` | 若任意项目的路径字符串包含 `keyword` 则返回 `true`（区分大小写的子串匹配）。 |
 
@@ -102,11 +107,11 @@ fn main() -> WincentResult<()> {
 
 | 方法 | 说明 |
 |------|------|
-| `add_item(path, qa_type, force_update)` | 添加项目。不接受 `QuickAccess::All`。若已存在则返回 `Err(AlreadyExists)`。 |
-| `remove_item(path, qa_type)` | 删除项目。不接受 `QuickAccess::All`。若不存在则返回 `Err(NotInRecent)`。 |
-| `add_items_batch(items, force_update)` | 批量添加多个项目，遇错不中断，逐项收集失败结果。 |
+| `add_item(path, qa_type, options)` | 添加项目（接受 `impl AsRef<Path>`）。不接受 `QuickAccess::All`。若已存在则返回 `Err(AlreadyExists)`。 |
+| `remove_item(path, qa_type)` | 删除项目（接受 `impl AsRef<Path>`）。不接受 `QuickAccess::All`。若不存在则返回 `Err(NotInQuickAccess)`。 |
+| `add_items_batch(items, options)` | 批量添加多个 `QuickAccessItem`，遇错不中断，逐项收集失败结果。 |
 | `remove_items_batch(items)` | 批量删除多个项目，遇错不中断，逐项收集失败结果。 |
-| `empty_items(qa_type, force_refresh, also_pinned_folders)` | 清空指定分类。`also_pinned_folders` 为 `true` 时同时移除已固定文件夹。 |
+| `empty_items(qa_type, options)` | 清空指定分类。使用 `EmptyOptions::remove_pinned_folders()` 可同时移除已固定文件夹。 |
 
 ### 可选 Feature 方法
 
@@ -114,6 +119,7 @@ fn main() -> WincentResult<()> {
 |------|---------|------|
 | `is_visible(qa_type)` | `visible` | 读取控制分区显示状态的 Explorer 注册表标志。 |
 | `set_visible(qa_type, visible)` | `visible` | 写入 Explorer 注册表标志。 |
+| `show_section(qa_type)` / `hide_section(qa_type)` | `visible` | 显示或隐藏分区，避免直接传入裸布尔值。 |
 | `get_recent_files_metadata()` | `destlist` | 解析最近文件 `.automaticDestinations-ms` 文件并返回 `DestListEntry` 记录。 |
 | `get_frequent_folders_metadata()` | `destlist` | 解析常用文件夹 `.automaticDestinations-ms` 文件并返回 `DestListEntry` 记录。 |
 
@@ -123,9 +129,9 @@ fn main() -> WincentResult<()> {
 
 | 变体 | 触发时机 |
 |------|----------|
-| `AlreadyExists(path)` | `add_item` 目标路径已在快速访问中存在。 |
-| `NotInRecent(path)` | `remove_item` 目标路径不在快速访问中。 |
-| `InvalidPath(path)` | 提供的路径为空、格式错误或类型不符。 |
+| `AlreadyExists { path, qa_type }` | `add_item` 目标路径已在快速访问分类中存在。 |
+| `NotInQuickAccess { path, qa_type }` | `remove_item` 目标路径不在快速访问分类中。 |
+| `InvalidPath(error)` | 提供的路径为空、格式错误、缺失或类型不符。 |
 | `UnsupportedOperation(msg)` | `add_item`/`remove_item` 使用了 `QuickAccess::All`。 |
 | `Timeout(msg)` | Shell 操作超过配置的超时时间。 |
 | `PartialEmpty { … }` | `empty_items` 在清空部分分类后，后续步骤失败。 |
@@ -140,9 +146,9 @@ use wincent::prelude::*;
 fn main() -> WincentResult<()> {
     let manager = QuickAccessManager::new();
 
-    match manager.add_item("C:\\folder", QuickAccess::FrequentFolders, false) {
+    match manager.add_item("C:\\folder", QuickAccess::FrequentFolders, AddOptions::new()) {
         Ok(()) => println!("添加成功。"),
-        Err(WincentError::AlreadyExists(p)) => println!("{p} 已固定。"),
+        Err(WincentError::AlreadyExists { path, .. }) => println!("{path} 已固定。"),
         Err(WincentError::PowerShellExecution(err)) => {
             if err.is_access_denied() {
                 println!("权限不足，请尝试以管理员身份运行。");
@@ -177,8 +183,8 @@ fn main() -> WincentResult<()> {
 
 ## 最佳实践
 
-- 添加最近文件时传入 `force_update = true` 以立即在 Explorer 中显示。
-- 仅在确实需要移除用户固定条目时，才将 `also_pinned_folders` 设为 `true`。
+- 添加最近文件时使用 `AddOptions::refresh_recent_files()` 以立即在 Explorer 中显示。
+- 仅在确实需要移除用户固定条目时，才使用 `EmptyOptions::remove_pinned_folders()`。
 - 若代码需要区分"未清空任何内容"与"部分清空"，应显式处理 `PartialEmpty`。
 - 成员检查优先使用 `check_item_exact`（Windows 路径语义），而非 `contains_item`（区分大小写的子串匹配）。
 
