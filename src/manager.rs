@@ -455,6 +455,11 @@ impl QuickAccessManager {
     /// This method does not short-circuit and does not return `Result`.
     /// Per-item failures are collected in [`BatchResult::failed`].
     ///
+    /// Failure ordering is phase-based. Items whose paths cannot be converted
+    /// into shell strings are reported first, followed by failures from the
+    /// underlying batch add operations. The failure list is not guaranteed to
+    /// preserve input order.
+    ///
     /// # Examples
     ///
     /// ```rust,no_run
@@ -481,6 +486,11 @@ impl QuickAccessManager {
     ///
     /// This method does not short-circuit and does not return `Result`.
     /// Per-item failures are collected in [`BatchResult::failed`].
+    ///
+    /// Failure ordering is phase-based. Items whose paths cannot be converted
+    /// into shell strings are reported first, followed by failures from the
+    /// underlying batch remove operations. The failure list is not guaranteed
+    /// to preserve input order.
     pub fn remove_items_batch(&self, items: &[QuickAccessItem]) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
         let result = batch::remove_items_batch(&items, self.timeout);

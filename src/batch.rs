@@ -20,6 +20,12 @@ use std::time::Duration;
 /// failures are stored as `BatchFailure` values instead of aborting the whole
 /// batch.
 ///
+/// When returned by [`crate::manager::QuickAccessManager`] batch methods,
+/// failures are grouped by processing phase: path conversion failures detected
+/// by the manager are listed first, followed by failures from the underlying
+/// shell operations. The failed list is therefore not guaranteed to preserve
+/// the original input order.
+///
 /// # Examples
 ///
 /// ```rust,no_run
@@ -95,6 +101,10 @@ impl BatchResult {
     }
 
     /// Failed items with error details.
+    ///
+    /// Results produced through [`crate::manager::QuickAccessManager`] list
+    /// manager-side path conversion failures before operation failures. Do not
+    /// rely on this slice preserving the original input order.
     #[must_use]
     pub fn failed(&self) -> &[BatchFailure] {
         &self.failed
