@@ -10,26 +10,18 @@ Read this in other languages: [English](README.md) | [中文](README.cn.md)
 
 ## Overview
 
-Wincent is a Rust library for managing Windows Quick Access functionality, providing comprehensive control over recent files and frequent folders with async support and robust error handling.
+Wincent is a Rust library for managing Windows Quick Access functionality. It provides a safe interface for querying, adding, removing, and clearing recent files and frequent folders, with native Windows API fast paths and PowerShell fallbacks.
 
 ## Features
 
-- 🔍 Comprehensive Quick Access Management
-  - Query recent files and frequent folders
-  - Add/Remove items with force update options
-  - Clear categories with system default control
-  - Check item existence
-
-- 🛡️ Robust Operation Handling
-  - Operation timeout protection
-  - Cached script execution
-  - Comprehensive error handling
-
-- ⚡ Performance Optimizations
-  - Lazy initialization with OnceCell
-  - Script execution caching
-  - Batch operation support
-  - Force refresh control
+- Query recent files and frequent folders
+- Add and remove items with duplicate detection
+- Clear categories (optionally including pinned folders)
+- Check item existence by exact path or keyword
+- Batch add/remove with per-item error collection
+- Timeout protection for all shell operations
+- Optional visibility control for Quick Access sections (`visible` feature)
+- Optional DestList metadata access (`destlist` feature)
 
 ## Installation
 
@@ -40,83 +32,149 @@ Add the following to your `Cargo.toml`:
 wincent = "0.1.2"
 ```
 
+Optional features:
+
+```toml
+[dependencies]
+wincent = { version = "0.1.2", features = ["visible", "destlist"] }
+```
+
 ## Quick Start
 
-### Basic Operations
-
-```rust
-use wincent::prelude::*;
-
-fn main() -> WincentResult<()> {
-    // Initialize manager
-    let manager = QuickAccessManager::new();
-    
-    // Add file to Recent Files with force update
-    manager.add_item(
-        "C:\\path\\to\\file.txt",
-        QuickAccess::RecentFiles,
-        true
-    )?;
-    
-    // Query all items
-    let items = manager.get_items(QuickAccess::All)?;
-    println!("Quick Access items: {:?}", items);
-    
-    Ok(())
-}
-```
-
-### Advanced Usage
-
-```rust
+```rust,no_run
 use wincent::prelude::*;
 
 fn main() -> WincentResult<()> {
     let manager = QuickAccessManager::new();
-    
-    // Clear recent files with force refresh
-    manager.empty_items(
-        QuickAccess::RecentFiles,
-        true,  // force refresh
-        false  // preserve pinned folders
-    )?;
-    
+
+    // --- Add ---
+    // Add a file to Recent Files. Returns Err(AlreadyExists) if already present.
+    manager.add_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles, true)?;
+
+    // Pin a folder to Frequent Folders.
+    manager.add_item("C:\\Projects", QuickAccess::FrequentFolders, false)?;
+
+    // --- Query ---
+    // List all recent files.
+    let recent = manager.get_items(QuickAccess::RecentFiles)?;
+    println!("Recent files ({}):", recent.len());
+    for path in &recent {
+        println!("  {path}");
+    }
+
+    // Check exact membership (Windows path semantics: case-insensitive).
+    let exists = manager.check_item_exact("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
+    println!("report.docx in Recent Files: {exists}");
+
+    // Fuzzy check: any item whose path string contains the keyword.
+    let any_match = manager.contains_item("Projects", QuickAccess::All)?;
+    println!("Any Quick Access item contains 'Projects': {any_match}");
+
+    // --- Remove ---
+    // Remove a file. Returns Err(NotInRecent) if not present.
+    manager.remove_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
+
     Ok(())
 }
 ```
 
-## Best Practices
+## Manager API
 
-- Use `force_update` when adding recent files for immediate visibility
-- Clear cache after bulk operations
-- Consider `also_pinned_folders` carefully when clearing frequent folders
-- Handle timeouts appropriately in production environments
+### Construction
 
-## System Requirements and Limitations
+| Method | Description |
+|--------|-------------|
+| `QuickAccessManager::new()` | Create a manager with the default 10-second timeout. |
+| `QuickAccessManager::builder()` | Return a `QuickAccessManagerBuilder` for custom configuration. |
+| `builder.timeout(duration)` | Set the shell operation timeout (panics on zero). |
+| `builder.try_timeout(duration)` | Set the timeout, returning `Err` instead of panicking on zero. |
+| `builder.build()` | Build the configured `QuickAccessManager`. |
 
-- **API Dependencies**: The library relies on Windows system APIs for its core functionality. Due to Windows security policies and updates, certain operations may require elevated permissions or could be restricted.
+### Query
 
-- **Environment Compatibility**: Different Windows environments (including versions, configurations, and installed software) may affect the library's functionality. In particular:
-  - Third-party software may modify relevant registry entries
-  - System security policies may restrict PowerShell script execution
-  - Generated helper scripts are launched with process-scoped `-ExecutionPolicy Bypass`;
-    this does not change user or machine policy, but hardened environments may still block it
-  - Windows Explorer integration might vary across different Windows versions
+| Method | Description |
+|--------|-------------|
+| `get_items(qa_type)` | Return all paths in the given category (`RecentFiles`, `FrequentFolders`, or `All`). |
+| `check_item_exact(path, qa_type)` | Return `true` if the path is present (Windows case-insensitive comparison). |
+| `contains_item(keyword, qa_type)` | Return `true` if any item's path string contains `keyword` (case-sensitive substring). |
 
-- **Operation Errors**: Quick Access support varies by Windows version and local
-  policy. Handle operation errors directly, especially when pinning or unpinning
-  folders.
+### Mutation
 
-These limitations are inherent to Windows Quick Access functionality and not specific to this library. We provide comprehensive error handling and status checking mechanisms to help you handle these scenarios gracefully.
+| Method | Description |
+|--------|-------------|
+| `add_item(path, qa_type, force_update)` | Add an item. `QuickAccess::All` is rejected. Returns `Err(AlreadyExists)` if already present. |
+| `remove_item(path, qa_type)` | Remove an item. `QuickAccess::All` is rejected. Returns `Err(NotInRecent)` if absent. |
+| `add_items_batch(items, force_update)` | Add multiple items, collecting failures without short-circuiting. |
+| `remove_items_batch(items)` | Remove multiple items, collecting failures without short-circuiting. |
+| `empty_items(qa_type, force_refresh, also_pinned_folders)` | Clear a category. When `also_pinned_folders` is `true`, pinned folder entries are also removed. |
+
+### Optional features
+
+| Method | Feature | Description |
+|--------|---------|-------------|
+| `is_visible(qa_type)` | `visible` | Read the Explorer registry flag that controls section visibility. |
+| `set_visible(qa_type, visible)` | `visible` | Write the Explorer registry flag. |
+| `get_recent_files_metadata()` | `destlist` | Parse the recent-files `.automaticDestinations-ms` file and return `DestListEntry` records. |
+| `get_frequent_folders_metadata()` | `destlist` | Parse the frequent-folders `.automaticDestinations-ms` file and return `DestListEntry` records. |
 
 ## Error Handling
 
-The library uses Rust's `Result` type for comprehensive error management, allowing precise handling of potential issues during quick access manipulation.
+All fallible methods return `WincentResult<T>` (`Result<T, WincentError>`). Common variants:
 
-## Compatibility
+| Variant | When raised |
+|---------|-------------|
+| `AlreadyExists(path)` | `add_item` called for a path already in Quick Access. |
+| `NotInRecent(path)` | `remove_item` called for a path not in Quick Access. |
+| `InvalidPath(path)` | A supplied path is empty, malformed, or has the wrong type. |
+| `UnsupportedOperation(msg)` | `add_item`/`remove_item` called with `QuickAccess::All`. |
+| `Timeout(msg)` | A shell operation exceeded the configured timeout. |
+| `PartialEmpty { … }` | `empty_items` cleared some categories before a later step failed. |
+| `PowerShellExecution(err)` | A PowerShell fallback script failed or could not start. |
+| `SystemError(msg)` | A non-I/O Windows API call failed. |
 
-- Supports Windows 10 and Windows 11
-- Requires Rust 1.60.0 or later
+### Handling PowerShell errors
+
+```rust,no_run
+use wincent::prelude::*;
+
+fn main() -> WincentResult<()> {
+    let manager = QuickAccessManager::new();
+
+    match manager.add_item("C:\\folder", QuickAccess::FrequentFolders, false) {
+        Ok(()) => println!("Added."),
+        Err(WincentError::AlreadyExists(p)) => println!("{p} is already pinned."),
+        Err(WincentError::PowerShellExecution(err)) => {
+            if err.is_access_denied() {
+                println!("Access denied — try running as administrator.");
+            } else if err.is_execution_policy_error() {
+                println!("PowerShell execution policy blocks scripts.");
+            } else if let Some(fix) = err.suggest_fix() {
+                println!("Suggestion: {fix}");
+            } else {
+                println!("Script error: {err}");
+            }
+        }
+        Err(e) => println!("Error: {e}"),
+    }
+
+    Ok(())
+}
+```
+
+## System Requirements and Limitations
+
+- **OS**: Windows 10 or Windows 11.
+- **Rust**: 1.60.0 or later.
+- **PowerShell**: Required for fallback operations when the native Windows API path is unavailable. Scripts are launched with process-scoped `-ExecutionPolicy Bypass`; this does not change user or machine policy, but hardened environments may still block execution.
+- **Permissions**: Most operations run under the current user's account. Pinning/unpinning folders may require the user's desktop session. Elevated permissions are not normally required.
+- **Consistency**: Quick Access state is maintained by Windows Explorer. Results may lag behind mutations by a short interval, and Explorer may rebuild state asynchronously across versions.
+
+## Best Practices
+
+- Pass `force_update = true` to `add_item` when adding recent files for immediate visibility in Explorer.
+- When clearing frequent folders, set `also_pinned_folders = true` only when you intend to remove user-pinned entries.
+- Handle `PartialEmpty` explicitly if your code needs to distinguish "nothing cleared" from "partially cleared".
+- Use `check_item_exact` (Windows path semantics) rather than `contains_item` (case-sensitive substring) for membership tests.
 
 ## Contributing
 
@@ -133,11 +191,13 @@ The library uses Rust's `Result` type for comprehensive error management, allowi
 git clone https://github.com/Hellager/wincent-rs.git
 cd wincent-rs
 
-# Install development dependencies
+# Build and run unit tests (no Explorer session required)
 cargo build
 cargo test
-```
 
+# Run integration tests that require an interactive desktop session
+cargo test -- --ignored
+```
 
 ## Disclaimer
 
