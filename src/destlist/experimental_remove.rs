@@ -31,6 +31,7 @@ use super::parser::{
 
 /// Explorer automatic destination file family to modify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AutomaticDestinationsKind {
     /// Recent Files automatic destination.
     RecentFiles,

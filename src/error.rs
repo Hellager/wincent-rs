@@ -185,6 +185,7 @@ use thiserror::Error;
 /// This describes the Quick Access operation that failed without exposing the
 /// internal script generation strategy used to implement it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PowerShellOperation {
     /// Refresh open Explorer windows.
     RefreshExplorer,
@@ -212,6 +213,7 @@ pub enum PowerShellOperation {
 
 /// PowerShell error classification
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PowerShellErrorKind {
     /// PowerShell process failed without a more specific classification.
     ProcessFailed,
@@ -834,6 +836,7 @@ impl std::fmt::Display for PowerShellError {
 
 /// Error type returned by wincent operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum WincentError {
     /// Filesystem or process I/O failed.
     #[error("IO error: {0}")]
@@ -899,6 +902,7 @@ pub enum WincentError {
     #[error(
         "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"
     )]
+    #[non_exhaustive]
     PartialEmpty {
         /// Whether Recent Files were cleared before a later cleanup step failed.
         recent_files_cleared: bool,
@@ -915,6 +919,7 @@ pub enum WincentError {
 
     /// The item is already present in the requested Quick Access category.
     #[error("Item already exists in {qa_type:?}: {path}")]
+    #[non_exhaustive]
     AlreadyExists {
         /// Path that was already present.
         path: String,
@@ -924,6 +929,7 @@ pub enum WincentError {
 
     /// The item is not present in the requested Quick Access category.
     #[error("Item not found in {qa_type:?}: {path}")]
+    #[non_exhaustive]
     NotInQuickAccess {
         /// Path that was not found.
         path: String,

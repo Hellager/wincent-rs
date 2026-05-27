@@ -123,6 +123,7 @@ pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum QuickAccess {
     /// Frequently used or pinned folders shown by Quick Access.
     FrequentFolders,
