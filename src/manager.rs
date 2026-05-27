@@ -12,6 +12,7 @@ use crate::{
         AddRecentFileOptions,
     },
     query,
+    quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
     recent_links::delete_recent_links_for_target,
     utils::paths_equal,
     QuickAccess, WincentResult,
@@ -618,6 +619,26 @@ impl QuickAccessManager {
         let (items, failures) = self.convert_batch_items(items);
         let result = batch::remove_items_batch_with_options(&items, options, self.timeout);
         merge_batch_failures(result, failures)
+    }
+
+    /// Locks Explorer's Recent Files and Frequent Folders automatic destination files.
+    ///
+    /// The returned guard holds OS file handles until it is dropped or explicitly
+    /// unlocked. Use [`QuickAccessLock::unlock`] with
+    /// [`crate::QuickAccessUnlockOptions::cleanup_new_recent_links`] to delete
+    /// `.lnk` files that appeared in the Windows Recent folder while locked.
+    pub fn lock_quick_access(&self) -> WincentResult<QuickAccessLock> {
+        QuickAccessLock::lock()
+    }
+
+    /// Locks Explorer's Recent Files automatic destination file.
+    pub fn lock_recent_files(&self) -> WincentResult<QuickAccessLock> {
+        QuickAccessLock::lock_target(QuickAccessLockTarget::RecentFiles)
+    }
+
+    /// Locks Explorer's Frequent Folders automatic destination file.
+    pub fn lock_frequent_folders(&self) -> WincentResult<QuickAccessLock> {
+        QuickAccessLock::lock_target(QuickAccessLockTarget::FrequentFolders)
     }
 
     /// Clears Quick Access items.

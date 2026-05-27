@@ -97,6 +97,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "remove" => cmd_remove(&manager, &args[1..]),
         "batch-add" => cmd_batch_add(&manager, &args[1..]),
         "batch-remove" => cmd_batch_remove(&manager, &args[1..]),
+        "lock" => cmd_lock(&manager, &args[1..]),
         "empty" => cmd_empty(&manager, &args[1..]),
         "clear-cache" => {
             manager.clear_cache();
@@ -164,6 +165,7 @@ Core:
   remove <recent|frequent> <path> [--deep-clean]
   batch-add [--refresh] <recent:path|frequent:path>...
   batch-remove [--deep-clean] <recent:path|frequent:path>...
+  lock [recent|frequent|all] [--cleanup-new-links]
   empty <recent|frequent|all> [--pinned] [--refresh]
   clear-cache
 
@@ -341,6 +343,66 @@ fn cmd_batch_remove(manager: &QuickAccessManager, args: &[String]) -> WincentRes
     let result = manager.remove_items_batch_with_options(&items, options);
     print_batch_result(result);
     Ok(())
+}
+
+fn cmd_lock(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    let cleanup = args.iter().any(|arg| arg == "--cleanup-new-links");
+    let target = args
+        .iter()
+        .find(|arg| arg.as_str() != "--cleanup-new-links")
+        .map(|arg| parse_lock_target(arg))
+        .transpose()?
+        .unwrap_or(QuickAccessLockTarget::All);
+    let lock = match target {
+        QuickAccessLockTarget::RecentFiles => manager.lock_recent_files()?,
+        QuickAccessLockTarget::FrequentFolders => manager.lock_frequent_folders()?,
+        QuickAccessLockTarget::All => manager.lock_quick_access()?,
+        _ => {
+            return Err(WincentError::InvalidArgument(
+                "unsupported lock target".to_string(),
+            ))
+        }
+    };
+    println!("locked Quick Access backing files");
+    println!("target: {:?}", lock.target());
+    println!("recent_folder: {}", lock.recent_folder().display());
+    println!("initial_lnk_paths: {}", lock.initial_lnk_paths().len());
+    println!("press Enter to unlock");
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line).map_err(WincentError::Io)?;
+
+    let options = if cleanup {
+        QuickAccessUnlockOptions::new().cleanup_new_recent_links()
+    } else {
+        QuickAccessUnlockOptions::new()
+    };
+    let report = lock.unlock(options)?;
+    println!("current_lnk_paths: {}", report.current_lnk_paths().len());
+    println!("new_lnk_paths: {}", report.new_lnk_paths().len());
+    println!("deleted_lnk_paths: {}", report.deleted_lnk_paths().len());
+    println!(
+        "failed_lnk_deletions: {}",
+        report.failed_lnk_deletions().len()
+    );
+    for path in report.deleted_lnk_paths() {
+        println!("  deleted {}", path.display());
+    }
+    for failure in report.failed_lnk_deletions() {
+        println!("  failed {}: {}", failure.path().display(), failure.error());
+    }
+    Ok(())
+}
+
+fn parse_lock_target(value: &str) -> WincentResult<QuickAccessLockTarget> {
+    match value {
+        "recent" | "recent-files" | "files" => Ok(QuickAccessLockTarget::RecentFiles),
+        "frequent" | "frequent-folders" | "folders" => Ok(QuickAccessLockTarget::FrequentFolders),
+        "all" => Ok(QuickAccessLockTarget::All),
+        other => Err(WincentError::InvalidArgument(format!(
+            "unknown lock target: {other}"
+        ))),
+    }
 }
 
 fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {

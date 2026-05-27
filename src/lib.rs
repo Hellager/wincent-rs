@@ -73,6 +73,7 @@ mod explorer_window;
 mod handle;
 pub mod manager;
 mod query;
+mod quick_access_lock;
 mod recent_links;
 mod retry;
 mod script_executor;
@@ -95,6 +96,10 @@ pub mod prelude {
     };
     pub use crate::manager::{
         AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
+    };
+    pub use crate::quick_access_lock::{
+        QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
+        QuickAccessUnlockReport,
     };
 
     #[cfg(feature = "visible")]
@@ -120,6 +125,10 @@ use crate::error::WincentError;
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::empty::EmptyOptions;
 pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions};
+pub use crate::quick_access_lock::{
+    QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
+    QuickAccessUnlockReport,
+};
 pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.

@@ -1,10 +1,9 @@
 //! Helpers for cleaning Windows Recent folder shortcuts.
 
 use crate::error::WincentError;
-use crate::utils::{get_windows_recent_folder, paths_equal};
+use crate::utils::{get_windows_recent_folder, os_str_to_wide_null, paths_equal};
 use crate::WincentResult;
 use std::fs;
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use windows::core::{Interface, PCWSTR};
@@ -53,6 +52,22 @@ where
     }
 
     Ok(deleted)
+}
+
+pub(crate) fn recent_lnk_paths(recent_folder: &Path) -> WincentResult<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+
+    for entry in fs::read_dir(recent_folder).map_err(WincentError::Io)? {
+        let entry = entry.map_err(WincentError::Io)?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(WincentError::Io)?;
+        if file_type.is_file() && is_lnk_file(&path) {
+            paths.push(path);
+        }
+    }
+
+    paths.sort();
+    Ok(paths)
 }
 
 fn resolve_lnk_target(lnk_path: &Path, timeout: Duration) -> Option<String> {
@@ -119,15 +134,11 @@ fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<String> {
     Ok(String::from_utf16_lossy(&target[..end]))
 }
 
-fn is_lnk_file(path: &Path) -> bool {
+pub(crate) fn is_lnk_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.eq_ignore_ascii_case("lnk"))
         .unwrap_or(false)
-}
-
-fn os_str_to_wide_null(value: &std::ffi::OsStr) -> Vec<u16> {
-    value.encode_wide().chain(std::iter::once(0)).collect()
 }
 
 #[cfg(test)]
@@ -172,6 +183,20 @@ mod tests {
         assert!(other.exists());
         assert!(broken.exists());
         assert!(non_lnk.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn recent_lnk_paths_returns_only_lnk_files_sorted() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let a = dir.path().join("a.lnk");
+        let b = dir.path().join("b.LNK");
+        let txt = dir.path().join("c.txt");
+        fs::write(&b, b"b").map_err(WincentError::Io)?;
+        fs::write(&txt, b"txt").map_err(WincentError::Io)?;
+        fs::write(&a, b"a").map_err(WincentError::Io)?;
+
+        assert_eq!(recent_lnk_paths(dir.path())?, vec![a, b]);
         Ok(())
     }
 }

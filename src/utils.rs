@@ -1,7 +1,8 @@
 use crate::{
     error::WincentError, script_executor::ScriptExecutor, script_strategy::PSScript, WincentResult,
 };
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 
@@ -50,6 +51,10 @@ pub(crate) fn paths_equal(path1: &str, path2: &str) -> bool {
     }
 
     normalize_path_for_comparison(path1) == normalize_path_for_comparison(path2)
+}
+
+pub(crate) fn os_str_to_wide_null(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
 }
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Com::CoTaskMemFree;
