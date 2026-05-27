@@ -7,7 +7,9 @@ use crate::{
         remove_from_frequent_folders_with_timeout, remove_from_recent_files_with_timeout,
         AddRecentFileOptions,
     },
+    manager::RemoveOptions,
     query,
+    recent_links::delete_recent_links_for_target,
     script_executor::QuickAccessDataFiles,
     utils::{paths_equal, refresh_explorer_window},
     QuickAccess, WincentResult,
@@ -238,10 +240,27 @@ fn add_item(path: &str, qa_type: QuickAccess, timeout: Duration) -> WincentResul
     }
 }
 
-fn remove_item(path: &str, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
+fn remove_item(
+    path: &str,
+    qa_type: QuickAccess,
+    options: RemoveOptions,
+    timeout: Duration,
+) -> WincentResult<()> {
     match qa_type {
-        QuickAccess::RecentFiles => remove_recent_file(path, timeout),
-        QuickAccess::FrequentFolders => remove_frequent_folder(path, timeout),
+        QuickAccess::RecentFiles => {
+            remove_recent_file(path, timeout)?;
+            if options.should_deep_clean_links_for(QuickAccess::RecentFiles) {
+                delete_recent_links_for_target(path, timeout)?;
+            }
+            Ok(())
+        }
+        QuickAccess::FrequentFolders => {
+            remove_frequent_folder(path, timeout)?;
+            if options.should_deep_clean_links_for(QuickAccess::FrequentFolders) {
+                delete_recent_links_for_target(path, timeout)?;
+            }
+            Ok(())
+        }
         unsupported => Err(unsupported_remove(unsupported)),
     }
 }
@@ -340,15 +359,25 @@ pub(crate) fn add_items_batch(
 /// `BatchOptions::force_update` is intentionally ignored for removals because
 /// the remove operations target shell items directly and should not delete
 /// Recent Files or Frequent Folders backing data as a broad refresh side effect.
+/// With [`RemoveOptions::deep_clean_recent_links`], a cleanup failure after a
+/// successful shell remove is reported as a per-item failure.
 pub(crate) fn remove_items_batch(
     items: &[(String, QuickAccess)],
+    timeout: Duration,
+) -> BatchResult {
+    remove_items_batch_with_options(items, RemoveOptions::new(), timeout)
+}
+
+pub(crate) fn remove_items_batch_with_options(
+    items: &[(String, QuickAccess)],
+    options: RemoveOptions,
     timeout: Duration,
 ) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
     for (path, qa_type) in items {
-        match remove_item(path, *qa_type, timeout) {
+        match remove_item(path, *qa_type, options, timeout) {
             Ok(()) => succeeded.push(path.clone()),
             Err(error) => failed.push(BatchFailure::new(path.clone(), error)),
         }
@@ -400,5 +429,15 @@ mod tests {
             BatchOptions::default(),
             true
         ));
+    }
+
+    #[test]
+    fn remove_deep_clean_applies_to_recent_files_and_frequent_folders() {
+        let options = RemoveOptions::new().deep_clean_recent_links();
+
+        assert!(options.should_deep_clean_links_for(QuickAccess::RecentFiles));
+        assert!(options.should_deep_clean_links_for(QuickAccess::FrequentFolders));
+        assert!(!options.should_deep_clean_links_for(QuickAccess::All));
+        assert!(!RemoveOptions::new().should_deep_clean_links_for(QuickAccess::RecentFiles));
     }
 }

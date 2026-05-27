@@ -12,6 +12,7 @@ use crate::{
         AddRecentFileOptions,
     },
     query,
+    recent_links::delete_recent_links_for_target,
     utils::paths_equal,
     QuickAccess, WincentResult,
 };
@@ -73,6 +74,50 @@ impl AddOptions {
     #[must_use]
     pub fn refresh_recent_files(self) -> Self {
         self.with_force_update(true)
+    }
+}
+
+/// Options for removing a single item from Quick Access.
+///
+/// By default removal only asks Explorer to remove the visible Quick Access
+/// item. Use [`RemoveOptions::deep_clean_recent_links`] when the matching
+/// shortcut in the Windows Recent folder should be deleted too.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemoveOptions {
+    deep_clean_recent_links: bool,
+}
+
+impl RemoveOptions {
+    /// Creates default remove options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether matching `.lnk` files in the Windows Recent folder are deleted.
+    #[must_use]
+    pub fn deep_clean_recent_links_enabled(&self) -> bool {
+        self.deep_clean_recent_links
+    }
+
+    /// Sets whether matching `.lnk` files in the Windows Recent folder are deleted.
+    #[must_use]
+    pub fn with_deep_clean_recent_links(mut self, deep_clean_recent_links: bool) -> Self {
+        self.deep_clean_recent_links = deep_clean_recent_links;
+        self
+    }
+
+    /// Deletes matching `.lnk` files from the Windows Recent folder after removing an item.
+    #[must_use]
+    pub fn deep_clean_recent_links(self) -> Self {
+        self.with_deep_clean_recent_links(true)
+    }
+
+    pub(crate) fn should_deep_clean_links_for(&self, qa_type: QuickAccess) -> bool {
+        matches!(
+            qa_type,
+            QuickAccess::RecentFiles | QuickAccess::FrequentFolders
+        ) && self.deep_clean_recent_links
     }
 }
 
@@ -463,16 +508,37 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn remove_item<P: AsRef<Path>>(&self, path: P, qa_type: QuickAccess) -> WincentResult<()> {
+        self.remove_item_with_options(path, qa_type, RemoveOptions::new())
+    }
+
+    /// Removes an item from Quick Access with additional cleanup options.
+    ///
+    /// [`RemoveOptions::deep_clean_recent_links`] applies to both
+    /// [`QuickAccess::RecentFiles`] and [`QuickAccess::FrequentFolders`].
+    pub fn remove_item_with_options<P: AsRef<Path>>(
+        &self,
+        path: P,
+        qa_type: QuickAccess,
+        options: RemoveOptions,
+    ) -> WincentResult<()> {
         let path = path_to_shell_string(path.as_ref())?;
 
         match qa_type {
             QuickAccess::RecentFiles => {
                 self.ensure_present(&path, qa_type)?;
-                remove_from_recent_files_with_timeout(&path, self.timeout)
+                remove_from_recent_files_with_timeout(&path, self.timeout)?;
+                if options.should_deep_clean_links_for(qa_type) {
+                    delete_recent_links_for_target(&path, self.timeout)?;
+                }
+                Ok(())
             }
             QuickAccess::FrequentFolders => {
                 self.ensure_present(&path, qa_type)?;
-                remove_from_frequent_folders_with_timeout(&path, self.timeout)
+                remove_from_frequent_folders_with_timeout(&path, self.timeout)?;
+                if options.should_deep_clean_links_for(qa_type) {
+                    delete_recent_links_for_target(&path, self.timeout)?;
+                }
+                Ok(())
             }
             unsupported => Err(unsupported_remove(unsupported)),
         }
@@ -536,6 +602,21 @@ impl QuickAccessManager {
     pub fn remove_items_batch(&self, items: &[QuickAccessItem]) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
         let result = batch::remove_items_batch(&items, self.timeout);
+        merge_batch_failures(result, failures)
+    }
+
+    /// Removes multiple items from Quick Access with additional cleanup options.
+    ///
+    /// If deep link cleanup is enabled and a matching `.lnk` deletion fails
+    /// after the shell remove succeeds, that item is reported in
+    /// [`BatchResult::failed`].
+    pub fn remove_items_batch_with_options(
+        &self,
+        items: &[QuickAccessItem],
+        options: RemoveOptions,
+    ) -> BatchResult {
+        let (items, failures) = self.convert_batch_items(items);
+        let result = batch::remove_items_batch_with_options(&items, options, self.timeout);
         merge_batch_failures(result, failures)
     }
 
@@ -838,6 +919,29 @@ mod tests {
     fn manager_new_uses_default_timeout() {
         let manager = QuickAccessManager::new();
         assert_eq!(manager.timeout(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn remove_options_default_disables_deep_clean() {
+        assert!(!RemoveOptions::new().deep_clean_recent_links_enabled());
+    }
+
+    #[test]
+    fn remove_options_builder_enables_deep_clean() {
+        let options = RemoveOptions::new().deep_clean_recent_links();
+        assert!(options.deep_clean_recent_links_enabled());
+        assert!(!options
+            .with_deep_clean_recent_links(false)
+            .deep_clean_recent_links_enabled());
+    }
+
+    #[test]
+    fn remove_options_deep_clean_targets_recent_files_and_frequent_folders() {
+        let options = RemoveOptions::new().deep_clean_recent_links();
+
+        assert!(options.should_deep_clean_links_for(QuickAccess::RecentFiles));
+        assert!(options.should_deep_clean_links_for(QuickAccess::FrequentFolders));
+        assert!(!options.should_deep_clean_links_for(QuickAccess::All));
     }
 
     #[test]

@@ -73,6 +73,7 @@ mod explorer_window;
 mod handle;
 pub mod manager;
 mod query;
+mod recent_links;
 mod retry;
 mod script_executor;
 mod script_storage;
@@ -93,7 +94,7 @@ pub mod prelude {
         PowerShellError, PowerShellErrorKind, PowerShellOperation, WincentError,
     };
     pub use crate::manager::{
-        AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder,
+        AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
     };
 
     #[cfg(feature = "visible")]
@@ -118,7 +119,7 @@ use crate::error::WincentError;
 
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::empty::EmptyOptions;
-pub use crate::manager::{AddOptions, QuickAccessItem};
+pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions};
 pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.

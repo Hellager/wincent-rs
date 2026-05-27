@@ -161,9 +161,9 @@ Core:
   check <recent|frequent|all> <path>
   contains <recent|frequent|all> <keyword>
   add <recent|frequent> <path> [--refresh]
-  remove <recent|frequent> <path>
+  remove <recent|frequent> <path> [--deep-clean]
   batch-add [--refresh] <recent:path|frequent:path>...
-  batch-remove <recent:path|frequent:path>...
+  batch-remove [--deep-clean] <recent:path|frequent:path>...
   empty <recent|frequent|all> [--pinned] [--refresh]
   clear-cache
 
@@ -293,9 +293,14 @@ fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
 }
 
 fn cmd_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 2, "remove <recent|frequent> <path>")?;
+    require_len(args, 2, "remove <recent|frequent> <path> [--deep-clean]")?;
     let qa_type = parse_category(&args[0], false)?;
-    manager.remove_item(&args[1], qa_type)?;
+    let mut options = RemoveOptions::new();
+    if args.iter().skip(2).any(|arg| arg == "--deep-clean") {
+        options = options.deep_clean_recent_links();
+    }
+
+    manager.remove_item_with_options(&args[1], qa_type, options)?;
     println!("removed {}", args[1]);
     Ok(())
 }
@@ -320,14 +325,20 @@ fn cmd_batch_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult
 }
 
 fn cmd_batch_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    if args.is_empty() {
+    let (deep_clean, item_args) = split_deep_clean(args);
+    if item_args.is_empty() {
         return Err(WincentError::InvalidArgument(
             "batch-remove requires at least one item".to_string(),
         ));
     }
 
-    let items = parse_batch_items(args)?;
-    let result = manager.remove_items_batch(&items);
+    let items = parse_batch_items(&item_args)?;
+    let options = if deep_clean {
+        RemoveOptions::new().deep_clean_recent_links()
+    } else {
+        RemoveOptions::new()
+    };
+    let result = manager.remove_items_batch_with_options(&items, options);
     print_batch_result(result);
     Ok(())
 }
@@ -753,6 +764,19 @@ fn split_refresh(args: &[String]) -> (bool, Vec<String>) {
         }
     }
     (refresh, rest)
+}
+
+fn split_deep_clean(args: &[String]) -> (bool, Vec<String>) {
+    let mut deep_clean = false;
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--deep-clean" {
+            deep_clean = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (deep_clean, rest)
 }
 
 fn print_batch_result(result: BatchResult) {
