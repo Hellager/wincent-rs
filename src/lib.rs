@@ -37,8 +37,8 @@
 //!         AddOptions::new().refresh_recent_files(),
 //!     )?;
 //!     
-//!     // Query all Quick Access items
-//!     let items = manager.get_items(QuickAccess::All)?;
+//!     // Query all Quick Access items as PathBuf values
+//!     let items = manager.get_item_paths(QuickAccess::All)?;
 //!     println!("Quick Access items: {:?}", items);
 //!     
 //!     Ok(())
@@ -92,7 +92,9 @@ pub mod prelude {
     pub use crate::error::{
         PowerShellError, PowerShellErrorKind, PowerShellOperation, WincentError,
     };
-    pub use crate::manager::{AddOptions, QuickAccessManager, QuickAccessManagerBuilder};
+    pub use crate::manager::{
+        AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder,
+    };
 
     #[cfg(feature = "visible")]
     pub use crate::visible::{
@@ -116,7 +118,7 @@ use crate::error::WincentError;
 
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::empty::EmptyOptions;
-pub use crate::manager::AddOptions;
+pub use crate::manager::{AddOptions, QuickAccessItem};
 pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.

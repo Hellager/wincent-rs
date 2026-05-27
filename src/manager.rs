@@ -3,7 +3,7 @@
 #[cfg(feature = "visible")]
 use crate::visible;
 use crate::{
-    batch::{self, BatchOptions, BatchResult},
+    batch::{self, BatchFailure, BatchOptions, BatchResult},
     empty::{self, EmptyOptions},
     error::WincentError,
     handle::{
@@ -15,7 +15,16 @@ use crate::{
     utils::paths_equal,
     QuickAccess, WincentResult,
 };
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+fn path_to_shell_string(path: &Path) -> WincentResult<String> {
+    if path.as_os_str().is_empty() {
+        return Err(WincentError::InvalidPath("Empty path provided".to_string()));
+    }
+
+    Ok(path.to_string_lossy().into_owned())
+}
 
 /// Options for adding a single item to Quick Access.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -51,6 +60,48 @@ impl AddOptions {
     #[must_use]
     pub fn refresh_recent_files(self) -> Self {
         self.with_force_update(true)
+    }
+}
+
+/// Item used by batch Quick Access operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuickAccessItem {
+    path: PathBuf,
+    qa_type: QuickAccess,
+}
+
+impl QuickAccessItem {
+    /// Creates a batch item for the given Quick Access category.
+    #[must_use]
+    pub fn new<P: Into<PathBuf>>(path: P, qa_type: QuickAccess) -> Self {
+        Self {
+            path: path.into(),
+            qa_type,
+        }
+    }
+
+    /// Creates a Recent Files batch item.
+    #[must_use]
+    pub fn recent_file<P: Into<PathBuf>>(path: P) -> Self {
+        Self::new(path, QuickAccess::RecentFiles)
+    }
+
+    /// Creates a Frequent Folders batch item.
+    #[must_use]
+    pub fn frequent_folder<P: Into<PathBuf>>(path: P) -> Self {
+        Self::new(path, QuickAccess::FrequentFolders)
+    }
+
+    /// Path to process.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Quick Access category for this item.
+    #[must_use]
+    pub fn qa_type(&self) -> QuickAccess {
+        self.qa_type
     }
 }
 
@@ -148,10 +199,27 @@ impl QuickAccessManager {
         }
     }
 
+    /// Retrieves Quick Access items as path buffers.
+    ///
+    /// The returned paths are Explorer's current path strings converted into
+    /// [`PathBuf`]. They may point to files or folders that no longer exist.
+    pub fn get_item_paths(&self, qa_type: QuickAccess) -> WincentResult<Vec<PathBuf>> {
+        Ok(self
+            .get_items(qa_type)?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect())
+    }
+
     /// Checks if an item exists in Quick Access using Windows path semantics.
-    pub fn check_item_exact(&self, path: &str, qa_type: QuickAccess) -> WincentResult<bool> {
+    pub fn check_item_exact<P: AsRef<Path>>(
+        &self,
+        path: P,
+        qa_type: QuickAccess,
+    ) -> WincentResult<bool> {
+        let path = path_to_shell_string(path.as_ref())?;
         let items = self.get_items(qa_type)?;
-        Ok(items.iter().any(|item| paths_equal(item, path)))
+        Ok(items.iter().any(|item| paths_equal(item, &path)))
     }
 
     /// Checks if any item in Quick Access contains the given keyword.
@@ -161,12 +229,14 @@ impl QuickAccessManager {
     }
 
     /// Adds an item to Recent Files or Frequent Folders.
-    pub fn add_item(
+    pub fn add_item<P: AsRef<Path>>(
         &self,
-        path: &str,
+        path: P,
         qa_type: QuickAccess,
         options: AddOptions,
     ) -> WincentResult<()> {
+        let path = path_to_shell_string(path.as_ref())?;
+
         if matches!(qa_type, QuickAccess::All) {
             return Err(WincentError::UnsupportedOperation(format!(
                 "Unsupported add operation for {:?}",
@@ -176,26 +246,28 @@ impl QuickAccessManager {
 
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
-        if self.check_item_exact(path, qa_type)? {
-            return Err(WincentError::AlreadyExists(path.to_string()));
+        if self.check_item_exact(&path, qa_type)? {
+            return Err(WincentError::AlreadyExists(path));
         }
 
         match qa_type {
             QuickAccess::RecentFiles => add_to_recent_files_with_options(
-                path,
+                &path,
                 AddRecentFileOptions {
                     force_update: options.force_update(),
                 },
             ),
             QuickAccess::FrequentFolders => {
-                add_to_frequent_folders_with_timeout(path, self.timeout)
+                add_to_frequent_folders_with_timeout(&path, self.timeout)
             }
             QuickAccess::All => unreachable!(),
         }
     }
 
     /// Removes an item from Recent Files or Frequent Folders.
-    pub fn remove_item(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+    pub fn remove_item<P: AsRef<Path>>(&self, path: P, qa_type: QuickAccess) -> WincentResult<()> {
+        let path = path_to_shell_string(path.as_ref())?;
+
         if matches!(qa_type, QuickAccess::All) {
             return Err(WincentError::UnsupportedOperation(format!(
                 "Unsupported remove operation for {:?}",
@@ -205,34 +277,35 @@ impl QuickAccessManager {
 
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
-        if !self.check_item_exact(path, qa_type)? {
-            return Err(WincentError::NotInRecent(path.to_string()));
+        if !self.check_item_exact(&path, qa_type)? {
+            return Err(WincentError::NotInRecent(path));
         }
 
         match qa_type {
-            QuickAccess::RecentFiles => remove_from_recent_files_with_timeout(path, self.timeout),
+            QuickAccess::RecentFiles => remove_from_recent_files_with_timeout(&path, self.timeout),
             QuickAccess::FrequentFolders => {
-                remove_from_frequent_folders_with_timeout(path, self.timeout)
+                remove_from_frequent_folders_with_timeout(&path, self.timeout)
             }
             QuickAccess::All => unreachable!(),
         }
     }
 
     /// Adds multiple items to Quick Access, collecting per-item failures.
-    pub fn add_items_batch(
-        &self,
-        items: &[(String, QuickAccess)],
-        options: BatchOptions,
-    ) -> BatchResult {
-        batch::add_items_batch(
-            items,
+    pub fn add_items_batch(&self, items: &[QuickAccessItem], options: BatchOptions) -> BatchResult {
+        let (items, failures) = self.convert_batch_items(items);
+        let result = batch::add_items_batch(
+            &items,
             BatchOptions::from_parts(self.timeout, options.force_update()),
-        )
+        );
+        merge_batch_failures(result, failures)
     }
 
     /// Removes multiple items from Quick Access, collecting per-item failures.
-    pub fn remove_items_batch(&self, items: &[(String, QuickAccess)]) -> BatchResult {
-        batch::remove_items_batch(items, BatchOptions::from_parts(self.timeout, false))
+    pub fn remove_items_batch(&self, items: &[QuickAccessItem]) -> BatchResult {
+        let (items, failures) = self.convert_batch_items(items);
+        let result =
+            batch::remove_items_batch(&items, BatchOptions::from_parts(self.timeout, false));
+        merge_batch_failures(result, failures)
     }
 
     /// Clears Quick Access items.
@@ -268,6 +341,38 @@ impl QuickAccessManager {
     pub fn hide_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
         self.set_visible(qa_type, false)
     }
+
+    fn convert_batch_items(
+        &self,
+        items: &[QuickAccessItem],
+    ) -> (Vec<(String, QuickAccess)>, Vec<BatchFailure>) {
+        let mut converted = Vec::new();
+        let mut failures = Vec::new();
+
+        for item in items {
+            match path_to_shell_string(item.path()) {
+                Ok(path) => converted.push((path, item.qa_type())),
+                Err(error) => {
+                    failures.push(BatchFailure::new(item.path().display().to_string(), error))
+                }
+            }
+        }
+
+        (converted, failures)
+    }
+}
+
+fn merge_batch_failures(
+    result: BatchResult,
+    mut initial_failures: Vec<BatchFailure>,
+) -> BatchResult {
+    if initial_failures.is_empty() {
+        return result;
+    }
+
+    let (succeeded, mut failed) = result.into_parts();
+    initial_failures.append(&mut failed);
+    BatchResult::new(succeeded, initial_failures)
 }
 
 #[cfg(feature = "destlist")]
@@ -344,5 +449,29 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, WincentError::UnsupportedOperation(_)));
+    }
+
+    #[test]
+    fn quick_access_item_constructors_preserve_path_and_type() {
+        let item = QuickAccessItem::recent_file(PathBuf::from("C:\\test.txt"));
+        assert_eq!(item.path(), Path::new("C:\\test.txt"));
+        assert_eq!(item.qa_type(), QuickAccess::RecentFiles);
+
+        let item = QuickAccessItem::frequent_folder("C:\\test");
+        assert_eq!(item.path(), Path::new("C:\\test"));
+        assert_eq!(item.qa_type(), QuickAccess::FrequentFolders);
+    }
+
+    #[test]
+    fn batch_items_report_invalid_empty_paths_per_item() {
+        let manager = QuickAccessManager::new();
+        let result =
+            manager.add_items_batch(&[QuickAccessItem::recent_file("")], BatchOptions::new());
+
+        assert_eq!(result.failed().len(), 1);
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::InvalidPath(_)
+        ));
     }
 }
