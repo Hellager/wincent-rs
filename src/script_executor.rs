@@ -71,7 +71,7 @@ impl ScriptExecutor {
                     error = error.os_error(os_error);
                 }
 
-                WincentError::PowerShellExecution(error.build())
+                WincentError::PowerShellExecution(Box::new(error.build()))
             })
     }
 
@@ -101,7 +101,7 @@ impl ScriptExecutor {
                 error = error.parameters(parameters);
             }
 
-            return Err(WincentError::PowerShellExecution(error.build()));
+            return Err(WincentError::PowerShellExecution(Box::new(error.build())));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);

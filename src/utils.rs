@@ -133,13 +133,7 @@ pub(crate) fn validate_path(path: &str, expected_type: PathType) -> WincentResul
 
 /// Get Windows Recent Folder path
 pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
-    let result = unsafe {
-        SHGetKnownFolderPath(
-            &FOLDERID_Recent,
-            KNOWN_FOLDER_FLAG(0x00),
-            None,
-        )
-    }?;
+    let result = unsafe { SHGetKnownFolderPath(&FOLDERID_Recent, KNOWN_FOLDER_FLAG(0x00), None) }?;
 
     let recent_folder = unsafe {
         let wide_str = OsString::from_wide(result.as_wide());

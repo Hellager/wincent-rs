@@ -121,11 +121,7 @@ mod tests {
     #[serial]
     fn test_cleanup_nonexistent_directory() -> WincentResult<()> {
         let non_existent_dir = PathBuf::from("non_existent_directory");
-        let result = cleanup_test_env(&non_existent_dir)?;
-        assert!(
-            result == (),
-            "Should succeed silently for non-existent directory"
-        );
+        cleanup_test_env(&non_existent_dir)?;
         Ok(())
     }
 }

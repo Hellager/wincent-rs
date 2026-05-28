@@ -293,16 +293,10 @@ fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
 }
 
 fn desktop_path() -> WincentResult<PathBuf> {
-    let path = unsafe {
-        SHGetKnownFolderPath(
-            &FOLDERID_Desktop,
-            KNOWN_FOLDER_FLAG(0x00),
-            None,
-        )
-    }
-    .map_err(|e| {
-        WincentError::SystemError(format!("Failed to get Desktop known folder path: {}", e))
-    })?;
+    let path = unsafe { SHGetKnownFolderPath(&FOLDERID_Desktop, KNOWN_FOLDER_FLAG(0x00), None) }
+        .map_err(|e| {
+            WincentError::SystemError(format!("Failed to get Desktop known folder path: {}", e))
+        })?;
 
     let desktop = unsafe {
         let wide = OsString::from_wide(path.as_wide());

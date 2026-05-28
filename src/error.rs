@@ -180,6 +180,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
 
+type PowerShellClassifier = dyn Fn(&str) -> Option<PowerShellErrorKind>;
+
 /// User-facing operation associated with a PowerShell failure.
 ///
 /// This describes the Quick Access operation that failed without exposing the
@@ -350,18 +352,7 @@ impl PowerShellErrorBuilder {
     }
 
     pub(crate) fn build(self) -> PowerShellError {
-        PowerShellError::new(
-            self.kind,
-            self.operation,
-            self.exit_code,
-            self.stdout,
-            self.stderr,
-            self.script_path,
-            self.parameters,
-            self.duration,
-            self.io_error,
-            self.os_error,
-        )
+        PowerShellError::new(self)
     }
 }
 
@@ -418,29 +409,18 @@ impl PowerShellError {
         PowerShellErrorBuilder::new(operation)
     }
 
-    pub(crate) fn new(
-        kind: PowerShellErrorKind,
-        operation: PowerShellOperation,
-        exit_code: Option<i32>,
-        stdout: String,
-        stderr: String,
-        script_path: PathBuf,
-        parameters: Option<String>,
-        duration: Option<Duration>,
-        io_error: Option<std::io::ErrorKind>,
-        os_error: Option<i32>,
-    ) -> Self {
+    pub(crate) fn new(builder: PowerShellErrorBuilder) -> Self {
         Self {
-            kind,
-            operation,
-            exit_code,
-            stdout,
-            stderr,
-            script_path,
-            parameters,
-            duration,
-            io_error,
-            os_error,
+            kind: builder.kind,
+            operation: builder.operation,
+            exit_code: builder.exit_code,
+            stdout: builder.stdout,
+            stderr: builder.stderr,
+            script_path: builder.script_path,
+            parameters: builder.parameters,
+            duration: builder.duration,
+            io_error: builder.io_error,
+            os_error: builder.os_error,
         }
     }
 
@@ -552,7 +532,7 @@ impl PowerShellError {
     /// ```
     pub fn classify_with(
         stderr: &str,
-        custom_classifier: Option<&dyn Fn(&str) -> Option<PowerShellErrorKind>>,
+        custom_classifier: Option<&PowerShellClassifier>,
     ) -> PowerShellErrorKind {
         // Try custom classifier first
         if let Some(classifier) = custom_classifier {
@@ -956,7 +936,7 @@ pub enum WincentError {
 
     /// A generated PowerShell script failed or could not be started.
     #[error("PowerShell execution failed: {0}")]
-    PowerShellExecution(PowerShellError),
+    PowerShellExecution(Box<PowerShellError>),
 
     /// A supplied path is empty, malformed, missing, or has the wrong type.
     #[error("Invalid path: {0}")]
@@ -1112,7 +1092,8 @@ mod tests {
         let invalid_path = WincentError::invalid_path("test/path", "test path");
         assert!(format!("{}", invalid_path).contains("test/path"));
 
-        let ps_error = WincentError::PowerShellExecution(ps_error_with_stderr("access denied"));
+        let ps_error =
+            WincentError::PowerShellExecution(Box::new(ps_error_with_stderr("access denied")));
         assert!(format!("{}", ps_error).contains("access denied"));
     }
 

@@ -212,7 +212,6 @@ impl QuickAccessManagerBuilder {
     /// # Panics
     ///
     /// Panics if `duration` is zero.
-    #[must_use]
     pub fn timeout(mut self, duration: Duration) -> Self {
         assert!(!duration.is_zero(), "Timeout must be greater than zero");
         self.timeout = duration;
@@ -283,7 +282,6 @@ impl Default for QuickAccessManager {
 
 impl QuickAccessManager {
     /// Creates a new builder for [`QuickAccessManager`].
-    #[must_use]
     pub fn builder() -> QuickAccessManagerBuilder {
         QuickAccessManagerBuilder::default()
     }

@@ -400,8 +400,8 @@ mod tests {
     #[test]
     fn regular_stream_allows_short_final_physical_sector() {
         let mut data = vec![0u8; 512];
-        data.extend(std::iter::repeat(1u8).take(512));
-        data.extend(std::iter::repeat(2u8).take(10));
+        data.extend(std::iter::repeat_n(1u8, 512));
+        data.extend(std::iter::repeat_n(2u8, 10));
         let fat = vec![1, END_OF_CHAIN];
 
         let stream = read_regular_stream_sized(&data, 512, &fat, 0, 522).unwrap();

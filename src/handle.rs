@@ -452,7 +452,7 @@ pub(crate) fn execute_script_with_validation(
             // Infer error kind from stderr content
             let kind = PowerShellError::infer_kind_from_stderr(&stderr);
 
-            Err(WincentError::PowerShellExecution(
+            Err(WincentError::PowerShellExecution(Box::new(
                 PowerShellError::builder(script.operation())
                     .kind(kind)
                     .exit_code(output.status.code())
@@ -462,7 +462,7 @@ pub(crate) fn execute_script_with_validation(
                     .parameters(path)
                     .duration(duration)
                     .build(),
-            ))
+            )))
         }
     }
 }
@@ -1074,6 +1074,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// - [`remove_from_frequent_folders()`] - Unpin a folder from Quick Access
 /// - [`crate::query::get_frequent_folders()`] - Query all frequent folders
 /// - [`crate::query::is_frequent_folder_exact()`] - Check if a folder is pinned
+///
 /// Unpins or removes a folder from Windows Quick Access (Frequent Folders).
 ///
 /// This function uses a **two-tier fallback strategy** to maximize compatibility
@@ -1188,6 +1189,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// - [`add_to_frequent_folders()`] - Pin a folder to Quick Access
 /// - [`crate::query::get_frequent_folders()`] - Query all frequent folders
 /// - [`crate::query::is_frequent_folder_exact()`] - Check if a folder is pinned
+///
 /// Adds a file to Windows Recent Files with a custom timeout.
 ///
 /// # Timeout Behavior
@@ -1214,6 +1216,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// * `path` - The full path to the file to be added
 /// * `_timeout` - Accepted for API consistency; currently has no effect
+///
 /// Removes a file from Windows Recent Files with a custom COM STA thread timeout.
 ///
 /// Identical to [`remove_from_recent_files()`] but allows specifying the timeout

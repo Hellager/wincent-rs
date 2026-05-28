@@ -371,7 +371,7 @@ mod tests {
         for delay in delays {
             let millis = delay.as_millis();
             assert!(
-                millis >= 150 && millis <= 250,
+                (150..=250).contains(&millis),
                 "Delay {} out of expected range",
                 millis
             );

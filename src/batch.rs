@@ -162,7 +162,7 @@ impl BatchResult {
 ///
 /// assert!(options.force_update());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BatchOptions {
     /// Refresh Recent Files display data once after successful Recent Files add operations.
     ///
@@ -174,14 +174,6 @@ pub struct BatchOptions {
     /// data files as a removal refresh would be more destructive than the
     /// requested per-item operation.
     force_update: bool,
-}
-
-impl Default for BatchOptions {
-    fn default() -> Self {
-        Self {
-            force_update: false,
-        }
-    }
 }
 
 impl BatchOptions {
