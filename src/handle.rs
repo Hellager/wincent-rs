@@ -28,7 +28,8 @@ use crate::{
 };
 use std::ffi::OsString;
 use std::os::windows::prelude::*;
-use windows::core::{Interface, VARIANT};
+use windows::core::Interface;
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations

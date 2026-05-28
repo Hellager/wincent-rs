@@ -4,12 +4,12 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
-use windows::core::{Interface, VARIANT};
-use windows::Win32::Foundation::HANDLE;
+use windows::core::Interface;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoTaskMemFree, IDispatch, IServiceProvider, CLSCTX_LOCAL_SERVER,
 };
 use windows::Win32::System::Ole::READYSTATE_COMPLETE;
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, IShellBrowser, IShellWindows, IWebBrowser2, SHGetKnownFolderPath,
     SID_STopLevelBrowser, ShellWindows, KNOWN_FOLDER_FLAG,
@@ -297,7 +297,7 @@ fn desktop_path() -> WincentResult<PathBuf> {
         SHGetKnownFolderPath(
             &FOLDERID_Desktop,
             KNOWN_FOLDER_FLAG(0x00),
-            HANDLE(std::ptr::null_mut()),
+            None,
         )
     }
     .map_err(|e| {

@@ -271,10 +271,8 @@ impl RetryPolicy {
 
         // Apply jitter if enabled
         let final_delay = if self.jitter {
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
             // Add ±25% random variation
-            let jitter_factor = rng.gen_range(0.75..=1.25);
+            let jitter_factor = rand::random_range(0.75..=1.25);
             delay * jitter_factor
         } else {
             delay

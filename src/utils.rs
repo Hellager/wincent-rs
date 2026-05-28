@@ -56,7 +56,6 @@ pub(crate) fn paths_equal(path1: &str, path2: &str) -> bool {
 pub(crate) fn os_str_to_wide_null(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(std::iter::once(0)).collect()
 }
-use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
 
@@ -138,7 +137,7 @@ pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
         SHGetKnownFolderPath(
             &FOLDERID_Recent,
             KNOWN_FOLDER_FLAG(0x00),
-            HANDLE(std::ptr::null_mut()),
+            None,
         )
     }?;
 

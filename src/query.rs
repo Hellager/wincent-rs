@@ -18,8 +18,8 @@
 
 use crate::com::{ComGuard, ComInitStatus};
 use crate::{error::WincentError, QuickAccess, WincentResult};
-use windows::core::VARIANT;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER};
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{Folder, FolderItem, FolderItems, IShellDispatch, Shell};
 
 /// Shell namespace GUID for frequent folders in Windows Quick Access
