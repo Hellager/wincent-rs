@@ -29,14 +29,14 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wincent = "0.2.2"
+wincent = "0.2.3"
 ```
 
 Optional features:
 
 ```toml
 [dependencies]
-wincent = { version = "0.2.2", features = ["visible", "destlist"] }
+wincent = { version = "0.2.3", features = ["visible", "destlist"] }
 ```
 
 ## Quick Start

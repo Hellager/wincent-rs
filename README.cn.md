@@ -29,14 +29,14 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 
 ```toml
 [dependencies]
-wincent = "0.2.2"
+wincent = "0.2.3"
 ```
 
 启用可选 feature：
 
 ```toml
 [dependencies]
-wincent = { version = "0.2.2", features = ["visible", "destlist"] }
+wincent = { version = "0.2.3", features = ["visible", "destlist"] }
 ```
 
 ## 快速开始
