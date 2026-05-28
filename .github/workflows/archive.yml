@@ -1,27 +1,58 @@
 name: Release Source Code
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to archive, for example v0.2.3"
+        required: true
+        type: string
   workflow_run:
     workflows: ["Build and Publish"]
     types:
       - completed
-    branches: [ "main" ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.tag }}"
+          } else {
+            $tag = git tag --points-at "${{ github.event.workflow_run.head_sha }}" |
+              Where-Object { $_ -like 'v*' } |
+              Select-Object -First 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "No v* tag found for this workflow run."
+          }
+
+          if (-not $tag.StartsWith("v")) {
+            throw "Release tag must start with 'v'."
+          }
+
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.workflow_run.head_branch }}
+          tag_name: ${{ steps.release_tag.outputs.tag }}
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
