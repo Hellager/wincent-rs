@@ -29,7 +29,7 @@ fn delete_recent_links_for_target_in<F>(
     mut resolver: F,
 ) -> WincentResult<Vec<PathBuf>>
 where
-    F: FnMut(&Path, Duration) -> Option<String>,
+    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
 {
     let mut deleted = Vec::new();
 
@@ -41,7 +41,7 @@ where
             continue;
         }
 
-        let Some(resolved_target) = resolver(&path, timeout) else {
+        let Some(resolved_target) = resolver(&path, timeout)? else {
             continue;
         };
 
@@ -70,12 +70,12 @@ pub(crate) fn recent_lnk_paths(recent_folder: &Path) -> WincentResult<Vec<PathBu
     Ok(paths)
 }
 
-fn resolve_lnk_target(lnk_path: &Path, timeout: Duration) -> Option<String> {
+fn resolve_lnk_target(lnk_path: &Path, timeout: Duration) -> WincentResult<Option<String>> {
     let path = lnk_path.to_path_buf();
-    crate::com_thread::run_on_sta_thread(move || resolve_lnk_target_on_sta(&path), timeout).ok()
+    crate::com_thread::run_on_sta_thread(move || resolve_lnk_target_on_sta(&path), timeout)
 }
 
-fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<String> {
+fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<Option<String>> {
     let mut link_path = os_str_to_wide_null(lnk_path.as_os_str());
 
     let shell_link: IShellLinkW = unsafe {
@@ -87,37 +87,31 @@ fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<String> {
         .map_err(|err| WincentError::SystemError(format!("Failed to cast ShellLink: {err}")))?;
 
     unsafe {
-        persist_file
+        if persist_file
             .Load(PCWSTR::from_raw(link_path.as_mut_ptr()), STGM_READ)
-            .map_err(|err| {
-                WincentError::SystemError(format!(
-                    "Failed to load shortcut '{}': {err}",
-                    lnk_path.display()
-                ))
-            })?;
-        shell_link
+            .is_err()
+        {
+            return Ok(None);
+        }
+        if shell_link
             .Resolve(
                 HWND(std::ptr::null_mut()),
                 (SLR_NO_UI | SLR_NOUPDATE).0 as u32,
             )
-            .map_err(|err| {
-                WincentError::SystemError(format!(
-                    "Failed to resolve shortcut '{}': {err}",
-                    lnk_path.display()
-                ))
-            })?;
+            .is_err()
+        {
+            return Ok(None);
+        }
     }
 
     let mut target = vec![0u16; 32768];
     unsafe {
-        shell_link
+        if shell_link
             .GetPath(&mut target, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32)
-            .map_err(|err| {
-                WincentError::SystemError(format!(
-                    "Failed to read shortcut target '{}': {err}",
-                    lnk_path.display()
-                ))
-            })?;
+            .is_err()
+        {
+            return Ok(None);
+        }
     }
 
     let end = target
@@ -125,13 +119,10 @@ fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<String> {
         .position(|&ch| ch == 0)
         .unwrap_or(target.len());
     if end == 0 {
-        return Err(WincentError::SystemError(format!(
-            "Shortcut '{}' does not contain a filesystem target path",
-            lnk_path.display()
-        )));
+        return Ok(None);
     }
 
-    Ok(String::from_utf16_lossy(&target[..end]))
+    Ok(Some(String::from_utf16_lossy(&target[..end])))
 }
 
 pub(crate) fn is_lnk_file(path: &Path) -> bool {
@@ -175,7 +166,7 @@ mod tests {
             dir.path(),
             "c:/work/report.docx",
             Duration::from_secs(1),
-            |path, _| targets.get(path).cloned(),
+            |path, _| Ok(targets.get(path).cloned()),
         )?;
 
         assert_eq!(deleted, vec![matching.clone()]);
@@ -184,6 +175,35 @@ mod tests {
         assert!(broken.exists());
         assert!(non_lnk.exists());
         Ok(())
+    }
+
+    #[test]
+    fn deep_clean_propagates_resolver_errors() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let link = dir.path().join("matching.lnk");
+        fs::write(&link, b"matching").map_err(WincentError::Io)?;
+
+        let error = delete_recent_links_for_target_in(
+            dir.path(),
+            "c:/work/report.docx",
+            Duration::from_secs(1),
+            |_, _| Err(WincentError::Timeout("resolver timed out".to_string())),
+        )
+        .unwrap_err();
+
+        assert!(link.exists());
+        assert!(matches!(
+            error,
+            WincentError::Timeout(message) if message == "resolver timed out"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_lnk_target_preserves_sta_thread_errors() {
+        let error = resolve_lnk_target(Path::new("missing.lnk"), Duration::ZERO).unwrap_err();
+
+        assert!(matches!(error, WincentError::InvalidArgument(_)));
     }
 
     #[test]
