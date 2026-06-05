@@ -70,7 +70,10 @@ pub(crate) fn recent_lnk_paths(recent_folder: &Path) -> WincentResult<Vec<PathBu
     Ok(paths)
 }
 
-fn resolve_lnk_target(lnk_path: &Path, timeout: Duration) -> WincentResult<Option<String>> {
+pub(crate) fn resolve_lnk_target(
+    lnk_path: &Path,
+    timeout: Duration,
+) -> WincentResult<Option<String>> {
     let path = lnk_path.to_path_buf();
     crate::com_thread::run_on_sta_thread(move || resolve_lnk_target_on_sta(&path), timeout)
 }

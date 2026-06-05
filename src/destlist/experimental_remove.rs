@@ -21,13 +21,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::error::WincentError;
+use crate::recent_links::{is_lnk_file, resolve_lnk_target};
 use crate::utils::{get_windows_recent_folder, paths_equal};
 use crate::WincentResult;
 
 use super::parser::{
-    frequent_folders_dest_path, parse_file, parse_lnk_local_path, recent_files_dest_path,
-    AutomaticDestinations, DestListEntry,
+    frequent_folders_dest_path, parse_file, recent_files_dest_path, AutomaticDestinations,
+    DestListEntry,
 };
+
+const SHORTCUT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+const REBUILD_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Explorer automatic destination file family to modify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +105,9 @@ impl ExperimentalRemoveOptions {
 /// A successful function call means the delete-and-rebuild sequence completed
 /// without an immediate API error. Check [`ExperimentalRemoveReport::success`]
 /// to learn whether the requested entries were absent after Explorer rebuilt
-/// the backing file.
+/// the backing file. Failures after the backing file was deleted are captured in
+/// [`ExperimentalRemoveReport::post_delete_error`] so callers can inspect the
+/// operation's partial progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExperimentalRemoveReport {
     /// Automatic destination kind that was processed.
@@ -126,6 +132,8 @@ pub struct ExperimentalRemoveReport {
     rebuild_parse_elapsed: Option<Duration>,
     /// Last parse error observed while waiting for the rebuilt file.
     rebuild_parse_error: Option<String>,
+    /// Error observed after the backing destination file was deleted.
+    post_delete_error: Option<String>,
     /// Matching paths still present after Explorer rebuilt the file.
     remaining_paths_after_rebuild: Vec<String>,
     /// Whether all requested entries were absent after rebuild.
@@ -199,6 +207,18 @@ impl ExperimentalRemoveReport {
         self.rebuild_parse_error.as_deref()
     }
 
+    /// Error observed after the backing destination file was deleted.
+    ///
+    /// This is `Some` when shortcut cleanup, Explorer refresh, or rebuild
+    /// checking failed after the operation had already deleted the backing file.
+    /// A value of `None` does not guarantee success: `rebuilt() == false` with
+    /// `post_delete_error() == None` means Explorer did not rebuild the backing
+    /// file before the polling timeout.
+    #[must_use]
+    pub fn post_delete_error(&self) -> Option<&str> {
+        self.post_delete_error.as_deref()
+    }
+
     /// Matching paths still present after Explorer rebuilt the file.
     #[must_use]
     pub fn remaining_paths_after_rebuild(&self) -> &[String] {
@@ -229,10 +249,18 @@ impl ExperimentalRemoveReport {
 /// # Errors
 ///
 /// Returns [`WincentError::InvalidArgument`] when `target_paths` is empty.
-/// Returns I/O errors when the backing destination file or matching `.lnk`
-/// files cannot be removed. Returns DestList parse errors if the backing file
-/// cannot be parsed before deletion or while waiting for Explorer to rebuild it.
-/// Refreshing Explorer windows may also return Shell/PowerShell errors.
+/// Returns I/O errors when the backing destination file cannot be removed.
+/// Returns DestList parse errors if the backing file cannot be parsed before
+/// deletion. After the backing file is deleted, shortcut cleanup, Explorer
+/// refresh, and rebuild-check errors are captured in the returned report's
+/// [`ExperimentalRemoveReport::post_delete_error`] instead of being returned as
+/// `Err`.
+///
+/// `post_delete_error() == None` and `rebuilt() == false` means Explorer did
+/// not rebuild the backing file before the polling timeout. It is distinct from
+/// a post-delete operation error, and callers should inspect `success()`,
+/// `rebuilt()`, `post_delete_error()`, and `remaining_paths_after_rebuild()`
+/// together.
 ///
 /// # Examples
 ///
@@ -263,6 +291,24 @@ pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     target_paths: &[P],
     options: ExperimentalRemoveOptions,
 ) -> WincentResult<ExperimentalRemoveReport> {
+    experimental_remove_entry_paths_by_rebuild_with_resolver(
+        kind,
+        target_paths,
+        options,
+        resolve_lnk_target,
+    )
+}
+
+fn experimental_remove_entry_paths_by_rebuild_with_resolver<P, F>(
+    kind: AutomaticDestinationsKind,
+    target_paths: &[P],
+    options: ExperimentalRemoveOptions,
+    resolver: F,
+) -> WincentResult<ExperimentalRemoveReport>
+where
+    P: AsRef<Path>,
+    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+{
     if target_paths.is_empty() {
         return Err(WincentError::InvalidArgument(
             "target_paths must not be empty".to_string(),
@@ -280,55 +326,22 @@ pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     let matching_paths_before = matching_dest_paths(before.dest_list().entries(), &requested_paths);
 
     fs::remove_file(&dest_path).map_err(WincentError::Io)?;
-    let dest_deleted = true;
 
-    let deleted_links = delete_matching_recent_links(&recent_folder, &requested_paths)?;
-    let missing_lnk_target_paths = requested_paths
-        .iter()
-        .filter(|target| {
-            !deleted_links
-                .iter()
-                .any(|link| paths_equal(&link.target_path, target))
-        })
-        .cloned()
-        .collect();
-    let deleted_lnk_paths = deleted_links
-        .iter()
-        .map(|link| link.lnk_path.clone())
-        .collect();
-
-    crate::utils::refresh_explorer_window()?;
-    thread::sleep(options.rebuild_delay());
-
-    let check = wait_for_rebuilt_dest(&dest_path, &requested_paths, Duration::from_secs(5))?;
-    let (rebuilt, rebuild_parse_elapsed, rebuild_parse_error, remaining_paths_after_rebuild) =
-        match check.rebuilt {
-            Some(rebuilt) => (
-                true,
-                Some(rebuilt.elapsed),
-                check.last_parse_error,
-                rebuilt.remaining_paths,
-            ),
-            None => (false, None, check.last_parse_error, Vec::new()),
-        };
-
-    let success = rebuilt && remaining_paths_after_rebuild.is_empty();
-
-    Ok(ExperimentalRemoveReport {
+    let base = ExperimentalRemoveBase {
         kind,
         recent_folder,
         dest_path,
         requested_paths,
         matching_paths_before,
-        deleted_lnk_paths,
-        missing_lnk_target_paths,
-        dest_deleted,
-        rebuilt,
-        rebuild_parse_elapsed,
-        rebuild_parse_error,
-        remaining_paths_after_rebuild,
-        success,
-    })
+    };
+
+    Ok(complete_after_destination_deleted(
+        base,
+        options,
+        resolver,
+        crate::utils::refresh_explorer_window,
+        wait_for_rebuilt_dest,
+    ))
 }
 
 /// Variant that accepts parsed DestList entries directly.
@@ -350,6 +363,135 @@ pub fn experimental_remove_entries_by_rebuild(
         .map(|entry| PathBuf::from(entry.path()))
         .collect();
     experimental_remove_entry_paths_by_rebuild(kind, &paths, options)
+}
+
+#[derive(Debug)]
+struct ExperimentalRemoveBase {
+    kind: AutomaticDestinationsKind,
+    recent_folder: PathBuf,
+    dest_path: PathBuf,
+    requested_paths: Vec<String>,
+    matching_paths_before: Vec<String>,
+}
+
+impl ExperimentalRemoveBase {
+    fn report(
+        self,
+        deleted_lnk_paths: Vec<PathBuf>,
+        missing_lnk_target_paths: Vec<String>,
+        rebuilt: bool,
+        rebuild_parse_elapsed: Option<Duration>,
+        rebuild_parse_error: Option<String>,
+        post_delete_error: Option<String>,
+        remaining_paths_after_rebuild: Vec<String>,
+    ) -> ExperimentalRemoveReport {
+        let success =
+            post_delete_error.is_none() && rebuilt && remaining_paths_after_rebuild.is_empty();
+
+        ExperimentalRemoveReport {
+            kind: self.kind,
+            recent_folder: self.recent_folder,
+            dest_path: self.dest_path,
+            requested_paths: self.requested_paths,
+            matching_paths_before: self.matching_paths_before,
+            deleted_lnk_paths,
+            missing_lnk_target_paths,
+            dest_deleted: true,
+            rebuilt,
+            rebuild_parse_elapsed,
+            rebuild_parse_error,
+            post_delete_error,
+            remaining_paths_after_rebuild,
+            success,
+        }
+    }
+}
+
+fn complete_after_destination_deleted<FResolve, FRefresh, FWait>(
+    base: ExperimentalRemoveBase,
+    options: ExperimentalRemoveOptions,
+    resolver: FResolve,
+    refresh_explorer: FRefresh,
+    wait_for_rebuild: FWait,
+) -> ExperimentalRemoveReport
+where
+    FResolve: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+    FRefresh: FnOnce() -> WincentResult<()>,
+    FWait: FnOnce(&Path, &[String], Duration) -> WincentResult<RebuiltDestWait>,
+{
+    let deleted_links = match delete_matching_recent_links(
+        &base.recent_folder,
+        &base.requested_paths,
+        SHORTCUT_RESOLVE_TIMEOUT,
+        resolver,
+    ) {
+        Ok(deleted_links) => deleted_links,
+        Err(error) => {
+            return base.report(
+                deleted_lnk_paths(&error.deleted),
+                Vec::new(),
+                false,
+                None,
+                None,
+                Some(error.source.to_string()),
+                Vec::new(),
+            );
+        }
+    };
+
+    let missing_lnk_target_paths = missing_lnk_target_paths(&base.requested_paths, &deleted_links);
+    let deleted_lnk_paths = deleted_lnk_paths(&deleted_links);
+
+    if let Err(error) = refresh_explorer() {
+        return base.report(
+            deleted_lnk_paths,
+            missing_lnk_target_paths,
+            false,
+            None,
+            None,
+            Some(error.to_string()),
+            Vec::new(),
+        );
+    }
+
+    thread::sleep(options.rebuild_delay());
+
+    let check = match wait_for_rebuild(&base.dest_path, &base.requested_paths, REBUILD_POLL_TIMEOUT)
+    {
+        Ok(check) => check,
+        Err(error) => {
+            return base.report(
+                deleted_lnk_paths,
+                missing_lnk_target_paths,
+                false,
+                None,
+                None,
+                Some(error.to_string()),
+                Vec::new(),
+            );
+        }
+    };
+
+    match check.rebuilt {
+        Some(rebuilt) => base.report(
+            deleted_lnk_paths,
+            missing_lnk_target_paths,
+            true,
+            Some(rebuilt.elapsed),
+            check.last_parse_error,
+            None,
+            rebuilt.remaining_paths,
+        ),
+        None => base.report(
+            deleted_lnk_paths,
+            missing_lnk_target_paths,
+            false,
+            None,
+            check.last_parse_error,
+            None,
+            Vec::new(),
+        ),
+    }
 }
 
 fn parse_file_with_retries(path: &Path, timeout: Duration) -> WincentResult<AutomaticDestinations> {
@@ -439,33 +581,106 @@ fn matching_dest_paths(entries: &[DestListEntry], target_paths: &[String]) -> Ve
         .collect()
 }
 
-fn delete_matching_recent_links(
+fn missing_lnk_target_paths(
+    requested_paths: &[String],
+    deleted_links: &[DeletedRecentLink],
+) -> Vec<String> {
+    requested_paths
+        .iter()
+        .filter(|target| {
+            !deleted_links
+                .iter()
+                .any(|link| paths_equal(&link.target_path, target))
+        })
+        .cloned()
+        .collect()
+}
+
+fn deleted_lnk_paths(deleted_links: &[DeletedRecentLink]) -> Vec<PathBuf> {
+    deleted_links
+        .iter()
+        .map(|link| link.lnk_path.clone())
+        .collect()
+}
+
+fn delete_matching_recent_links<F>(
     recent_folder: &Path,
     target_paths: &[String],
-) -> WincentResult<Vec<DeletedRecentLink>> {
+    timeout: Duration,
+    resolver: F,
+) -> Result<Vec<DeletedRecentLink>, RecentLinkCleanupError>
+where
+    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+{
+    delete_matching_recent_links_with_remove(
+        recent_folder,
+        target_paths,
+        timeout,
+        resolver,
+        |path| fs::remove_file(path).map_err(WincentError::Io),
+    )
+}
+
+fn delete_matching_recent_links_with_remove<FResolve, FRemove>(
+    recent_folder: &Path,
+    target_paths: &[String],
+    timeout: Duration,
+    mut resolver: FResolve,
+    mut remove_file: FRemove,
+) -> Result<Vec<DeletedRecentLink>, RecentLinkCleanupError>
+where
+    FResolve: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+    FRemove: FnMut(&Path) -> WincentResult<()>,
+{
     let mut deleted = Vec::new();
 
-    for entry in fs::read_dir(recent_folder).map_err(WincentError::Io)? {
-        let entry = entry.map_err(WincentError::Io)?;
+    let entries = match fs::read_dir(recent_folder).map_err(WincentError::Io) {
+        Ok(entries) => entries,
+        Err(source) => {
+            return Err(RecentLinkCleanupError { deleted, source });
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry.map_err(WincentError::Io) {
+            Ok(entry) => entry,
+            Err(source) => {
+                return Err(RecentLinkCleanupError { deleted, source });
+            }
+        };
         let path = entry.path();
-        if !is_lnk_file(&path) {
+        let file_type = match entry.file_type().map_err(WincentError::Io) {
+            Ok(file_type) => file_type,
+            Err(source) => {
+                return Err(RecentLinkCleanupError { deleted, source });
+            }
+        };
+        if !file_type.is_file() || !is_lnk_file(&path) {
             continue;
         }
 
-        let Some(target) = lnk_target_path(&path) else {
-            continue;
+        let target = match resolver(&path, timeout) {
+            Ok(Some(target)) => target,
+            Ok(None) => continue,
+            Err(source) => {
+                return Err(RecentLinkCleanupError { deleted, source });
+            }
         };
 
-        if target_paths
+        if !target_paths
             .iter()
             .any(|requested| paths_equal(&target, requested))
         {
-            fs::remove_file(&path).map_err(WincentError::Io)?;
-            deleted.push(DeletedRecentLink {
-                lnk_path: path,
-                target_path: target,
-            });
+            continue;
         }
+
+        if let Err(source) = remove_file(&path) {
+            return Err(RecentLinkCleanupError { deleted, source });
+        }
+        deleted.push(DeletedRecentLink {
+            lnk_path: path,
+            target_path: target,
+        });
     }
 
     Ok(deleted)
@@ -477,21 +692,26 @@ struct DeletedRecentLink {
     target_path: String,
 }
 
-fn lnk_target_path(lnk_path: &Path) -> Option<String> {
-    let data = fs::read(lnk_path).ok()?;
-    parse_lnk_local_path(&data)
-}
-
-fn is_lnk_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.eq_ignore_ascii_case("lnk"))
-        .unwrap_or(false)
+#[derive(Debug)]
+struct RecentLinkCleanupError {
+    deleted: Vec<DeletedRecentLink>,
+    source: WincentError,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    fn report_base_for_tests(recent_folder: &Path) -> ExperimentalRemoveBase {
+        ExperimentalRemoveBase {
+            kind: AutomaticDestinationsKind::RecentFiles,
+            recent_folder: recent_folder.to_path_buf(),
+            dest_path: recent_folder.join("automaticDestinations-ms"),
+            requested_paths: vec!["C:\\Work\\Report.docx".to_string()],
+            matching_paths_before: vec!["C:\\Work\\Report.docx".to_string()],
+        }
+    }
 
     fn parse_recent_files_dest_for_destructive_test(
         dest_path: &Path,
@@ -536,6 +756,177 @@ mod tests {
     }
 
     #[test]
+    fn post_delete_refresh_error_returns_unsuccessful_report() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let matching = dir.path().join("matching.lnk");
+        let other = dir.path().join("other.lnk");
+        fs::write(&matching, b"matching").map_err(WincentError::Io)?;
+        fs::write(&other, b"other").map_err(WincentError::Io)?;
+
+        let matching_for_resolver = matching.clone();
+        let report = complete_after_destination_deleted(
+            report_base_for_tests(dir.path()),
+            ExperimentalRemoveOptions::new().with_rebuild_delay(Duration::ZERO),
+            move |path, timeout| {
+                assert_eq!(timeout, SHORTCUT_RESOLVE_TIMEOUT);
+                if path == matching_for_resolver {
+                    Ok(Some("c:/work/report.docx".to_string()))
+                } else {
+                    Ok(Some("C:\\Work\\Other.docx".to_string()))
+                }
+            },
+            || Err(WincentError::SystemError("refresh failed".to_string())),
+            |_, _, _| panic!("wait should not run after refresh failure"),
+        );
+
+        assert!(report.dest_deleted());
+        assert!(!report.success());
+        assert!(!report.rebuilt());
+        assert_eq!(
+            report.post_delete_error(),
+            Some("System error: refresh failed")
+        );
+        assert_eq!(report.deleted_lnk_paths(), &[matching.clone()]);
+        assert!(report.missing_lnk_target_paths().is_empty());
+        assert!(!matching.exists());
+        assert!(other.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn post_delete_resolver_error_returns_unsuccessful_report() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let shortcut = dir.path().join("shortcut.lnk");
+        fs::write(&shortcut, b"shortcut").map_err(WincentError::Io)?;
+
+        let report = complete_after_destination_deleted(
+            report_base_for_tests(dir.path()),
+            ExperimentalRemoveOptions::new().with_rebuild_delay(Duration::ZERO),
+            |_, _| Err(WincentError::Timeout("resolver timed out".to_string())),
+            || panic!("refresh should not run after resolver failure"),
+            |_, _, _| panic!("wait should not run after resolver failure"),
+        );
+
+        assert!(report.dest_deleted());
+        assert!(!report.success());
+        assert_eq!(
+            report.post_delete_error(),
+            Some("Operation timed out: resolver timed out")
+        );
+        assert!(report.deleted_lnk_paths().is_empty());
+        assert!(report.missing_lnk_target_paths().is_empty());
+        assert!(shortcut.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn rebuild_timeout_without_operation_error_has_no_post_delete_error() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+
+        let report = complete_after_destination_deleted(
+            report_base_for_tests(dir.path()),
+            ExperimentalRemoveOptions::new().with_rebuild_delay(Duration::ZERO),
+            |_, _| Ok(None),
+            || Ok(()),
+            |_, _, timeout| {
+                assert_eq!(timeout, REBUILD_POLL_TIMEOUT);
+                Ok(RebuiltDestWait {
+                    rebuilt: None,
+                    last_parse_error: Some("still rebuilding".to_string()),
+                })
+            },
+        );
+
+        assert!(report.dest_deleted());
+        assert!(!report.success());
+        assert!(!report.rebuilt());
+        assert_eq!(report.post_delete_error(), None);
+        assert_eq!(report.rebuild_parse_error(), Some("still rebuilding"));
+        assert!(report.remaining_paths_after_rebuild().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn delete_matching_recent_links_deletes_only_matching_shortcuts() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let matching = dir.path().join("matching.lnk");
+        let other = dir.path().join("other.lnk");
+        let non_lnk = dir.path().join("matching.txt");
+        fs::write(&matching, b"matching").map_err(WincentError::Io)?;
+        fs::write(&other, b"other").map_err(WincentError::Io)?;
+        fs::write(&non_lnk, b"not a shortcut").map_err(WincentError::Io)?;
+
+        let matching_for_resolver = matching.clone();
+        let deleted = delete_matching_recent_links(
+            dir.path(),
+            &["c:/work/report.docx".to_string()],
+            Duration::from_secs(7),
+            move |path, timeout| {
+                assert_eq!(timeout, Duration::from_secs(7));
+                if path == matching_for_resolver {
+                    Ok(Some("C:\\Work\\Report.docx".to_string()))
+                } else {
+                    Ok(Some("C:\\Work\\Other.docx".to_string()))
+                }
+            },
+        )
+        .map_err(|error| error.source)?;
+
+        assert_eq!(deleted_lnk_paths(&deleted), vec![matching.clone()]);
+        assert!(!matching.exists());
+        assert!(other.exists());
+        assert!(non_lnk.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn delete_matching_recent_links_skips_unresolved_shortcuts() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let broken = dir.path().join("broken.lnk");
+        fs::write(&broken, b"broken").map_err(WincentError::Io)?;
+
+        let deleted = delete_matching_recent_links(
+            dir.path(),
+            &["C:\\Work\\Report.docx".to_string()],
+            Duration::from_secs(7),
+            |_, _| Ok(None),
+        )
+        .map_err(|error| error.source)?;
+
+        assert!(deleted.is_empty());
+        assert!(broken.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn delete_matching_recent_links_reports_remove_file_errors() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let shortcut = dir.path().join("shortcut.lnk");
+        fs::write(&shortcut, b"shortcut").map_err(WincentError::Io)?;
+
+        let error = delete_matching_recent_links_with_remove(
+            dir.path(),
+            &["C:\\Work\\Report.docx".to_string()],
+            Duration::from_secs(7),
+            |_, _| Ok(Some("C:\\Work\\Report.docx".to_string())),
+            |_| {
+                Err(WincentError::SystemError(
+                    "shortcut delete failed".to_string(),
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.deleted.is_empty());
+        assert_eq!(
+            error.source.to_string(),
+            "System error: shortcut delete failed"
+        );
+        assert!(shortcut.exists());
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "Destructive integration test; deletes a real Recent .lnk and the Explorer recent-files automaticDestinations file"]
     fn experimental_remove_last_recent_file_entry_rebuilds_without_entry() -> WincentResult<()> {
         let dest_path = recent_files_dest_path()?;
@@ -564,6 +955,7 @@ mod tests {
         println!("rebuilt={}", report.rebuilt());
         println!("rebuild_parse_elapsed={:?}", report.rebuild_parse_elapsed());
         println!("rebuild_parse_error={:?}", report.rebuild_parse_error());
+        println!("post_delete_error={:?}", report.post_delete_error());
         println!(
             "remaining_paths_after_rebuild={:?}",
             report.remaining_paths_after_rebuild()
