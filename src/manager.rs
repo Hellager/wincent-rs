@@ -14,7 +14,7 @@ use crate::{
     query,
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
     recent_links::delete_recent_links_for_target,
-    utils::paths_equal,
+    utils::{paths_equal, validate_path, PathType},
     QuickAccess, WincentResult,
 };
 use std::path::{Path, PathBuf};
@@ -466,6 +466,7 @@ impl QuickAccessManager {
 
         match qa_type {
             QuickAccess::RecentFiles => {
+                validate_path(&path, PathType::File)?;
                 self.ensure_not_present(&path, qa_type)?;
                 add_to_recent_files_with_options(
                     &path,
@@ -475,6 +476,7 @@ impl QuickAccessManager {
                 )
             }
             QuickAccess::FrequentFolders => {
+                validate_path(&path, PathType::Directory)?;
                 self.ensure_not_present(&path, qa_type)?;
                 add_to_frequent_folders_with_timeout(&path, self.timeout)
             }
@@ -524,6 +526,7 @@ impl QuickAccessManager {
 
         match qa_type {
             QuickAccess::RecentFiles => {
+                validate_path(&path, PathType::File)?;
                 self.ensure_present(&path, qa_type)?;
                 remove_from_recent_files_with_timeout(&path, self.timeout)?;
                 if options.should_deep_clean_links_for(qa_type) {
@@ -532,6 +535,7 @@ impl QuickAccessManager {
                 Ok(())
             }
             QuickAccess::FrequentFolders => {
+                validate_path(&path, PathType::Directory)?;
                 self.ensure_present(&path, qa_type)?;
                 remove_from_frequent_folders_with_timeout(&path, self.timeout)?;
                 if options.should_deep_clean_links_for(qa_type) {
@@ -945,6 +949,7 @@ impl QuickAccessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn builder_default_timeout() {
@@ -1025,6 +1030,58 @@ mod tests {
     }
 
     #[test]
+    fn add_recent_file_validates_path_before_membership_check() {
+        let manager = QuickAccessManager::new();
+        let missing = unique_temp_path("missing-add-recent.txt");
+        let error = manager
+            .add_item(&missing, QuickAccess::RecentFiles, AddOptions::new())
+            .unwrap_err();
+
+        assert!(matches!(error, WincentError::InvalidPath(_)));
+    }
+
+    #[test]
+    fn remove_recent_file_validates_path_before_membership_check() {
+        let manager = QuickAccessManager::new();
+        let missing = unique_temp_path("missing-remove-recent.txt");
+        let error = manager
+            .remove_item(&missing, QuickAccess::RecentFiles)
+            .unwrap_err();
+
+        assert!(matches!(error, WincentError::InvalidPath(_)));
+    }
+
+    #[test]
+    fn add_recent_file_rejects_existing_directory_before_membership_check() -> WincentResult<()> {
+        let manager = QuickAccessManager::new();
+        let directory = unique_temp_path("directory-as-recent-file");
+        fs::create_dir_all(&directory)?;
+
+        let error = manager
+            .add_item(&directory, QuickAccess::RecentFiles, AddOptions::new())
+            .unwrap_err();
+
+        fs::remove_dir_all(&directory)?;
+        assert!(matches!(error, WincentError::InvalidPath(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn add_frequent_folder_rejects_existing_file_before_membership_check() -> WincentResult<()> {
+        let manager = QuickAccessManager::new();
+        let file = unique_temp_path("file-as-frequent-folder.txt");
+        fs::write(&file, b"test")?;
+
+        let error = manager
+            .add_item(&file, QuickAccess::FrequentFolders, AddOptions::new())
+            .unwrap_err();
+
+        fs::remove_file(&file)?;
+        assert!(matches!(error, WincentError::InvalidPath(_)));
+        Ok(())
+    }
+
+    #[test]
     fn quick_access_item_constructors_preserve_path_and_type() {
         let item = QuickAccessItem::recent_file(PathBuf::from("C:\\test.txt"));
         assert_eq!(item.path(), Path::new("C:\\test.txt"));
@@ -1046,5 +1103,9 @@ mod tests {
             result.failed()[0].error(),
             WincentError::InvalidPath(_)
         ));
+    }
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("wincent-rs-{}-{}", std::process::id(), name))
     }
 }

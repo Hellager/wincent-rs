@@ -11,7 +11,7 @@ use crate::{
     query,
     recent_links::delete_recent_links_for_target,
     script_executor::QuickAccessDataFiles,
-    utils::{paths_equal, refresh_explorer_window},
+    utils::{paths_equal, refresh_explorer_window, validate_path, PathType},
     QuickAccess, WincentResult,
 };
 use std::time::Duration;
@@ -258,6 +258,7 @@ fn remove_item(
 }
 
 fn add_recent_file(path: &str) -> WincentResult<()> {
+    validate_path(path, PathType::File)?;
     ensure_not_present(path, QuickAccess::RecentFiles)?;
     add_to_recent_files_with_options(
         path,
@@ -269,16 +270,19 @@ fn add_recent_file(path: &str) -> WincentResult<()> {
 }
 
 fn add_frequent_folder(path: &str, timeout: Duration) -> WincentResult<()> {
+    validate_path(path, PathType::Directory)?;
     ensure_not_present(path, QuickAccess::FrequentFolders)?;
     add_to_frequent_folders_with_timeout(path, timeout)
 }
 
 fn remove_recent_file(path: &str, timeout: Duration) -> WincentResult<()> {
+    validate_path(path, PathType::File)?;
     ensure_present(path, QuickAccess::RecentFiles)?;
     remove_from_recent_files_with_timeout(path, timeout)
 }
 
 fn remove_frequent_folder(path: &str, timeout: Duration) -> WincentResult<()> {
+    validate_path(path, PathType::Directory)?;
     ensure_present(path, QuickAccess::FrequentFolders)?;
     remove_from_frequent_folders_with_timeout(path, timeout)
 }
@@ -381,6 +385,7 @@ pub(crate) fn remove_items_batch_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn batch_result_empty_is_complete_success() {
@@ -431,5 +436,58 @@ mod tests {
         assert!(options.should_deep_clean_links_for(QuickAccess::FrequentFolders));
         assert!(!options.should_deep_clean_links_for(QuickAccess::All));
         assert!(!RemoveOptions::new().should_deep_clean_links_for(QuickAccess::RecentFiles));
+    }
+
+    #[test]
+    fn batch_add_reports_invalid_path_before_membership_check() {
+        let missing = unique_temp_path("missing-batch-add-recent.txt");
+        let result = add_items_batch(
+            &[(missing.display().to_string(), QuickAccess::RecentFiles)],
+            BatchOptions::new(),
+            Duration::from_secs(10),
+        );
+
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::InvalidPath(_)
+        ));
+    }
+
+    #[test]
+    fn batch_remove_reports_invalid_path_before_membership_check() {
+        let missing = unique_temp_path("missing-batch-remove-recent.txt");
+        let result = remove_items_batch(
+            &[(missing.display().to_string(), QuickAccess::RecentFiles)],
+            Duration::from_secs(10),
+        );
+
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::InvalidPath(_)
+        ));
+    }
+
+    #[test]
+    fn batch_add_all_still_reports_unsupported_operation() {
+        let result = add_items_batch(
+            &[("C:\\test.txt".to_string(), QuickAccess::All)],
+            BatchOptions::new(),
+            Duration::from_secs(10),
+        );
+
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::UnsupportedOperation(_)
+        ));
+    }
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("wincent-rs-{}-{}", std::process::id(), name))
     }
 }
