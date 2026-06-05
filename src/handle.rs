@@ -28,15 +28,133 @@ use crate::{
 };
 use std::ffi::OsString;
 use std::os::windows::prelude::*;
+use std::time::{Duration, Instant};
 use windows::core::Interface;
+use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations
 #[cfg(test)]
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-/// SHARD_PATHW 閳?registers a wide-string path in the recent documents list.
+const FREQUENT_FOLDER_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(1);
+const FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// SHARD_PATHW 闁?registers a wide-string path in the recent documents list.
 const SHARD_PATHW: u32 = 0x0000_0003;
+
+#[link(name = "ntdll")]
+extern "system" {
+    fn RtlGetVersion(lpversioninformation: *mut OSVERSIONINFOW) -> i32;
+}
+
+fn current_windows_build_number() -> WincentResult<u32> {
+    let mut version_info = OSVERSIONINFOW::default();
+    version_info.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+
+    let status = unsafe { RtlGetVersion(&mut version_info) };
+    if status != 0 {
+        return Err(WincentError::SystemError(format!(
+            "Failed to get Windows version: NTSTATUS 0x{status:08X}"
+        )));
+    }
+
+    Ok(version_info.dwBuildNumber)
+}
+
+fn is_windows_11_or_later() -> WincentResult<bool> {
+    Ok(current_windows_build_number()? >= 22_000)
+}
+
+fn invoke_verb_on_self_current_sta(path: &str, verb: &str) -> WincentResult<()> {
+    let folder = shell_folder(path)?;
+
+    unsafe {
+        let folder3: Folder3 = folder.cast().map_err(|e| {
+            WincentError::SystemError(format!("Failed to cast to Folder3 for {}: {}", path, e))
+        })?;
+
+        let self_item = folder3.Self_().map_err(|e| {
+            WincentError::SystemError(format!("Failed to get Self for {}: {}", path, e))
+        })?;
+
+        let verb_variant = VARIANT::from(verb);
+        self_item.InvokeVerb(&verb_variant).map_err(|e| {
+            WincentError::SystemError(format!(
+                "Failed to invoke verb '{}' on {}: {}",
+                verb, path, e
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn contains_frequent_folder_current_sta(path: &str) -> WincentResult<bool> {
+    let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
+    let items = folder_items(&folder)?;
+
+    let count = unsafe {
+        items
+            .Count()
+            .map_err(|e| WincentError::SystemError(format!("Failed to get item count: {}", e)))?
+    };
+
+    for index in 0..count {
+        let index_variant = VARIANT::from(index);
+        let item = unsafe {
+            match items.Item(&index_variant) {
+                Ok(item) => item,
+                Err(_) => continue,
+            }
+        };
+
+        if let Some(item_path_str) = item_path(&item) {
+            if paths_equal(&item_path_str, path) {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> WincentResult<bool> {
+    let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
+    let items = folder_items(&folder)?;
+
+    let count = unsafe {
+        items
+            .Count()
+            .map_err(|e| WincentError::SystemError(format!("Failed to get item count: {}", e)))?
+    };
+
+    for index in 0..count {
+        let index_variant = VARIANT::from(index);
+        let item = unsafe {
+            match items.Item(&index_variant) {
+                Ok(item) => item,
+                Err(_) => continue,
+            }
+        };
+
+        if let Some(item_path_str) = item_path(&item) {
+            if paths_equal(&item_path_str, path) {
+                let verb_variant = VARIANT::from(verb);
+                unsafe {
+                    item.InvokeVerb(&verb_variant).map_err(|e| {
+                        WincentError::SystemError(format!(
+                            "Failed to invoke verb '{}' on {}: {}",
+                            verb, path, e
+                        ))
+                    })?;
+                }
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
 
 /// Options for adding a file to Windows Recent Files.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -82,123 +200,7 @@ fn invoke_verb_on_self(path: &str, verb: &str, timeout: std::time::Duration) -> 
     let path = path.to_owned();
     let verb = verb.to_owned();
     crate::com_thread::run_on_sta_thread(
-        move || {
-            let folder = shell_folder(&path)?;
-
-            unsafe {
-                let folder3: Folder3 = folder.cast().map_err(|e| {
-                    WincentError::SystemError(format!(
-                        "Failed to cast to Folder3 for {}: {}",
-                        path, e
-                    ))
-                })?;
-
-                let self_item = folder3.Self_().map_err(|e| {
-                    WincentError::SystemError(format!("Failed to get Self for {}: {}", path, e))
-                })?;
-
-                let verb_variant = VARIANT::from(verb.as_str());
-                self_item.InvokeVerb(&verb_variant).map_err(|e| {
-                    WincentError::SystemError(format!(
-                        "Failed to invoke verb '{}' on {}: {}",
-                        verb, path, e
-                    ))
-                })?;
-            }
-
-            Ok(())
-        },
-        timeout,
-    )
-}
-
-/// Finds a folder item in Frequent Folders namespace and invokes a Shell verb on it
-///
-/// This function searches through the Frequent Folders namespace
-/// (`shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}`) to find a folder matching
-/// the given path, then invokes the specified Shell verb on it.
-///
-/// # Threading Model
-///
-/// Runs on a dedicated STA thread to avoid the Windows 11 deadlock where
-/// cross-process Shell namespace resolution hangs without a message pump.
-/// The dedicated thread provides the required message pump for COM operations.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to find
-/// * `verb` - The Shell verb to invoke (e.g., "unpinfromhome", "pintohome")
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was found and the verb was successfully invoked.
-///
-/// # Errors
-///
-/// - `NotInQuickAccess`: The folder was not found in the Frequent Folders namespace
-/// - `SystemError`: COM operation failed (e.g., failed to get item count, invoke verb)
-///
-/// # Path Matching
-///
-/// Uses [`paths_equal()`] for path comparison, which handles:
-/// - Case insensitivity
-/// - Forward slash vs backslash normalization
-/// - Trailing slash differences
-/// - Symlinks and relative paths (via canonicalization)
-///
-/// # Windows 11 Compatibility
-///
-/// This function is specifically designed to work around Windows 11 deadlock issues
-/// by using a dedicated STA thread with a message pump.
-///
-/// # Safety
-///
-/// This function performs unsafe COM operations. The dedicated STA thread ensures
-/// proper COM initialization and message pump availability.
-fn find_and_invoke_verb(path: &str, verb: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    let path = path.to_owned();
-    let verb = verb.to_owned();
-    crate::com_thread::run_on_sta_thread(
-        move || {
-            let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
-            let items = folder_items(&folder)?;
-
-            let count = unsafe {
-                items.Count().map_err(|e| {
-                    WincentError::SystemError(format!("Failed to get item count: {}", e))
-                })?
-            };
-
-            for index in 0..count {
-                let index_variant = VARIANT::from(index);
-                let item = unsafe {
-                    match items.Item(&index_variant) {
-                        Ok(item) => item,
-                        Err(_) => continue,
-                    }
-                };
-
-                if let Some(item_path_str) = item_path(&item) {
-                    if paths_equal(&item_path_str, &path) {
-                        let verb_variant = VARIANT::from(verb.as_str());
-                        unsafe {
-                            item.InvokeVerb(&verb_variant).map_err(|e| {
-                                WincentError::SystemError(format!(
-                                    "Failed to invoke verb '{}' on {}: {}",
-                                    verb, path, e
-                                ))
-                            })?;
-                        }
-                        return Ok(());
-                    }
-                }
-            }
-
-            Err(WincentError::not_in_quick_access(
-                path,
-                QuickAccess::FrequentFolders,
-            ))
-        },
+        move || invoke_verb_on_self_current_sta(&path, &verb),
         timeout,
     )
 }
@@ -231,7 +233,7 @@ fn find_and_invoke_verb(path: &str, verb: &str, timeout: std::time::Duration) ->
 /// - [`invoke_verb_on_self()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     // Pre-check: if the folder is already pinned, return Ok(()) immediately.
-    // On Windows 11 "pintohome" acts as a toggle 閳?calling it on an already-pinned
+    // On Windows 11 "pintohome" acts as a toggle 闁?calling it on an already-pinned
     // folder would silently unpin it, violating the documented no-op contract.
     if is_in_frequent_folders_native(path, timeout)? {
         return Ok(());
@@ -277,33 +279,137 @@ fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Wince
 fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> WincentResult<bool> {
     let path = path.to_owned();
     crate::com_thread::run_on_sta_thread(
+        move || contains_frequent_folder_current_sta(&path),
+        timeout,
+    )
+}
+
+fn wait_for_frequent_folder_presence_with<C, S>(
+    path: &str,
+    expected: bool,
+    verification_timeout: Duration,
+    poll_interval: Duration,
+    contains: &mut C,
+    sleep: &mut S,
+) -> WincentResult<bool>
+where
+    C: FnMut(&str) -> WincentResult<bool>,
+    S: FnMut(Duration),
+{
+    let start = Instant::now();
+
+    while start.elapsed() < verification_timeout {
+        if contains(path)? == expected {
+            return Ok(true);
+        }
+
+        let remaining = verification_timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+
+        sleep(std::cmp::min(poll_interval, remaining));
+    }
+
+    Ok(contains(path)? == expected)
+}
+
+fn run_unpin_frequent_folder_state_machine<C, N, S, W, Sleep>(
+    path: &str,
+    verification_timeout: Duration,
+    poll_interval: Duration,
+    mut contains: C,
+    mut invoke_on_namespace: N,
+    mut invoke_on_self: S,
+    mut is_win11_or_later: W,
+    mut sleep: Sleep,
+) -> WincentResult<()>
+where
+    C: FnMut(&str) -> WincentResult<bool>,
+    N: FnMut(&str, &str) -> WincentResult<bool>,
+    S: FnMut(&str, &str) -> WincentResult<()>,
+    W: FnMut() -> WincentResult<bool>,
+    Sleep: FnMut(Duration),
+{
+    if !contains(path)? {
+        return Err(WincentError::not_in_quick_access(
+            path,
+            QuickAccess::FrequentFolders,
+        ));
+    }
+
+    let _ = invoke_on_namespace(path, "unpinfromhome");
+    if wait_for_frequent_folder_presence_with(
+        path,
+        false,
+        verification_timeout,
+        poll_interval,
+        &mut contains,
+        &mut sleep,
+    )? {
+        return Ok(());
+    }
+
+    invoke_on_self(path, "pintohome")?;
+    if wait_for_frequent_folder_presence_with(
+        path,
+        false,
+        verification_timeout,
+        poll_interval,
+        &mut contains,
+        &mut sleep,
+    )? {
+        return Ok(());
+    }
+
+    if is_win11_or_later()? {
+        invoke_on_self(path, "pintohome")?;
+    } else {
+        let _ = invoke_on_namespace(path, "unpinfromhome");
+    }
+
+    if wait_for_frequent_folder_presence_with(
+        path,
+        false,
+        verification_timeout,
+        poll_interval,
+        &mut contains,
+        &mut sleep,
+    )? {
+        return Ok(());
+    }
+
+    Err(WincentError::SystemError(format!(
+        "Failed to remove frequent folder: {}",
+        path
+    )))
+}
+
+fn verify_frequent_folder_absent_native(
+    path: &str,
+    timeout: std::time::Duration,
+) -> WincentResult<()> {
+    let path = path.to_owned();
+    crate::com_thread::run_on_sta_thread(
         move || {
-            let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
-            let items = folder_items(&folder)?;
+            let mut contains = |path: &str| contains_frequent_folder_current_sta(path);
+            let mut sleep = std::thread::sleep;
 
-            let count = unsafe {
-                items.Count().map_err(|e| {
-                    WincentError::SystemError(format!("Failed to get item count: {}", e))
-                })?
-            };
-
-            for index in 0..count {
-                let index_variant = VARIANT::from(index);
-                let item = unsafe {
-                    match items.Item(&index_variant) {
-                        Ok(item) => item,
-                        Err(_) => continue,
-                    }
-                };
-
-                if let Some(item_path_str) = item_path(&item) {
-                    if paths_equal(&item_path_str, &path) {
-                        return Ok(true);
-                    }
-                }
+            if wait_for_frequent_folder_presence_with(
+                &path,
+                false,
+                FREQUENT_FOLDER_VERIFICATION_TIMEOUT,
+                FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL,
+                &mut contains,
+                &mut sleep,
+            )? {
+                Ok(())
+            } else {
+                Err(WincentError::SystemError(format!(
+                    "Failed to remove frequent folder: {}",
+                    path
+                )))
             }
-
-            Ok(false)
         },
         timeout,
     )
@@ -331,8 +437,8 @@ fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> Wi
 ///
 /// # Threading Model
 ///
-/// Uses [`find_and_invoke_verb()`] and [`invoke_verb_on_self()`] which run on
-/// dedicated STA threads to avoid Windows 11 deadlock issues.
+/// Runs the full check, mutation, verification, and fallback sequence inside a
+/// single dedicated STA thread to avoid repeated COM thread dispatches.
 ///
 /// # Arguments
 ///
@@ -355,32 +461,23 @@ fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> Wi
 /// # See Also
 ///
 /// - [`unpin_frequent_folder()`] - Public wrapper with PowerShell fallback
-/// - [`find_and_invoke_verb()`] - Search and invoke verb in Frequent Folders namespace
-/// - [`invoke_verb_on_self()`] - Invoke verb directly on folder
 fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    // Step 1: Check if folder is pinned first to avoid accidentally pinning it
-    // This is critical because pintohome is a toggle - it will pin if not already pinned
-    // Uses pure native COM check with paths_equal() for robust path matching
-    if !is_in_frequent_folders_native(path, timeout)? {
-        return Err(WincentError::not_in_quick_access(
-            path,
-            QuickAccess::FrequentFolders,
-        ));
-    }
-
-    // Step 2: Try unpinfromhome first (Windows 10 style)
-    // If the folder is in frequent folders, this should work on Windows 10
-    match find_and_invoke_verb(path, "unpinfromhome", timeout) {
-        Ok(()) => return Ok(()),
-        Err(_) => {
-            // unpinfromhome failed (verb not available or other error)
-            // Fall through to step 3
-        }
-    }
-
-    // Step 3: Fallback to pintohome toggle (Windows 11 style)
-    // Since we verified the folder is pinned in step 1, pintohome will unpin it
-    invoke_verb_on_self(path, "pintohome", timeout)
+    let path = path.to_owned();
+    crate::com_thread::run_on_sta_thread(
+        move || {
+            run_unpin_frequent_folder_state_machine(
+                &path,
+                FREQUENT_FOLDER_VERIFICATION_TIMEOUT,
+                FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL,
+                contains_frequent_folder_current_sta,
+                try_invoke_verb_on_frequent_folder_current_sta,
+                invoke_verb_on_self_current_sta,
+                is_windows_11_or_later,
+                std::thread::sleep,
+            )
+        },
+        timeout,
+    )
 }
 
 /// Executes a PowerShell script after validating the given path
@@ -713,8 +810,9 @@ fn pin_frequent_folder_powershell(path: &str) -> WincentResult<()> {
 ///
 /// - [`unpin_frequent_folder_native()`] - Native COM implementation (fast path)
 /// - [`unpin_frequent_folder()`] - Internal wrapper with fallback strategy
-fn unpin_frequent_folder_powershell(path: &str) -> WincentResult<()> {
-    execute_script_with_validation(PSScript::UnpinFromFrequentFolder, path, PathType::Directory)
+fn unpin_frequent_folder_powershell(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
+    execute_script_with_validation(PSScript::UnpinFromFrequentFolder, path, PathType::Directory)?;
+    verify_frequent_folder_absent_native(path, timeout)
 }
 
 /// Pins a folder to the Windows Quick Access Frequent Folders list
@@ -820,7 +918,7 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
         Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
         Err(e @ WincentError::InvalidPath(_)) => Err(e),
         // For system/COM errors, fallback to PowerShell for broader compatibility
-        Err(_) => unpin_frequent_folder_powershell(path),
+        Err(_) => unpin_frequent_folder_powershell(path, timeout),
     }
 }
 
@@ -1006,7 +1104,7 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 ///
 /// - **Asynchronous Processing**: The folder may not appear immediately in Quick Access.
 ///   Windows Shell processes these updates asynchronously.
-/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op 閳?an
+/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op 闁?an
 ///   explicit pre-check queries the Frequent Folders namespace before invoking the Shell
 ///   verb, preventing the Windows 11 `pintohome`-toggle problem where calling the verb
 ///   on an already-pinned folder would silently unpin it.
@@ -1411,7 +1509,203 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
+    fn test_unpin_state_machine_rejects_initial_absence() {
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let action_log = std::rc::Rc::clone(&actions);
+
+        let result = run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            |_| Ok(false),
+            move |_, verb| {
+                action_log.borrow_mut().push(format!("namespace:{verb}"));
+                Ok(true)
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    Ok(())
+                }
+            },
+            || Ok(true),
+            |_| {},
+        );
+
+        assert!(
+            matches!(result, Err(WincentError::NotInQuickAccess { .. })),
+            "initial absence should be NotInQuickAccess, got: {:?}",
+            result
+        );
+        assert!(
+            actions.borrow().is_empty(),
+            "no verbs should be invoked when the folder is absent"
+        );
+    }
+
+    #[test]
+    fn test_unpin_state_machine_does_not_trust_unpinfromhome_success() -> WincentResult<()> {
+        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+
+        run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            {
+                let present = std::rc::Rc::clone(&present);
+                move |_| Ok(*present.borrow())
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    Ok(true)
+                }
+            },
+            {
+                let present = std::rc::Rc::clone(&present);
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    *present.borrow_mut() = false;
+                    Ok(())
+                }
+            },
+            || Ok(true),
+            |_| {},
+        )?;
+
+        assert_eq!(
+            actions.borrow().as_slice(),
+            ["namespace:unpinfromhome", "self:pintohome"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unpin_state_machine_uses_win11_final_pintohome() -> WincentResult<()> {
+        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let self_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+        run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            {
+                let present = std::rc::Rc::clone(&present);
+                move |_| Ok(*present.borrow())
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    Ok(true)
+                }
+            },
+            {
+                let present = std::rc::Rc::clone(&present);
+                let actions = std::rc::Rc::clone(&actions);
+                let self_calls = std::rc::Rc::clone(&self_calls);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    let mut calls = self_calls.borrow_mut();
+                    *calls += 1;
+                    if *calls == 2 {
+                        *present.borrow_mut() = false;
+                    }
+                    Ok(())
+                }
+            },
+            || Ok(true),
+            |_| {},
+        )?;
+
+        assert_eq!(
+            actions.borrow().as_slice(),
+            [
+                "namespace:unpinfromhome",
+                "self:pintohome",
+                "self:pintohome"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unpin_state_machine_uses_win10_final_unpinfromhome() -> WincentResult<()> {
+        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let namespace_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+        run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            {
+                let present = std::rc::Rc::clone(&present);
+                move |_| Ok(*present.borrow())
+            },
+            {
+                let present = std::rc::Rc::clone(&present);
+                let actions = std::rc::Rc::clone(&actions);
+                let namespace_calls = std::rc::Rc::clone(&namespace_calls);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    let mut calls = namespace_calls.borrow_mut();
+                    *calls += 1;
+                    if *calls == 2 {
+                        *present.borrow_mut() = false;
+                    }
+                    Ok(true)
+                }
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    Ok(())
+                }
+            },
+            || Ok(false),
+            |_| {},
+        )?;
+
+        assert_eq!(
+            actions.borrow().as_slice(),
+            [
+                "namespace:unpinfromhome",
+                "self:pintohome",
+                "namespace:unpinfromhome"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unpin_state_machine_errors_when_folder_remains_present() {
+        let result = run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            |_| Ok(true),
+            |_, _| Ok(true),
+            |_, _| Ok(()),
+            || Ok(true),
+            |_| {},
+        );
+
+        assert!(
+            matches!(result, Err(WincentError::SystemError(ref message)) if message.contains("Failed to remove frequent folder")),
+            "persistent presence should be SystemError, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    #[ignore = "Modifies system state - run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
     fn test_pin_unpin_frequent_folder() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?;
@@ -1454,7 +1748,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 闁?run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
     fn test_unpin_native_error_classification() -> WincentResult<()> {
         // Tests the critical error classification logic in unpin_frequent_folder_native()
         // After fix: The function now checks if folder is pinned BEFORE attempting to unpin
@@ -1508,7 +1802,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 闁?run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
     fn test_add_remove_file_in_recent() -> WincentResult<()> {
         // Note: This test depends on Windows Shell's asynchronous behavior
         // SHAddToRecentDocs API does not guarantee immediate visibility
@@ -1549,7 +1843,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 闁?run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
     fn test_remove_recent_file_native_direct() -> WincentResult<()> {
         // Tests the native removal logic directly to verify the "find item and invoke remove verb" path
         // Implementation: src/handle.rs:400-451
@@ -1657,7 +1951,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 闁?run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
     fn test_remove_from_recent_files_preserves_not_in_recent() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
         let test_file =
@@ -1679,7 +1973,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 闁?run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
     fn test_add_file_to_recent_with_spaces() -> WincentResult<()> {
         // Tests that add_file_to_recent_native() works for filenames that contain spaces.
         // Uses timestamp-suffixed names to avoid Windows Shell deduplication:
@@ -1707,7 +2001,7 @@ mod tests {
         let test_path2 = path_to_str(&test_file2)?;
         add_file_to_recent_native(test_path2)?;
 
-        // Wait for both files to appear (20 retries 鑴?500ms = 10 seconds)
+        // Wait for both files to appear (20 retries 閼?500ms = 10 seconds)
         if !wait_for_file_status(test_path, true, 20)? {
             cleanup_test_env(&test_dir)?;
             println!(
@@ -1729,7 +2023,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 闁?run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
     fn test_unpin_folder_item_compatibility() -> WincentResult<()> {
         // Tests the Windows 10/11 compatibility logic in unpin_folder_item()
         // Implementation: src/handle.rs:258-272
@@ -1816,7 +2110,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Performance benchmark 閳?run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
+    #[ignore = "Performance benchmark 闁?run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
     fn test_native_pin_unpin_performance() -> WincentResult<()> {
         use std::time::Instant;
 
@@ -1845,7 +2139,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Modifies system state 閳?run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
+    #[ignore = "Modifies system state 闁?run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
     fn test_com_s_false_reference_counting() -> WincentResult<()> {
         // Tests that add_file_to_recent_native() correctly handles S_FALSE
         // and properly calls CoUninitialize to balance reference counts.
