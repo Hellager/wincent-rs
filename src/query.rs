@@ -17,6 +17,7 @@
 //! - Maximum 20 items per category (Windows default)
 
 use crate::com::{ComGuard, ComInitStatus};
+use crate::utils::paths_equal;
 use crate::{error::WincentError, QuickAccess, WincentResult};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER};
 use windows::Win32::System::Variant::VARIANT;
@@ -72,6 +73,22 @@ fn query_namespace_for(qa_type: QuickAccess) -> (&'static str, QueryFilter) {
             QueryFilter::FoldersOnly,
         ),
     }
+}
+
+fn merge_quick_access_items(
+    mut recent_files: Vec<String>,
+    frequent_folders: Vec<String>,
+) -> Vec<String> {
+    for folder in frequent_folders {
+        if !recent_files
+            .iter()
+            .any(|existing| paths_equal(existing, &folder))
+        {
+            recent_files.push(folder);
+        }
+    }
+
+    recent_files
 }
 
 /// Determines if a FolderItem should be included based on the query filter
@@ -244,7 +261,7 @@ pub(crate) fn shell_folder(namespace: &str) -> WincentResult<Folder> {
 ///
 /// This function initializes COM in STA mode and performs unsafe COM operations.
 /// COM is automatically cleaned up via RAII when the function returns.
-pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+fn query_recent_native_single(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let _com = ComGuard::try_initialize().map_err(|status| match status {
         ComInitStatus::ApartmentMismatch => WincentError::ComApartmentMismatch(
             "Thread already initialized with incompatible COM apartment model".to_string(),
@@ -284,6 +301,17 @@ pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<Str
     Ok(paths)
 }
 
+pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+    match qa_type {
+        QuickAccess::All => {
+            let recent_files = query_recent_native_single(QuickAccess::RecentFiles)?;
+            let frequent_folders = query_recent_native_single(QuickAccess::FrequentFolders)?;
+            Ok(merge_quick_access_items(recent_files, frequent_folders))
+        }
+        concrete => query_recent_native_single(concrete),
+    }
+}
+
 /// Queries recent items from Quick Access using PowerShell scripts (for comparison/fallback).
 ///
 /// This is the compatibility fallback when native COM API fails or is unavailable.
@@ -309,7 +337,7 @@ pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<Str
 /// PowerShell is significantly slower than native COM API:
 /// - PowerShell: ~200-500ms
 /// - Native: ~10-50ms
-fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+fn query_recent_powershell_single(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     use crate::script_executor::ScriptExecutor;
     use crate::script_storage::ScriptStorage;
     use crate::script_strategy::PSScript;
@@ -326,6 +354,17 @@ fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let duration = start.elapsed();
 
     ScriptExecutor::parse_output_to_strings(output, script_type, script_path, None, duration)
+}
+
+fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+    match qa_type {
+        QuickAccess::All => {
+            let recent_files = query_recent_powershell_single(QuickAccess::RecentFiles)?;
+            let frequent_folders = query_recent_powershell_single(QuickAccess::FrequentFolders)?;
+            Ok(merge_quick_access_items(recent_files, frequent_folders))
+        }
+        concrete => query_recent_powershell_single(concrete),
+    }
 }
 
 /// Queries recent items from Quick Access using the native Shell COM API or PowerShell fallback.
@@ -447,17 +486,16 @@ pub(crate) fn get_frequent_folders() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::FrequentFolders)
 }
 
-/// Gets a list of all items from Windows Quick Access (Recent Items namespace).
+/// Gets a list of all items from Windows Quick Access.
 ///
-/// This function queries the Recent Items namespace, which contains both recently accessed
-/// files and folders. Windows maintains this as a single unified list, not as separate
-/// Recent Files and Frequent Folders lists.
+/// This function explicitly merges [`QuickAccess::RecentFiles`] and
+/// [`QuickAccess::FrequentFolders`] results instead of relying on a single
+/// Explorer namespace to represent both categories.
 ///
 /// # Returns
 ///
-/// Returns a vector of strings containing the paths of all items in the Recent Items namespace.
-/// The list includes both files and folders, typically up to 20 items (Windows default limit
-/// for the Recent Items namespace).
+/// Returns a vector of strings containing recent files followed by frequent
+/// folders, with duplicate paths removed using Windows path semantics.
 ///
 /// # Errors
 ///
@@ -487,9 +525,9 @@ pub(crate) fn get_frequent_folders() -> WincentResult<Vec<String>> {
 ///
 /// # Note
 ///
-/// This function queries the "Recent Items" namespace (`shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}`),
-/// which is different from the "Frequent Folders" namespace. To query frequent folders specifically,
-/// use [`get_frequent_folders()`] instead.
+/// This function is equivalent to querying [`get_recent_files()`] and
+/// [`get_frequent_folders()`] and merging the results. To query one category
+/// specifically, call the category-specific function.
 pub(crate) fn get_quick_access_items() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::All)
 }
@@ -706,7 +744,7 @@ fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
     Ok(items.iter().any(|item| item.contains(keyword)))
 }
 
-/// Checks if an exact path exists in the Windows Quick Access list (Recent Items namespace).
+/// Checks if an exact path exists in the merged Windows Quick Access lists.
 ///
 /// This function performs **full-path comparison using Windows path semantics**:
 /// case-insensitive, slash-normalized, and canonicalized when the path exists.
@@ -719,7 +757,8 @@ fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 ///
 /// # Returns
 ///
-/// Returns `true` if the exact path is found in the Recent Items namespace, `false` otherwise.
+/// Returns `true` if the exact path is found in Recent Files or Frequent
+/// Folders, `false` otherwise.
 ///
 /// # Errors
 ///
@@ -749,7 +788,8 @@ fn is_in_frequent_folders(keyword: &str) -> WincentResult<bool> {
 ///
 /// # Note
 ///
-/// This function queries the "Recent Items" namespace, not the "Frequent Folders" namespace.
+/// This function queries both Recent Files and Frequent Folders through
+/// [`get_quick_access_items()`].
 ///
 /// # See Also
 ///
@@ -762,7 +802,7 @@ fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
         .any(|item| crate::utils::paths_equal(item, path)))
 }
 
-/// Checks if a path or keyword exists in the Windows Quick Access list (Recent Items namespace).
+/// Checks if a path or keyword exists in the merged Windows Quick Access lists.
 ///
 /// **Note**: This function performs **substring matching** (fuzzy match). If you need
 /// exact path matching, use [`is_in_quick_access_exact()`] instead.
@@ -778,7 +818,7 @@ fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
 ///
 /// # Returns
 ///
-/// Returns `true` if any path in the Recent Items namespace contains the keyword,
+/// Returns `true` if any path in Recent Files or Frequent Folders contains the keyword,
 /// `false` otherwise.
 ///
 /// # Errors
@@ -812,7 +852,8 @@ fn is_in_quick_access_exact(path: &str) -> WincentResult<bool> {
 ///
 /// # Note
 ///
-/// This function queries the "Recent Items" namespace, not the "Frequent Folders" namespace.
+/// This function queries both Recent Files and Frequent Folders through
+/// [`get_quick_access_items()`].
 ///
 /// # See Also
 ///
@@ -827,6 +868,49 @@ fn is_in_quick_access(keyword: &str) -> WincentResult<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_quick_access_items_appends_frequent_folders_after_recent_files() {
+        let merged = merge_quick_access_items(
+            vec![
+                "C:\\Work\\report.docx".to_string(),
+                "C:\\Work\\notes.txt".to_string(),
+            ],
+            vec![
+                "C:\\Users\\Alice\\Documents".to_string(),
+                "D:\\Projects".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                "C:\\Work\\report.docx".to_string(),
+                "C:\\Work\\notes.txt".to_string(),
+                "C:\\Users\\Alice\\Documents".to_string(),
+                "D:\\Projects".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_quick_access_items_deduplicates_with_windows_path_semantics() {
+        let merged = merge_quick_access_items(
+            vec!["C:\\Work\\Report.docx".to_string()],
+            vec![
+                "c:/work/report.docx".to_string(),
+                "C:\\Work\\Archive".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                "C:\\Work\\Report.docx".to_string(),
+                "C:\\Work\\Archive".to_string(),
+            ]
+        );
+    }
 
     fn contains_exact_path(items: &[String], path: &str) -> bool {
         items
