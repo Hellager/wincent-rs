@@ -179,7 +179,7 @@ where
 #[allow(dead_code)]
 pub(crate) fn empty_pinned_folders() -> WincentResult<()> {
     let backend = SystemQuickAccessBackend;
-    let paths = backend.get_items(QuickAccess::FrequentFolders)?;
+    let paths = backend.get_items(QuickAccess::FrequentFolders, EMPTY_PINNED_FOLDERS_TIMEOUT)?;
     empty_pinned_folders_from_snapshot(&paths, |path| {
         backend.remove_frequent_folder(path, EMPTY_PINNED_FOLDERS_TIMEOUT)
     })
@@ -258,7 +258,7 @@ fn empty_frequent_folders_with_backend(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     let pinned_snapshot = if also_pinned_folders {
-        Some(backend.get_items(QuickAccess::FrequentFolders)?)
+        Some(backend.get_items(QuickAccess::FrequentFolders, timeout)?)
     } else {
         None
     };
@@ -461,7 +461,11 @@ mod tests {
             Ok(())
         }
 
-        fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+        fn get_items(
+            &self,
+            qa_type: QuickAccess,
+            _timeout: Duration,
+        ) -> WincentResult<Vec<String>> {
             self.record(format!("get_items:{qa_type:?}"));
             Ok(self.items.clone())
         }

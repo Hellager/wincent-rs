@@ -16,9 +16,11 @@
 //! - Contains user-specific activity data
 //! - Maximum 20 items per category (Windows default)
 
+#[cfg(test)]
 use crate::com::{ComGuard, ComInitStatus};
 use crate::utils::paths_equal;
 use crate::{error::WincentError, QuickAccess, WincentResult};
+use std::time::Duration;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER};
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{Folder, FolderItem, FolderItems, IShellDispatch, Shell};
@@ -29,6 +31,8 @@ use windows::Win32::UI::Shell::{Folder, FolderItem, FolderItems, IShellDispatch,
 /// It provides access to folders that Windows tracks as frequently accessed by the user.
 pub(crate) const FREQUENT_FOLDERS_NAMESPACE: &str =
     "shell:::{3936E9E4-D92C-4EEE-A85A-BC16D5EA0819}";
+#[allow(dead_code)]
+const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Filter type for Quick Access item queries
 ///
@@ -261,16 +265,7 @@ pub(crate) fn shell_folder(namespace: &str) -> WincentResult<Folder> {
 ///
 /// This function initializes COM in STA mode and performs unsafe COM operations.
 /// COM is automatically cleaned up via RAII when the function returns.
-fn query_recent_native_single(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-    let _com = ComGuard::try_initialize().map_err(|status| match status {
-        ComInitStatus::ApartmentMismatch => WincentError::ComApartmentMismatch(
-            "Thread already initialized with incompatible COM apartment model".to_string(),
-        ),
-        ComInitStatus::OtherError(hr) => {
-            WincentError::SystemError(format!("Failed to initialize COM: 0x{:08X}", hr))
-        }
-        _ => unreachable!(),
-    })?;
+fn query_recent_native_single_current_sta(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let (namespace, filter) = query_namespace_for(qa_type);
     let folder = shell_folder(namespace)?;
     let items = folder_items(&folder)?;
@@ -301,15 +296,19 @@ fn query_recent_native_single(qa_type: QuickAccess) -> WincentResult<Vec<String>
     Ok(paths)
 }
 
+#[allow(dead_code)]
 pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-    match qa_type {
-        QuickAccess::All => {
-            let recent_files = query_recent_native_single(QuickAccess::RecentFiles)?;
-            let frequent_folders = query_recent_native_single(QuickAccess::FrequentFolders)?;
-            Ok(merge_quick_access_items(recent_files, frequent_folders))
-        }
-        concrete => query_recent_native_single(concrete),
-    }
+    query_recent_native_with_timeout(qa_type, DEFAULT_QUERY_TIMEOUT)
+}
+
+pub(crate) fn query_recent_native_with_timeout(
+    qa_type: QuickAccess,
+    timeout: Duration,
+) -> WincentResult<Vec<String>> {
+    crate::com_thread::run_on_sta_thread(
+        move || query_recent_native_single_current_sta(qa_type),
+        timeout,
+    )
 }
 
 /// Queries recent items from Quick Access using PowerShell scripts (for comparison/fallback).
@@ -337,7 +336,10 @@ pub(crate) fn query_recent_native(qa_type: QuickAccess) -> WincentResult<Vec<Str
 /// PowerShell is significantly slower than native COM API:
 /// - PowerShell: ~200-500ms
 /// - Native: ~10-50ms
-fn query_recent_powershell_single(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+fn query_recent_powershell_single_with_timeout(
+    qa_type: QuickAccess,
+    timeout: Duration,
+) -> WincentResult<Vec<String>> {
     use crate::script_executor::ScriptExecutor;
     use crate::script_storage::ScriptStorage;
     use crate::script_strategy::PSScript;
@@ -350,20 +352,30 @@ fn query_recent_powershell_single(qa_type: QuickAccess) -> WincentResult<Vec<Str
 
     let start = std::time::Instant::now();
     let script_path = ScriptStorage::get_script_path(script_type)?;
-    let output = ScriptExecutor::execute_ps_script(script_type, None)?;
+    let output = ScriptExecutor::execute_ps_script_with_timeout(script_type, None, timeout)?;
     let duration = start.elapsed();
 
     ScriptExecutor::parse_output_to_strings(output, script_type, script_path, None, duration)
 }
 
+#[allow(dead_code)]
 fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+    query_recent_powershell_with_timeout(qa_type, DEFAULT_QUERY_TIMEOUT)
+}
+
+fn query_recent_powershell_with_timeout(
+    qa_type: QuickAccess,
+    timeout: Duration,
+) -> WincentResult<Vec<String>> {
     match qa_type {
         QuickAccess::All => {
-            let recent_files = query_recent_powershell_single(QuickAccess::RecentFiles)?;
-            let frequent_folders = query_recent_powershell_single(QuickAccess::FrequentFolders)?;
+            let recent_files =
+                query_recent_powershell_single_with_timeout(QuickAccess::RecentFiles, timeout)?;
+            let frequent_folders =
+                query_recent_powershell_single_with_timeout(QuickAccess::FrequentFolders, timeout)?;
             Ok(merge_quick_access_items(recent_files, frequent_folders))
         }
-        concrete => query_recent_powershell_single(concrete),
+        concrete => query_recent_powershell_single_with_timeout(concrete, timeout),
     }
 }
 
@@ -403,12 +415,20 @@ fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
 ///
 /// This function attempts to query using native COM API first, falling back to PowerShell if COM fails.
 /// The native approach is significantly faster (~10-50ms vs ~200-500ms).
+#[allow(dead_code)]
 pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+    query_recent_with_timeout(qa_type, DEFAULT_QUERY_TIMEOUT)
+}
+
+pub(crate) fn query_recent_with_timeout(
+    qa_type: QuickAccess,
+    timeout: Duration,
+) -> WincentResult<Vec<String>> {
     // Try native COM first (fast path)
     let qa_type_clone = qa_type;
-    query_recent_native(qa_type).or_else(|_native_error| {
+    query_recent_native_with_timeout(qa_type, timeout).or_else(|_native_error| {
         // Fallback to PowerShell if COM fails (compatibility)
-        query_recent_powershell(qa_type_clone)
+        query_recent_powershell_with_timeout(qa_type_clone, timeout)
     })
 }
 
@@ -446,6 +466,7 @@ pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
 ///     Ok(())
 /// }
 /// ```
+#[allow(dead_code)]
 pub(crate) fn get_recent_files() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::RecentFiles)
 }
@@ -482,6 +503,7 @@ pub(crate) fn get_recent_files() -> WincentResult<Vec<String>> {
 ///     Ok(())
 /// }
 /// ```
+#[allow(dead_code)]
 pub(crate) fn get_frequent_folders() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::FrequentFolders)
 }
@@ -528,6 +550,7 @@ pub(crate) fn get_frequent_folders() -> WincentResult<Vec<String>> {
 /// This function is equivalent to querying [`get_recent_files()`] and
 /// [`get_frequent_folders()`] and merging the results. To query one category
 /// specifically, call the category-specific function.
+#[allow(dead_code)]
 pub(crate) fn get_quick_access_items() -> WincentResult<Vec<String>> {
     query_recent(QuickAccess::All)
 }
@@ -1367,14 +1390,9 @@ mod tests {
     }
 
     #[test]
-    fn test_apartment_mismatch_triggers_fallback() -> WincentResult<()> {
-        // Tests that query_recent() attempts fallback when native COM fails
-        // due to apartment mismatch (RPC_E_CHANGED_MODE).
-        //
-        // This test verifies the fallback MECHANISM, not whether PowerShell succeeds.
-        // We verify that:
-        // 1. Native COM fails with apartment mismatch
-        // 2. The error is NOT propagated directly (fallback was attempted)
+    fn test_native_query_uses_dedicated_sta_thread_from_mta() -> WincentResult<()> {
+        // Native query now runs on a dedicated STA thread with timeout control,
+        // so an MTA-initialized caller should not force RPC_E_CHANGED_MODE.
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
         unsafe {
@@ -1382,33 +1400,19 @@ mod tests {
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
             assert!(hr.is_ok() || hr.0 == 1, "MTA init should succeed");
 
-            // First verify that native COM fails with apartment mismatch
             let native_result = query_recent_native(QuickAccess::RecentFiles);
             assert!(
-                matches!(native_result, Err(WincentError::ComApartmentMismatch(_))),
-                "Native should fail with ComApartmentMismatch, got: {:?}",
+                !matches!(native_result, Err(WincentError::ComApartmentMismatch(_))),
+                "Native query should run on a dedicated STA thread, got: {:?}",
                 native_result
             );
 
-            // Now test query_recent() which has fallback
             let result = query_recent(QuickAccess::RecentFiles);
-
-            // The result should NOT be ComApartmentMismatch (fallback was attempted)
-            // It may succeed (PowerShell works) or fail with other errors (PowerShell unavailable)
-            match result {
-                Err(WincentError::ComApartmentMismatch(_)) => {
-                    panic!(
-                        "ComApartmentMismatch should not propagate - fallback should be attempted"
-                    );
-                }
-                Ok(_) => {
-                    // Fallback succeeded - good!
-                }
-                Err(_) => {
-                    // Fallback was attempted but failed (e.g., PowerShell unavailable) - acceptable
-                    // The important thing is that ComApartmentMismatch was not propagated
-                }
-            }
+            assert!(
+                !matches!(result, Err(WincentError::ComApartmentMismatch(_))),
+                "query_recent should not propagate caller apartment mismatch: {:?}",
+                result
+            );
 
             CoUninitialize();
         }

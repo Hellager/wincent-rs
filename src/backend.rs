@@ -16,7 +16,7 @@ use std::time::Duration;
 pub(crate) trait QuickAccessBackend: Send + Sync {
     fn validate_path(&self, path: &str, expected: PathType) -> WincentResult<()>;
 
-    fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>>;
+    fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>>;
 
     fn add_recent_file(&self, path: &str) -> WincentResult<()>;
     fn add_recent_file_and_refresh(&self, path: &str) -> WincentResult<()>;
@@ -44,12 +44,8 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
         validate_path(path, expected)
     }
 
-    fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-        match qa_type {
-            QuickAccess::RecentFiles => query::get_recent_files(),
-            QuickAccess::FrequentFolders => query::get_frequent_folders(),
-            QuickAccess::All => query::get_quick_access_items(),
-        }
+    fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>> {
+        query::query_recent_with_timeout(qa_type, timeout)
     }
 
     fn add_recent_file(&self, path: &str) -> WincentResult<()> {

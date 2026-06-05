@@ -893,6 +893,7 @@ impl PowerShellError {
         self.is_timeout()
             || self.normalized_stderr().contains("locked")
             || self.normalized_stderr().contains("in use")
+            || self.normalized_stderr().contains("temporarily unavailable")
     }
 }
 
@@ -1170,6 +1171,9 @@ mod tests {
         assert!(err.is_transient());
 
         let err2 = ps_error_with_stderr("The file is in use");
+        assert!(err2.is_transient());
+
+        let err2 = ps_error_with_stderr("Shell namespace is temporarily unavailable");
         assert!(err2.is_transient());
 
         let err3 = ps_error_with_stderr("Access denied");

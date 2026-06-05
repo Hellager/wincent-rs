@@ -6,11 +6,14 @@ use crate::script_strategy::PSScript;
 use crate::utils::get_windows_recent_folder;
 use crate::WincentResult;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const RECENT_FILES_AUTOMATIC_DESTINATION: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
+const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// PowerShell script executor.
 pub(crate) struct ScriptExecutor;
@@ -21,14 +24,29 @@ impl ScriptExecutor {
         script_type: PSScript,
         parameter: Option<&str>,
     ) -> WincentResult<Output> {
+        Self::execute_ps_script_with_timeout(script_type, parameter, DEFAULT_SCRIPT_TIMEOUT)
+    }
+
+    /// Executes a PowerShell script synchronously with timeout protection.
+    pub fn execute_ps_script_with_timeout(
+        script_type: PSScript,
+        parameter: Option<&str>,
+        timeout: Duration,
+    ) -> WincentResult<Output> {
+        if timeout.is_zero() {
+            return Err(WincentError::InvalidArgument(
+                "timeout must be greater than zero".to_string(),
+            ));
+        }
+
         let script_path = match parameter {
             Some(param) => ScriptStorage::get_dynamic_script_path(script_type, param)?,
             None => ScriptStorage::get_script_path(script_type)?,
         };
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
-        Command::new("powershell")
+        let mut child = Command::new("powershell")
             .args([
                 // Process-scoped policy override for generated temp scripts.
                 // This does not change machine or user policy, but environments
@@ -40,39 +58,138 @@ impl ScriptExecutor {
                     WincentError::invalid_path_reason("Failed to convert script path")
                 })?,
             ])
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| {
-                use crate::error::{PowerShellError, PowerShellErrorKind};
+                Self::powershell_io_error(script_type, &script_path, parameter, start.elapsed(), e)
+            })?;
 
-                let io_error = Some(e.kind());
-                let os_error = e.raw_os_error();
-                let kind = if let Some(5) = os_error {
-                    PowerShellErrorKind::AccessDenied
-                } else if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    PowerShellErrorKind::AccessDenied
-                } else {
-                    PowerShellErrorKind::ProcessFailed
-                };
+        let stdout = child.stdout.take().ok_or_else(|| {
+            WincentError::SystemError("Failed to capture PowerShell stdout".to_string())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            WincentError::SystemError("Failed to capture PowerShell stderr".to_string())
+        })?;
 
-                let mut error = PowerShellError::builder(script_type.operation())
-                    .kind(kind)
-                    .exit_code(None)
-                    .stderr(e.to_string())
-                    .script_path(script_path.clone())
-                    .duration(start.elapsed());
+        let stdout_reader = thread::spawn(move || {
+            let mut reader = stdout;
+            let mut buffer = Vec::new();
+            let _ = reader.read_to_end(&mut buffer);
+            buffer
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut reader = stderr;
+            let mut buffer = Vec::new();
+            let _ = reader.read_to_end(&mut buffer);
+            buffer
+        });
 
-                if let Some(parameter) = parameter {
-                    error = error.parameters(parameter);
-                }
-                if let Some(io_error) = io_error {
-                    error = error.io_error(io_error);
-                }
-                if let Some(os_error) = os_error {
-                    error = error.os_error(os_error);
-                }
+        loop {
+            if let Some(status) = child.try_wait().map_err(|e| {
+                Self::powershell_io_error(script_type, &script_path, parameter, start.elapsed(), e)
+            })? {
+                let stdout = stdout_reader.join().unwrap_or_default();
+                let stderr = stderr_reader.join().unwrap_or_default();
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
 
-                WincentError::PowerShellExecution(Box::new(error.build()))
-            })
+            if start.elapsed() >= timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                let stdout = stdout_reader.join().unwrap_or_default();
+                let stderr = stderr_reader.join().unwrap_or_default();
+                return Err(Self::powershell_timeout_error(
+                    script_type,
+                    &script_path,
+                    parameter,
+                    start.elapsed(),
+                    stdout,
+                    stderr,
+                    timeout,
+                ));
+            }
+
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn powershell_io_error(
+        script_type: PSScript,
+        script_path: &Path,
+        parameter: Option<&str>,
+        duration: Duration,
+        error: std::io::Error,
+    ) -> WincentError {
+        use crate::error::{PowerShellError, PowerShellErrorKind};
+
+        let io_error = Some(error.kind());
+        let os_error = error.raw_os_error();
+        let kind = if let Some(5) = os_error {
+            PowerShellErrorKind::AccessDenied
+        } else if error.kind() == std::io::ErrorKind::PermissionDenied {
+            PowerShellErrorKind::AccessDenied
+        } else {
+            PowerShellErrorKind::ProcessFailed
+        };
+
+        let mut builder = PowerShellError::builder(script_type.operation())
+            .kind(kind)
+            .exit_code(None)
+            .stderr(error.to_string())
+            .script_path(script_path)
+            .duration(duration);
+
+        if let Some(parameter) = parameter {
+            builder = builder.parameters(parameter);
+        }
+        if let Some(io_error) = io_error {
+            builder = builder.io_error(io_error);
+        }
+        if let Some(os_error) = os_error {
+            builder = builder.os_error(os_error);
+        }
+
+        WincentError::PowerShellExecution(Box::new(builder.build()))
+    }
+
+    fn powershell_timeout_error(
+        script_type: PSScript,
+        script_path: &Path,
+        parameter: Option<&str>,
+        duration: Duration,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        timeout: Duration,
+    ) -> WincentError {
+        use crate::error::{PowerShellError, PowerShellErrorKind};
+
+        let mut stderr_text = String::from_utf8_lossy(&stderr).to_string();
+        if !stderr_text.is_empty() {
+            stderr_text.push('\n');
+        }
+        stderr_text.push_str(&format!(
+            "PowerShell execution timed out after {}s",
+            timeout.as_secs_f64()
+        ));
+
+        let mut builder = PowerShellError::builder(script_type.operation())
+            .kind(PowerShellErrorKind::Timeout)
+            .exit_code(None)
+            .stdout(String::from_utf8_lossy(&stdout).to_string())
+            .stderr(stderr_text)
+            .script_path(script_path)
+            .duration(duration);
+
+        if let Some(parameter) = parameter {
+            builder = builder.parameters(parameter);
+        }
+
+        WincentError::PowerShellExecution(Box::new(builder.build()))
     }
 
     /// Parses script output into a string collection.
@@ -231,6 +348,24 @@ mod tests {
             );
         } else {
             panic!("Expected PowerShellExecution error");
+        }
+    }
+
+    #[test]
+    fn test_execute_ps_script_with_timeout_returns_timeout_error() {
+        let result = ScriptExecutor::execute_ps_script_with_timeout(
+            PSScript::QueryQuickAccess,
+            None,
+            Duration::from_nanos(1),
+        );
+
+        match result {
+            Err(WincentError::PowerShellExecution(err)) => {
+                assert_eq!(err.kind(), crate::error::PowerShellErrorKind::Timeout);
+                assert!(err.is_transient());
+                assert_eq!(err.operation(), PowerShellOperation::QueryQuickAccess);
+            }
+            other => panic!("Expected PowerShell timeout error, got: {:?}", other),
         }
     }
 }

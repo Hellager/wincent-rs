@@ -204,16 +204,21 @@ fn unsupported_remove(qa_type: QuickAccess) -> WincentError {
     WincentError::UnsupportedOperation(format!("Unsupported remove operation for {:?}", qa_type))
 }
 
-fn get_items(qa_type: QuickAccess, backend: &dyn QuickAccessBackend) -> WincentResult<Vec<String>> {
-    backend.get_items(qa_type)
+fn get_items(
+    qa_type: QuickAccess,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<Vec<String>> {
+    backend.get_items(qa_type, timeout)
 }
 
 fn check_item_exact(
     path: &str,
     qa_type: QuickAccess,
+    timeout: Duration,
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<bool> {
-    let items = get_items(qa_type, backend)?;
+    let items = get_items(qa_type, timeout, backend)?;
     Ok(items.iter().any(|item| paths_equal(item, path)))
 }
 
@@ -224,7 +229,7 @@ fn add_item(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     match qa_type {
-        QuickAccess::RecentFiles => add_recent_file(path, backend),
+        QuickAccess::RecentFiles => add_recent_file(path, timeout, backend),
         QuickAccess::FrequentFolders => add_frequent_folder(path, timeout, backend),
         unsupported => Err(unsupported_add(unsupported)),
     }
@@ -256,9 +261,13 @@ fn remove_item(
     }
 }
 
-fn add_recent_file(path: &str, backend: &dyn QuickAccessBackend) -> WincentResult<()> {
+fn add_recent_file(
+    path: &str,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
     backend.validate_path(path, PathType::File)?;
-    ensure_not_present(path, QuickAccess::RecentFiles, backend)?;
+    ensure_not_present(path, QuickAccess::RecentFiles, timeout, backend)?;
     backend.add_recent_file(path)
 }
 
@@ -268,7 +277,7 @@ fn add_frequent_folder(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     backend.validate_path(path, PathType::Directory)?;
-    ensure_not_present(path, QuickAccess::FrequentFolders, backend)?;
+    ensure_not_present(path, QuickAccess::FrequentFolders, timeout, backend)?;
     backend.add_frequent_folder(path, timeout)
 }
 
@@ -278,7 +287,7 @@ fn remove_recent_file(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     backend.validate_path(path, PathType::File)?;
-    ensure_present(path, QuickAccess::RecentFiles, backend)?;
+    ensure_present(path, QuickAccess::RecentFiles, timeout, backend)?;
     backend.remove_recent_file(path, timeout)
 }
 
@@ -288,18 +297,19 @@ fn remove_frequent_folder(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     backend.validate_path(path, PathType::Directory)?;
-    ensure_present(path, QuickAccess::FrequentFolders, backend)?;
+    ensure_present(path, QuickAccess::FrequentFolders, timeout, backend)?;
     backend.remove_frequent_folder(path, timeout)
 }
 
 fn ensure_not_present(
     path: &str,
     qa_type: QuickAccess,
+    timeout: Duration,
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if check_item_exact(path, qa_type, backend)? {
+    if check_item_exact(path, qa_type, timeout, backend)? {
         return Err(WincentError::already_exists(path, qa_type));
     }
 
@@ -309,11 +319,12 @@ fn ensure_not_present(
 fn ensure_present(
     path: &str,
     qa_type: QuickAccess,
+    timeout: Duration,
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if !check_item_exact(path, qa_type, backend)? {
+    if !check_item_exact(path, qa_type, timeout, backend)? {
         return Err(WincentError::not_in_quick_access(path, qa_type));
     }
 

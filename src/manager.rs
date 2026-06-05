@@ -9,7 +9,7 @@ use crate::{
     error::WincentError,
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
     utils::paths_equal,
-    QuickAccess, WincentResult,
+    QuickAccess, RetryPolicy, WincentResult,
 };
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -192,6 +192,7 @@ impl QuickAccessItem {
 #[must_use]
 pub struct QuickAccessManagerBuilder {
     timeout: Duration,
+    retry_policy: RetryPolicy,
     backend: Arc<dyn QuickAccessBackend>,
 }
 
@@ -199,6 +200,7 @@ impl fmt::Debug for QuickAccessManagerBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QuickAccessManagerBuilder")
             .field("timeout", &self.timeout)
+            .field("retry_policy", &self.retry_policy)
             .finish_non_exhaustive()
     }
 }
@@ -207,6 +209,7 @@ impl Default for QuickAccessManagerBuilder {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(10),
+            retry_policy: RetryPolicy::standard(),
             backend: Arc::new(SystemQuickAccessBackend),
         }
     }
@@ -243,6 +246,12 @@ impl QuickAccessManagerBuilder {
         Ok(self)
     }
 
+    /// Sets the retry policy for transient PowerShell fallback failures.
+    pub fn retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
+        self.retry_policy = retry_policy;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn with_backend_for_tests(mut self, backend: Arc<dyn QuickAccessBackend>) -> Self {
         self.backend = backend;
@@ -253,6 +262,7 @@ impl QuickAccessManagerBuilder {
     pub fn build(self) -> QuickAccessManager {
         QuickAccessManager {
             timeout: self.timeout,
+            retry_policy: self.retry_policy,
             backend: self.backend,
         }
     }
@@ -285,6 +295,7 @@ impl QuickAccessManagerBuilder {
 #[derive(Clone)]
 pub struct QuickAccessManager {
     timeout: Duration,
+    retry_policy: RetryPolicy,
     backend: Arc<dyn QuickAccessBackend>,
 }
 
@@ -320,12 +331,22 @@ impl QuickAccessManager {
         self.timeout
     }
 
+    /// Returns the configured retry policy for transient PowerShell fallback failures.
+    #[must_use]
+    pub fn retry_policy(&self) -> &RetryPolicy {
+        &self.retry_policy
+    }
+
     #[cfg(test)]
     pub(crate) fn with_backend_for_tests(
         timeout: Duration,
         backend: Arc<dyn QuickAccessBackend>,
     ) -> Self {
-        Self { timeout, backend }
+        Self {
+            timeout,
+            retry_policy: RetryPolicy::standard(),
+            backend,
+        }
     }
 
     /// Retrieves Quick Access items as strings.
@@ -353,7 +374,7 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-        self.backend.get_items(qa_type)
+        self.execute_with_retry(|| self.backend.get_items(qa_type, self.timeout))
     }
 
     /// Retrieves Quick Access items as path buffers.
@@ -505,7 +526,7 @@ impl QuickAccessManager {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::Directory)?;
                 self.ensure_not_present(&path, qa_type)?;
-                self.backend.add_frequent_folder(&path, self.timeout)
+                self.execute_with_retry(|| self.backend.add_frequent_folder(&path, self.timeout))
             }
             unsupported => Err(unsupported_add(unsupported)),
         }
@@ -556,7 +577,7 @@ impl QuickAccessManager {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::File)?;
                 self.ensure_present(&path, qa_type)?;
-                self.backend.remove_recent_file(&path, self.timeout)?;
+                self.execute_with_retry(|| self.backend.remove_recent_file(&path, self.timeout))?;
                 if options.should_deep_clean_links_for(qa_type) {
                     self.backend
                         .delete_recent_links_for_target(&path, self.timeout)?;
@@ -567,7 +588,9 @@ impl QuickAccessManager {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::Directory)?;
                 self.ensure_present(&path, qa_type)?;
-                self.backend.remove_frequent_folder(&path, self.timeout)?;
+                self.execute_with_retry(|| {
+                    self.backend.remove_frequent_folder(&path, self.timeout)
+                })?;
                 if options.should_deep_clean_links_for(qa_type) {
                     self.backend
                         .delete_recent_links_for_target(&path, self.timeout)?;
@@ -897,6 +920,31 @@ impl QuickAccessManager {
 
         Ok(())
     }
+
+    fn execute_with_retry<T, F>(&self, mut action: F) -> WincentResult<T>
+    where
+        F: FnMut() -> WincentResult<T>,
+    {
+        for retry_attempt in 0.. {
+            match action() {
+                Ok(value) => return Ok(value),
+                Err(error) if self.should_retry(&error, retry_attempt) => {
+                    std::thread::sleep(self.retry_policy.calculate_delay(retry_attempt));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        unreachable!("retry loop always returns")
+    }
+
+    fn should_retry(&self, error: &WincentError, retry_attempt: u32) -> bool {
+        if retry_attempt >= self.retry_policy.max_attempts() {
+            return false;
+        }
+
+        matches!(error, WincentError::PowerShellExecution(err) if err.is_transient())
+    }
 }
 
 fn unsupported_add(qa_type: QuickAccess) -> WincentError {
@@ -992,6 +1040,7 @@ mod tests {
     struct FakeBackend {
         items: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
+        get_item_timeouts: Mutex<Vec<Duration>>,
     }
 
     impl FakeBackend {
@@ -999,6 +1048,7 @@ mod tests {
             Self {
                 items: Mutex::new(items),
                 calls: Mutex::new(Vec::new()),
+                get_item_timeouts: Mutex::new(Vec::new()),
             }
         }
 
@@ -1008,6 +1058,10 @@ mod tests {
 
         fn record(&self, call: impl Into<String>) {
             self.calls.lock().unwrap().push(call.into());
+        }
+
+        fn get_item_timeouts(&self) -> Vec<Duration> {
+            self.get_item_timeouts.lock().unwrap().clone()
         }
     }
 
@@ -1020,7 +1074,12 @@ mod tests {
             Ok(())
         }
 
-        fn get_items(&self, _qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+        fn get_items(
+            &self,
+            _qa_type: QuickAccess,
+            timeout: Duration,
+        ) -> WincentResult<Vec<String>> {
+            self.get_item_timeouts.lock().unwrap().push(timeout);
             Ok(self.items.lock().unwrap().clone())
         }
 
@@ -1091,6 +1150,129 @@ mod tests {
             .timeout(Duration::from_secs(30))
             .build();
         assert_eq!(manager.timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn builder_default_retry_policy_is_standard() {
+        let manager = QuickAccessManager::builder().build();
+        assert_eq!(
+            manager.retry_policy().max_attempts(),
+            RetryPolicy::standard().max_attempts()
+        );
+    }
+
+    #[test]
+    fn builder_custom_retry_policy_is_exposed() {
+        let policy = RetryPolicy::no_retry();
+        let manager = QuickAccessManager::builder()
+            .retry_policy(policy.clone())
+            .build();
+
+        assert_eq!(manager.retry_policy().max_attempts(), policy.max_attempts());
+    }
+
+    #[test]
+    fn get_items_passes_manager_timeout_to_backend() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager = QuickAccessManager::builder()
+            .timeout(Duration::from_secs(7))
+            .with_backend_for_tests(backend.clone())
+            .build();
+
+        let _ = manager.get_items(QuickAccess::RecentFiles)?;
+
+        assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(7)]);
+        Ok(())
+    }
+
+    fn transient_powershell_error() -> WincentError {
+        use crate::error::{PowerShellError, PowerShellErrorKind, PowerShellOperation};
+
+        WincentError::PowerShellExecution(Box::new(
+            PowerShellError::builder(PowerShellOperation::QueryQuickAccess)
+                .kind(PowerShellErrorKind::Timeout)
+                .exit_code(None)
+                .stderr("timeout")
+                .script_path("test.ps1")
+                .build(),
+        ))
+    }
+
+    fn non_transient_powershell_error() -> WincentError {
+        use crate::error::{PowerShellError, PowerShellErrorKind, PowerShellOperation};
+
+        WincentError::PowerShellExecution(Box::new(
+            PowerShellError::builder(PowerShellOperation::QueryQuickAccess)
+                .kind(PowerShellErrorKind::ProcessFailed)
+                .exit_code(Some(1))
+                .stderr("permanent failure")
+                .script_path("test.ps1")
+                .build(),
+        ))
+    }
+
+    #[test]
+    fn retry_policy_retries_transient_powershell_errors() -> WincentResult<()> {
+        let manager = QuickAccessManager::builder()
+            .retry_policy(
+                RetryPolicy::new()
+                    .with_max_attempts(2)
+                    .with_initial_delay(Duration::ZERO)
+                    .with_jitter(false),
+            )
+            .build();
+        let attempts = Mutex::new(0u32);
+
+        let result = manager.execute_with_retry(|| {
+            let mut attempts = attempts.lock().unwrap();
+            *attempts += 1;
+            if *attempts < 3 {
+                Err(transient_powershell_error())
+            } else {
+                Ok("ok")
+            }
+        })?;
+
+        assert_eq!(result, "ok");
+        assert_eq!(*attempts.lock().unwrap(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn retry_policy_no_retry_returns_transient_error_immediately() {
+        let manager = QuickAccessManager::builder()
+            .retry_policy(RetryPolicy::no_retry())
+            .build();
+        let attempts = Mutex::new(0u32);
+
+        let result: WincentResult<()> = manager.execute_with_retry(|| {
+            *attempts.lock().unwrap() += 1;
+            Err(transient_powershell_error())
+        });
+
+        assert!(matches!(result, Err(WincentError::PowerShellExecution(_))));
+        assert_eq!(*attempts.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn retry_policy_does_not_retry_non_transient_powershell_errors() {
+        let manager = QuickAccessManager::builder()
+            .retry_policy(
+                RetryPolicy::new()
+                    .with_max_attempts(2)
+                    .with_initial_delay(Duration::ZERO)
+                    .with_jitter(false),
+            )
+            .build();
+        let attempts = Mutex::new(0u32);
+
+        let result: WincentResult<()> = manager.execute_with_retry(|| {
+            *attempts.lock().unwrap() += 1;
+            Err(non_transient_powershell_error())
+        });
+
+        assert!(matches!(result, Err(WincentError::PowerShellExecution(_))));
+        assert_eq!(*attempts.lock().unwrap(), 1);
     }
 
     #[test]
