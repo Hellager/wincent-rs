@@ -64,6 +64,7 @@
 //! - Use [`EmptyOptions::remove_pinned_folders`] only when you intend to remove user-pinned folders
 //!
 
+mod backend;
 mod batch;
 mod com;
 mod com_thread;

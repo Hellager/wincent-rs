@@ -3,21 +3,17 @@
 #[cfg(feature = "visible")]
 use crate::visible;
 use crate::{
+    backend::{QuickAccessBackend, SystemQuickAccessBackend},
     batch::{self, BatchFailure, BatchOptions, BatchResult},
     empty::{self, EmptyOptions},
     error::WincentError,
-    handle::{
-        add_to_frequent_folders_with_timeout, add_to_recent_files_with_options,
-        remove_from_frequent_folders_with_timeout, remove_from_recent_files_with_timeout,
-        AddRecentFileOptions,
-    },
-    query,
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
-    recent_links::delete_recent_links_for_target,
-    utils::{paths_equal, validate_path, PathType},
+    utils::paths_equal,
     QuickAccess, WincentResult,
 };
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 fn path_to_shell_string(path: &Path) -> WincentResult<String> {
@@ -192,16 +188,26 @@ impl QuickAccessItem {
 ///
 /// assert_eq!(manager.timeout(), Duration::from_secs(30));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[must_use]
 pub struct QuickAccessManagerBuilder {
     timeout: Duration,
+    backend: Arc<dyn QuickAccessBackend>,
+}
+
+impl fmt::Debug for QuickAccessManagerBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuickAccessManagerBuilder")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for QuickAccessManagerBuilder {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(10),
+            backend: Arc::new(SystemQuickAccessBackend),
         }
     }
 }
@@ -237,10 +243,17 @@ impl QuickAccessManagerBuilder {
         Ok(self)
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_backend_for_tests(mut self, backend: Arc<dyn QuickAccessBackend>) -> Self {
+        self.backend = backend;
+        self
+    }
+
     /// Builds a configured [`QuickAccessManager`].
     pub fn build(self) -> QuickAccessManager {
         QuickAccessManager {
             timeout: self.timeout,
+            backend: self.backend,
         }
     }
 }
@@ -269,9 +282,18 @@ impl QuickAccessManagerBuilder {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct QuickAccessManager {
     timeout: Duration,
+    backend: Arc<dyn QuickAccessBackend>,
+}
+
+impl fmt::Debug for QuickAccessManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuickAccessManager")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for QuickAccessManager {
@@ -296,6 +318,14 @@ impl QuickAccessManager {
     #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_backend_for_tests(
+        timeout: Duration,
+        backend: Arc<dyn QuickAccessBackend>,
+    ) -> Self {
+        Self { timeout, backend }
     }
 
     /// Retrieves Quick Access items as strings.
@@ -323,11 +353,7 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-        match qa_type {
-            QuickAccess::RecentFiles => query::get_recent_files(),
-            QuickAccess::FrequentFolders => query::get_frequent_folders(),
-            QuickAccess::All => query::get_quick_access_items(),
-        }
+        self.backend.get_items(qa_type)
     }
 
     /// Retrieves Quick Access items as path buffers.
@@ -466,19 +492,20 @@ impl QuickAccessManager {
 
         match qa_type {
             QuickAccess::RecentFiles => {
-                validate_path(&path, PathType::File)?;
+                self.backend
+                    .validate_path(&path, crate::utils::PathType::File)?;
                 self.ensure_not_present(&path, qa_type)?;
-                add_to_recent_files_with_options(
-                    &path,
-                    AddRecentFileOptions {
-                        force_update: options.force_update(),
-                    },
-                )
+                if options.force_update() {
+                    self.backend.add_recent_file_and_refresh(&path)
+                } else {
+                    self.backend.add_recent_file(&path)
+                }
             }
             QuickAccess::FrequentFolders => {
-                validate_path(&path, PathType::Directory)?;
+                self.backend
+                    .validate_path(&path, crate::utils::PathType::Directory)?;
                 self.ensure_not_present(&path, qa_type)?;
-                add_to_frequent_folders_with_timeout(&path, self.timeout)
+                self.backend.add_frequent_folder(&path, self.timeout)
             }
             unsupported => Err(unsupported_add(unsupported)),
         }
@@ -526,20 +553,24 @@ impl QuickAccessManager {
 
         match qa_type {
             QuickAccess::RecentFiles => {
-                validate_path(&path, PathType::File)?;
+                self.backend
+                    .validate_path(&path, crate::utils::PathType::File)?;
                 self.ensure_present(&path, qa_type)?;
-                remove_from_recent_files_with_timeout(&path, self.timeout)?;
+                self.backend.remove_recent_file(&path, self.timeout)?;
                 if options.should_deep_clean_links_for(qa_type) {
-                    delete_recent_links_for_target(&path, self.timeout)?;
+                    self.backend
+                        .delete_recent_links_for_target(&path, self.timeout)?;
                 }
                 Ok(())
             }
             QuickAccess::FrequentFolders => {
-                validate_path(&path, PathType::Directory)?;
+                self.backend
+                    .validate_path(&path, crate::utils::PathType::Directory)?;
                 self.ensure_present(&path, qa_type)?;
-                remove_from_frequent_folders_with_timeout(&path, self.timeout)?;
+                self.backend.remove_frequent_folder(&path, self.timeout)?;
                 if options.should_deep_clean_links_for(qa_type) {
-                    delete_recent_links_for_target(&path, self.timeout)?;
+                    self.backend
+                        .delete_recent_links_for_target(&path, self.timeout)?;
                 }
                 Ok(())
             }
@@ -575,7 +606,7 @@ impl QuickAccessManager {
     /// ```
     pub fn add_items_batch(&self, items: &[QuickAccessItem], options: BatchOptions) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
-        let result = batch::add_items_batch(&items, options, self.timeout);
+        let result = batch::add_items_batch(&items, options, self.timeout, self.backend.as_ref());
         merge_batch_failures(result, failures)
     }
 
@@ -604,7 +635,7 @@ impl QuickAccessManager {
     /// ```
     pub fn remove_items_batch(&self, items: &[QuickAccessItem]) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
-        let result = batch::remove_items_batch(&items, self.timeout);
+        let result = batch::remove_items_batch(&items, self.timeout, self.backend.as_ref());
         merge_batch_failures(result, failures)
     }
 
@@ -619,7 +650,12 @@ impl QuickAccessManager {
         options: RemoveOptions,
     ) -> BatchResult {
         let (items, failures) = self.convert_batch_items(items);
-        let result = batch::remove_items_batch_with_options(&items, options, self.timeout);
+        let result = batch::remove_items_batch_with_options(
+            &items,
+            options,
+            self.timeout,
+            self.backend.as_ref(),
+        );
         merge_batch_failures(result, failures)
     }
 
@@ -671,7 +707,7 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn empty_items(&self, qa_type: QuickAccess, options: EmptyOptions) -> WincentResult<()> {
-        empty::empty_items(qa_type, options)
+        empty::empty_items_with_backend(qa_type, options, self.timeout, self.backend.as_ref())
     }
 
     /// Checks whether a Quick Access section is visible in Explorer.
@@ -950,6 +986,98 @@ impl QuickAccessManager {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct FakeBackend {
+        items: Mutex<Vec<String>>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeBackend {
+        fn with_items(items: Vec<String>) -> Self {
+            Self {
+                items: Mutex::new(items),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        fn record(&self, call: impl Into<String>) {
+            self.calls.lock().unwrap().push(call.into());
+        }
+    }
+
+    impl crate::backend::QuickAccessBackend for FakeBackend {
+        fn validate_path(
+            &self,
+            _path: &str,
+            _expected: crate::utils::PathType,
+        ) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn get_items(&self, _qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+            Ok(self.items.lock().unwrap().clone())
+        }
+
+        fn add_recent_file(&self, path: &str) -> WincentResult<()> {
+            self.record(format!("add_recent_file:{path}"));
+            Ok(())
+        }
+
+        fn add_recent_file_and_refresh(&self, path: &str) -> WincentResult<()> {
+            self.record(format!("add_recent_file_and_refresh:{path}"));
+            Ok(())
+        }
+
+        fn add_frequent_folder(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
+            self.record(format!("add_frequent_folder:{path}"));
+            Ok(())
+        }
+
+        fn remove_recent_file(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
+            self.record(format!("remove_recent_file:{path}"));
+            Ok(())
+        }
+
+        fn remove_frequent_folder(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
+            self.record(format!("remove_frequent_folder:{path}"));
+            Ok(())
+        }
+
+        fn delete_recent_links_for_target(
+            &self,
+            path: &str,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
+            self.record(format!("delete_recent_links:{path}"));
+            Ok(())
+        }
+
+        fn refresh_recent_files_display(&self) -> WincentResult<()> {
+            self.record("refresh_recent_files_display");
+            Ok(())
+        }
+
+        fn clear_recent_files(&self) -> WincentResult<()> {
+            self.record("clear_recent_files");
+            Ok(())
+        }
+
+        fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
+            self.record("clear_frequent_folders_jumplist");
+            Ok(())
+        }
+
+        fn refresh_explorer(&self) -> WincentResult<()> {
+            self.record("refresh_explorer");
+            Ok(())
+        }
+    }
 
     #[test]
     fn builder_default_timeout() {
@@ -984,6 +1112,66 @@ mod tests {
     fn manager_new_uses_default_timeout() {
         let manager = QuickAccessManager::new();
         assert_eq!(manager.timeout(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn add_recent_file_refresh_uses_dedicated_backend_method() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager = QuickAccessManager::builder()
+            .with_backend_for_tests(backend.clone())
+            .build();
+
+        manager.add_item(
+            "C:\\report.docx",
+            QuickAccess::RecentFiles,
+            AddOptions::new().refresh_recent_files(),
+        )?;
+
+        assert_eq!(
+            backend.calls(),
+            vec!["add_recent_file_and_refresh:C:\\report.docx".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn add_duplicate_skips_backend_mutation() {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let error = manager
+            .add_item(
+                "c:/REPORT.docx",
+                QuickAccess::RecentFiles,
+                AddOptions::new(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, WincentError::AlreadyExists { .. }));
+        assert!(backend.calls().is_empty());
+    }
+
+    #[test]
+    fn remove_deep_clean_runs_after_successful_remove() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        manager.remove_item_with_options(
+            "C:\\report.docx",
+            QuickAccess::RecentFiles,
+            RemoveOptions::new().deep_clean_recent_links(),
+        )?;
+
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "remove_recent_file:C:\\report.docx".to_string(),
+                "delete_recent_links:C:\\report.docx".to_string(),
+            ]
+        );
+        Ok(())
     }
 
     #[test]

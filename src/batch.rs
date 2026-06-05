@@ -1,17 +1,10 @@
 //! Batch operations for Windows Quick Access items.
 
 use crate::{
+    backend::QuickAccessBackend,
     error::WincentError,
-    handle::{
-        add_to_frequent_folders_with_timeout, add_to_recent_files_with_options,
-        remove_from_frequent_folders_with_timeout, remove_from_recent_files_with_timeout,
-        AddRecentFileOptions,
-    },
     manager::RemoveOptions,
-    query,
-    recent_links::delete_recent_links_for_target,
-    script_executor::QuickAccessDataFiles,
-    utils::{paths_equal, refresh_explorer_window, validate_path, PathType},
+    utils::{paths_equal, PathType},
     QuickAccess, WincentResult,
 };
 use std::time::Duration;
@@ -211,23 +204,28 @@ fn unsupported_remove(qa_type: QuickAccess) -> WincentError {
     WincentError::UnsupportedOperation(format!("Unsupported remove operation for {:?}", qa_type))
 }
 
-fn get_items(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-    match qa_type {
-        QuickAccess::RecentFiles => query::get_recent_files(),
-        QuickAccess::FrequentFolders => query::get_frequent_folders(),
-        QuickAccess::All => query::get_quick_access_items(),
-    }
+fn get_items(qa_type: QuickAccess, backend: &dyn QuickAccessBackend) -> WincentResult<Vec<String>> {
+    backend.get_items(qa_type)
 }
 
-fn check_item_exact(path: &str, qa_type: QuickAccess) -> WincentResult<bool> {
-    let items = get_items(qa_type)?;
+fn check_item_exact(
+    path: &str,
+    qa_type: QuickAccess,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<bool> {
+    let items = get_items(qa_type, backend)?;
     Ok(items.iter().any(|item| paths_equal(item, path)))
 }
 
-fn add_item(path: &str, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
+fn add_item(
+    path: &str,
+    qa_type: QuickAccess,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
     match qa_type {
-        QuickAccess::RecentFiles => add_recent_file(path),
-        QuickAccess::FrequentFolders => add_frequent_folder(path, timeout),
+        QuickAccess::RecentFiles => add_recent_file(path, backend),
+        QuickAccess::FrequentFolders => add_frequent_folder(path, timeout, backend),
         unsupported => Err(unsupported_add(unsupported)),
     }
 }
@@ -237,19 +235,20 @@ fn remove_item(
     qa_type: QuickAccess,
     options: RemoveOptions,
     timeout: Duration,
+    backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     match qa_type {
         QuickAccess::RecentFiles => {
-            remove_recent_file(path, timeout)?;
+            remove_recent_file(path, timeout, backend)?;
             if options.should_deep_clean_links_for(QuickAccess::RecentFiles) {
-                delete_recent_links_for_target(path, timeout)?;
+                backend.delete_recent_links_for_target(path, timeout)?;
             }
             Ok(())
         }
         QuickAccess::FrequentFolders => {
-            remove_frequent_folder(path, timeout)?;
+            remove_frequent_folder(path, timeout, backend)?;
             if options.should_deep_clean_links_for(QuickAccess::FrequentFolders) {
-                delete_recent_links_for_target(path, timeout)?;
+                backend.delete_recent_links_for_target(path, timeout)?;
             }
             Ok(())
         }
@@ -257,50 +256,64 @@ fn remove_item(
     }
 }
 
-fn add_recent_file(path: &str) -> WincentResult<()> {
-    validate_path(path, PathType::File)?;
-    ensure_not_present(path, QuickAccess::RecentFiles)?;
-    add_to_recent_files_with_options(
-        path,
-        AddRecentFileOptions {
-            // Batch force_update is handled once after all Recent Files adds.
-            force_update: false,
-        },
-    )
+fn add_recent_file(path: &str, backend: &dyn QuickAccessBackend) -> WincentResult<()> {
+    backend.validate_path(path, PathType::File)?;
+    ensure_not_present(path, QuickAccess::RecentFiles, backend)?;
+    backend.add_recent_file(path)
 }
 
-fn add_frequent_folder(path: &str, timeout: Duration) -> WincentResult<()> {
-    validate_path(path, PathType::Directory)?;
-    ensure_not_present(path, QuickAccess::FrequentFolders)?;
-    add_to_frequent_folders_with_timeout(path, timeout)
+fn add_frequent_folder(
+    path: &str,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
+    backend.validate_path(path, PathType::Directory)?;
+    ensure_not_present(path, QuickAccess::FrequentFolders, backend)?;
+    backend.add_frequent_folder(path, timeout)
 }
 
-fn remove_recent_file(path: &str, timeout: Duration) -> WincentResult<()> {
-    validate_path(path, PathType::File)?;
-    ensure_present(path, QuickAccess::RecentFiles)?;
-    remove_from_recent_files_with_timeout(path, timeout)
+fn remove_recent_file(
+    path: &str,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
+    backend.validate_path(path, PathType::File)?;
+    ensure_present(path, QuickAccess::RecentFiles, backend)?;
+    backend.remove_recent_file(path, timeout)
 }
 
-fn remove_frequent_folder(path: &str, timeout: Duration) -> WincentResult<()> {
-    validate_path(path, PathType::Directory)?;
-    ensure_present(path, QuickAccess::FrequentFolders)?;
-    remove_from_frequent_folders_with_timeout(path, timeout)
+fn remove_frequent_folder(
+    path: &str,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
+    backend.validate_path(path, PathType::Directory)?;
+    ensure_present(path, QuickAccess::FrequentFolders, backend)?;
+    backend.remove_frequent_folder(path, timeout)
 }
 
-fn ensure_not_present(path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+fn ensure_not_present(
+    path: &str,
+    qa_type: QuickAccess,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if check_item_exact(path, qa_type)? {
+    if check_item_exact(path, qa_type, backend)? {
         return Err(WincentError::already_exists(path, qa_type));
     }
 
     Ok(())
 }
 
-fn ensure_present(path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+fn ensure_present(
+    path: &str,
+    qa_type: QuickAccess,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if !check_item_exact(path, qa_type)? {
+    if !check_item_exact(path, qa_type, backend)? {
         return Err(WincentError::not_in_quick_access(path, qa_type));
     }
 
@@ -309,12 +322,6 @@ fn ensure_present(path: &str, qa_type: QuickAccess) -> WincentResult<()> {
 
 fn should_force_update_recent_files(options: BatchOptions, recent_files_succeeded: bool) -> bool {
     options.force_update() && recent_files_succeeded
-}
-
-fn refresh_recent_files_batch_display() -> WincentResult<()> {
-    QuickAccessDataFiles::new()?.remove_recent_file()?;
-    refresh_explorer_window()?;
-    Ok(())
 }
 
 fn record_batch_refresh_result(
@@ -342,13 +349,14 @@ pub(crate) fn add_items_batch(
     items: &[(String, QuickAccess)],
     options: BatchOptions,
     timeout: Duration,
+    backend: &dyn QuickAccessBackend,
 ) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
     let mut refresh_recent_item_index = None;
 
     for (path, qa_type) in items {
-        match add_item(path, *qa_type, timeout) {
+        match add_item(path, *qa_type, timeout, backend) {
             Ok(()) => {
                 succeeded.push(path.clone());
                 if options.force_update() && matches!(qa_type, QuickAccess::RecentFiles) {
@@ -364,7 +372,7 @@ pub(crate) fn add_items_batch(
             &mut succeeded,
             &mut failed,
             refresh_recent_item_index,
-            refresh_recent_files_batch_display(),
+            backend.refresh_recent_files_display(),
         );
     }
 
@@ -384,20 +392,22 @@ pub(crate) fn add_items_batch(
 pub(crate) fn remove_items_batch(
     items: &[(String, QuickAccess)],
     timeout: Duration,
+    backend: &dyn QuickAccessBackend,
 ) -> BatchResult {
-    remove_items_batch_with_options(items, RemoveOptions::new(), timeout)
+    remove_items_batch_with_options(items, RemoveOptions::new(), timeout, backend)
 }
 
 pub(crate) fn remove_items_batch_with_options(
     items: &[(String, QuickAccess)],
     options: RemoveOptions,
     timeout: Duration,
+    backend: &dyn QuickAccessBackend,
 ) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
     for (path, qa_type) in items {
-        match remove_item(path, *qa_type, options, timeout) {
+        match remove_item(path, *qa_type, options, timeout, backend) {
             Ok(()) => succeeded.push(path.clone()),
             Err(error) => failed.push(BatchFailure::new(path.clone(), error)),
         }
@@ -528,11 +538,13 @@ mod tests {
 
     #[test]
     fn batch_add_reports_invalid_path_before_membership_check() {
+        let backend = crate::backend::SystemQuickAccessBackend;
         let missing = unique_temp_path("missing-batch-add-recent.txt");
         let result = add_items_batch(
             &[(missing.display().to_string(), QuickAccess::RecentFiles)],
             BatchOptions::new(),
             Duration::from_secs(10),
+            &backend,
         );
 
         assert!(result.succeeded().is_empty());
@@ -545,10 +557,12 @@ mod tests {
 
     #[test]
     fn batch_remove_reports_invalid_path_before_membership_check() {
+        let backend = crate::backend::SystemQuickAccessBackend;
         let missing = unique_temp_path("missing-batch-remove-recent.txt");
         let result = remove_items_batch(
             &[(missing.display().to_string(), QuickAccess::RecentFiles)],
             Duration::from_secs(10),
+            &backend,
         );
 
         assert!(result.succeeded().is_empty());
@@ -561,10 +575,12 @@ mod tests {
 
     #[test]
     fn batch_add_all_still_reports_unsupported_operation() {
+        let backend = crate::backend::SystemQuickAccessBackend;
         let result = add_items_batch(
             &[("C:\\test.txt".to_string(), QuickAccess::All)],
             BatchOptions::new(),
             Duration::from_secs(10),
+            &backend,
         );
 
         assert!(result.succeeded().is_empty());

@@ -15,11 +15,10 @@
 //! - Atomic operations with proper cleanup sequencing
 
 use crate::{
+    backend::{QuickAccessBackend, SystemQuickAccessBackend},
     com::{ComGuard, ComInitStatus},
     error::WincentError,
-    handle::remove_from_frequent_folders_with_timeout,
-    query::get_frequent_folders,
-    utils::{get_windows_recent_folder, refresh_explorer_window},
+    utils::get_windows_recent_folder,
     QuickAccess, WincentResult,
 };
 use std::time::Duration;
@@ -179,9 +178,10 @@ where
 /// workaround when needed.
 #[allow(dead_code)]
 pub(crate) fn empty_pinned_folders() -> WincentResult<()> {
-    let paths = get_frequent_folders()?;
+    let backend = SystemQuickAccessBackend;
+    let paths = backend.get_items(QuickAccess::FrequentFolders)?;
     empty_pinned_folders_from_snapshot(&paths, |path| {
-        remove_from_frequent_folders_with_timeout(path, EMPTY_PINNED_FOLDERS_TIMEOUT)
+        backend.remove_frequent_folder(path, EMPTY_PINNED_FOLDERS_TIMEOUT)
     })
 }
 
@@ -246,17 +246,27 @@ pub(crate) fn empty_recent_files() -> WincentResult<()> {
 ///     Ok(())
 /// }
 /// ```
+#[allow(dead_code)]
 pub(crate) fn empty_frequent_folders(also_pinned_folders: bool) -> WincentResult<()> {
+    let backend = SystemQuickAccessBackend;
+    empty_frequent_folders_with_backend(also_pinned_folders, EMPTY_PINNED_FOLDERS_TIMEOUT, &backend)
+}
+
+fn empty_frequent_folders_with_backend(
+    also_pinned_folders: bool,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
     let pinned_snapshot = if also_pinned_folders {
-        Some(get_frequent_folders()?)
+        Some(backend.get_items(QuickAccess::FrequentFolders)?)
     } else {
         None
     };
 
-    empty_user_folders_with_jumplist_file()?;
+    backend.clear_frequent_folders_jumplist()?;
     if let Some(paths) = pinned_snapshot {
         if let Err(source) = empty_pinned_folders_from_snapshot(&paths, |path| {
-            remove_from_frequent_folders_with_timeout(path, EMPTY_PINNED_FOLDERS_TIMEOUT)
+            backend.remove_frequent_folder(path, timeout)
         }) {
             return Err(partial_frequent_folders_error(source));
         }
@@ -320,8 +330,12 @@ fn frequent_folders_cleared_from_error(error: &WincentError) -> bool {
 ///     Ok(())
 /// }
 /// ```
-fn empty_all_items(options: EmptyOptions) -> WincentResult<()> {
-    if let Err(source) = empty_recent_files() {
+fn empty_all_items_with_backend(
+    options: EmptyOptions,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
+    if let Err(source) = backend.clear_recent_files() {
         return Err(WincentError::PartialEmpty {
             recent_files_cleared: false,
             frequent_folders_cleared: false,
@@ -329,7 +343,9 @@ fn empty_all_items(options: EmptyOptions) -> WincentResult<()> {
         });
     }
 
-    if let Err(source) = empty_frequent_folders(options.also_pinned_folders()) {
+    if let Err(source) =
+        empty_frequent_folders_with_backend(options.also_pinned_folders(), timeout, backend)
+    {
         let frequent_folders_cleared = frequent_folders_cleared_from_error(&source);
         return Err(WincentError::PartialEmpty {
             recent_files_cleared: true,
@@ -339,6 +355,12 @@ fn empty_all_items(options: EmptyOptions) -> WincentResult<()> {
     }
 
     Ok(())
+}
+
+#[allow(dead_code)]
+fn empty_all_items(options: EmptyOptions) -> WincentResult<()> {
+    let backend = SystemQuickAccessBackend;
+    empty_all_items_with_backend(options, EMPTY_PINNED_FOLDERS_TIMEOUT, &backend)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,19 +383,32 @@ fn refresh_policy_for_result(result: &WincentResult<()>, force_refresh: bool) ->
 }
 
 /// Clears items from a specific Quick Access category.
+#[allow(dead_code)]
 pub(crate) fn empty_items(qa_type: QuickAccess, options: EmptyOptions) -> WincentResult<()> {
+    let backend = SystemQuickAccessBackend;
+    empty_items_with_backend(qa_type, options, EMPTY_PINNED_FOLDERS_TIMEOUT, &backend)
+}
+
+pub(crate) fn empty_items_with_backend(
+    qa_type: QuickAccess,
+    options: EmptyOptions,
+    timeout: Duration,
+    backend: &dyn QuickAccessBackend,
+) -> WincentResult<()> {
     let result = match qa_type {
-        QuickAccess::RecentFiles => empty_recent_files(),
-        QuickAccess::FrequentFolders => empty_frequent_folders(options.also_pinned_folders()),
-        QuickAccess::All => empty_all_items(options),
+        QuickAccess::RecentFiles => backend.clear_recent_files(),
+        QuickAccess::FrequentFolders => {
+            empty_frequent_folders_with_backend(options.also_pinned_folders(), timeout, backend)
+        }
+        QuickAccess::All => empty_all_items_with_backend(options, timeout, backend),
     };
 
     match refresh_policy_for_result(&result, options.force_refresh()) {
-        RefreshPolicy::PropagateFailure => refresh_explorer_window()?,
+        RefreshPolicy::PropagateFailure => backend.refresh_explorer()?,
         RefreshPolicy::BestEffort => {
             // Preserve the cleanup failure while still trying to show any
             // successfully cleared category in Explorer.
-            let _ = refresh_explorer_window();
+            let _ = backend.refresh_explorer();
         }
         RefreshPolicy::Skip => {}
     }
@@ -391,8 +426,97 @@ mod tests {
     use crate::query::{get_frequent_folders, get_recent_files};
     use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::thread;
     use std::time::Duration;
+
+    struct FakeEmptyBackend {
+        items: Vec<String>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeEmptyBackend {
+        fn new(items: Vec<String>) -> Self {
+            Self {
+                items,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn record(&self, call: impl Into<String>) {
+            self.calls.lock().unwrap().push(call.into());
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::backend::QuickAccessBackend for FakeEmptyBackend {
+        fn validate_path(
+            &self,
+            _path: &str,
+            _expected: crate::utils::PathType,
+        ) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+            self.record(format!("get_items:{qa_type:?}"));
+            Ok(self.items.clone())
+        }
+
+        fn add_recent_file(&self, _path: &str) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn add_recent_file_and_refresh(&self, _path: &str) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn add_frequent_folder(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn remove_recent_file(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
+            self.record(format!(
+                "remove_frequent_folder:{path}:{}",
+                timeout.as_secs()
+            ));
+            Ok(())
+        }
+
+        fn delete_recent_links_for_target(
+            &self,
+            _path: &str,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn refresh_recent_files_display(&self) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn clear_recent_files(&self) -> WincentResult<()> {
+            self.record("clear_recent_files");
+            Ok(())
+        }
+
+        fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
+            self.record("clear_frequent_folders_jumplist");
+            Ok(())
+        }
+
+        fn refresh_explorer(&self) -> WincentResult<()> {
+            self.record("refresh_explorer");
+            Ok(())
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Integration-test helpers
@@ -512,6 +636,49 @@ mod tests {
 
         assert!(frequent_folders_cleared_from_error(&partial));
         assert!(!frequent_folders_cleared_from_error(&non_partial));
+    }
+
+    #[test]
+    fn empty_frequent_folders_with_backend_snapshots_before_clearing_jumplist() -> WincentResult<()>
+    {
+        let backend =
+            FakeEmptyBackend::new(vec!["C:\\FolderA".to_string(), "C:\\FolderB".to_string()]);
+
+        empty_items_with_backend(
+            QuickAccess::FrequentFolders,
+            EmptyOptions::new().remove_pinned_folders(),
+            Duration::from_secs(3),
+            &backend,
+        )?;
+
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "get_items:FrequentFolders".to_string(),
+                "clear_frequent_folders_jumplist".to_string(),
+                "remove_frequent_folder:C:\\FolderA:3".to_string(),
+                "remove_frequent_folder:C:\\FolderB:3".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_frequent_folders_without_pinned_cleanup_does_not_snapshot() -> WincentResult<()> {
+        let backend = FakeEmptyBackend::new(vec!["C:\\FolderA".to_string()]);
+
+        empty_items_with_backend(
+            QuickAccess::FrequentFolders,
+            EmptyOptions::new(),
+            Duration::from_secs(3),
+            &backend,
+        )?;
+
+        assert_eq!(
+            backend.calls(),
+            vec!["clear_frequent_folders_jumplist".to_string()]
+        );
+        Ok(())
     }
 
     #[test]
