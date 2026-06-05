@@ -105,7 +105,9 @@ pub mod prelude {
     #[cfg(feature = "visible")]
     pub use crate::visible::{
         is_frequent_folders_visible, is_recent_files_visible, is_visible,
-        set_frequent_folders_visible, set_recent_files_visible, set_visible,
+        set_frequent_folders_visible, set_frequent_folders_visible_with_options,
+        set_recent_files_visible, set_recent_files_visible_with_options, set_visible,
+        set_visible_with_options, VisibilityOptions,
     };
 
     pub use crate::{

@@ -167,6 +167,86 @@ pub fn set_frequent_folders_visible(visible: bool) -> WincentResult<()> {
     set_visible(QuickAccess::FrequentFolders, visible)
 }
 
+/// Options for visibility write operations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VisibilityOptions {
+    refresh_explorer: bool,
+}
+
+impl VisibilityOptions {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn refresh_explorer_enabled(&self) -> bool {
+        self.refresh_explorer
+    }
+
+    #[must_use]
+    pub fn refresh_explorer(self) -> Self {
+        Self {
+            refresh_explorer: true,
+        }
+    }
+
+    #[must_use]
+    pub fn with_refresh_explorer(self, enabled: bool) -> Self {
+        Self {
+            refresh_explorer: enabled,
+        }
+    }
+}
+
+/// Sets whether a Quick Access section is visible, with optional Explorer refresh.
+///
+/// If `options.refresh_explorer_enabled()` is true, calls `refresh_explorer_window()`
+/// after the registry write. Registry write is NOT rolled back if refresh fails.
+pub fn set_visible_with_options(
+    qa_type: QuickAccess,
+    visible: bool,
+    options: VisibilityOptions,
+) -> WincentResult<()> {
+    set_visible_with_options_inner(
+        qa_type,
+        visible,
+        options,
+        set_visible,
+        crate::utils::refresh_explorer_window,
+    )
+}
+
+fn set_visible_with_options_inner(
+    qa_type: QuickAccess,
+    visible: bool,
+    options: VisibilityOptions,
+    write: impl FnOnce(QuickAccess, bool) -> WincentResult<()>,
+    refresh: impl FnOnce() -> WincentResult<()>,
+) -> WincentResult<()> {
+    write(qa_type, visible)?;
+    if options.refresh_explorer_enabled() {
+        refresh()?;
+    }
+    Ok(())
+}
+
+/// Sets whether Recent Files are visible, with optional Explorer refresh.
+pub fn set_recent_files_visible_with_options(
+    visible: bool,
+    options: VisibilityOptions,
+) -> WincentResult<()> {
+    set_visible_with_options(QuickAccess::RecentFiles, visible, options)
+}
+
+/// Sets whether Frequent Folders are visible, with optional Explorer refresh.
+pub fn set_frequent_folders_visible_with_options(
+    visible: bool,
+    options: VisibilityOptions,
+) -> WincentResult<()> {
+    set_visible_with_options(QuickAccess::FrequentFolders, visible, options)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +290,141 @@ mod tests {
         assert_eq!(is_frequent_folders_visible()?, initial);
 
         Ok(())
+    }
+
+    #[test]
+    fn visibility_options_default_does_not_refresh() {
+        assert!(!VisibilityOptions::new().refresh_explorer_enabled());
+    }
+
+    #[test]
+    fn visibility_options_builder_enables_refresh() {
+        assert!(VisibilityOptions::new()
+            .refresh_explorer()
+            .refresh_explorer_enabled());
+    }
+
+    #[test]
+    fn visibility_options_with_refresh_explorer_true_enables() {
+        assert!(VisibilityOptions::new()
+            .with_refresh_explorer(true)
+            .refresh_explorer_enabled());
+    }
+
+    #[test]
+    fn visibility_options_with_refresh_explorer_false_disables() {
+        assert!(!VisibilityOptions::new()
+            .refresh_explorer()
+            .with_refresh_explorer(false)
+            .refresh_explorer_enabled());
+    }
+
+    #[test]
+    fn set_visible_inner_no_refresh_does_not_call_refresh() {
+        use std::cell::Cell;
+
+        let write_called = Cell::new(false);
+        let refresh_called = Cell::new(false);
+
+        let result = set_visible_with_options_inner(
+            QuickAccess::RecentFiles,
+            true,
+            VisibilityOptions::new(),
+            |qa_type, visible| {
+                assert_eq!(qa_type, QuickAccess::RecentFiles);
+                assert!(visible);
+                write_called.set(true);
+                Ok(())
+            },
+            || {
+                refresh_called.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(write_called.get(), "registry writer must be called");
+        assert!(
+            !refresh_called.get(),
+            "refresh must not be called when option is disabled"
+        );
+    }
+
+    #[test]
+    fn set_visible_inner_with_refresh_calls_refresh() {
+        use std::cell::Cell;
+
+        let write_called = Cell::new(false);
+        let refresh_called = Cell::new(false);
+
+        let result = set_visible_with_options_inner(
+            QuickAccess::RecentFiles,
+            true,
+            VisibilityOptions::new().refresh_explorer(),
+            |qa_type, visible| {
+                assert_eq!(qa_type, QuickAccess::RecentFiles);
+                assert!(visible);
+                write_called.set(true);
+                Ok(())
+            },
+            || {
+                refresh_called.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(write_called.get(), "registry writer must be called");
+        assert!(
+            refresh_called.get(),
+            "refresh must be called when option is enabled"
+        );
+    }
+
+    #[test]
+    fn set_visible_inner_refresh_error_propagates() {
+        use crate::error::WincentError;
+
+        let expected = WincentError::SystemError("sentinel".into());
+        let result = set_visible_with_options_inner(
+            QuickAccess::RecentFiles,
+            true,
+            VisibilityOptions::new().refresh_explorer(),
+            |_, _| Ok(()),
+            || Err(expected),
+        );
+
+        match result {
+            Err(WincentError::SystemError(message)) => assert_eq!(message, "sentinel"),
+            other => panic!("expected refresh sentinel error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_visible_inner_write_error_skips_refresh() {
+        use crate::error::WincentError;
+        use std::cell::Cell;
+
+        let refresh_called = Cell::new(false);
+        let expected = WincentError::SystemError("write sentinel".into());
+        let result = set_visible_with_options_inner(
+            QuickAccess::RecentFiles,
+            true,
+            VisibilityOptions::new().refresh_explorer(),
+            |_, _| Err(expected),
+            || {
+                refresh_called.set(true);
+                Ok(())
+            },
+        );
+
+        match result {
+            Err(WincentError::SystemError(message)) => assert_eq!(message, "write sentinel"),
+            other => panic!("expected writer sentinel error, got {other:?}"),
+        }
+        assert!(
+            !refresh_called.get(),
+            "refresh must not be called when registry writer fails"
+        );
     }
 }

@@ -778,6 +778,52 @@ impl QuickAccessManager {
         self.set_visible(qa_type, false)
     }
 
+    #[cfg(feature = "visible")]
+    pub fn set_visible_with_options(
+        &self,
+        qa_type: QuickAccess,
+        visible: bool,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        visible::set_visible_with_options(qa_type, visible, options)
+    }
+
+    #[cfg(feature = "visible")]
+    pub fn show_section_with_options(
+        &self,
+        qa_type: QuickAccess,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        self.set_visible_with_options(qa_type, true, options)
+    }
+
+    #[cfg(feature = "visible")]
+    pub fn hide_section_with_options(
+        &self,
+        qa_type: QuickAccess,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        self.set_visible_with_options(qa_type, false, options)
+    }
+
+    #[cfg(feature = "visible")]
+    pub fn set_recent_files_visible_with_options(
+        &self,
+        visible: bool,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        visible::set_recent_files_visible_with_options(visible, options)
+    }
+
+    #[cfg(feature = "visible")]
+    pub fn set_frequent_folders_visible_with_options(
+        &self,
+        visible: bool,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        visible::set_frequent_folders_visible_with_options(visible, options)
+    }
+
     fn convert_batch_items(
         &self,
         items: &[QuickAccessItem],
