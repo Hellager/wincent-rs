@@ -16,7 +16,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 
 - Query recent files and frequent folders
 - Add and remove items with duplicate detection
-- Clear categories (optionally including pinned folders)
+- Clear categories with optional explicit pinned-folder cleanup
 - Check item existence by exact path or keyword
 - Batch add/remove with per-item error collection
 - Timeout protection for all shell operations

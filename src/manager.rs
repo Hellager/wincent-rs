@@ -705,8 +705,14 @@ impl QuickAccessManager {
     /// Clears Quick Access items.
     ///
     /// `QuickAccess::RecentFiles` clears Recent Files. `QuickAccess::FrequentFolders`
-    /// clears user-visited frequent folders and optionally pinned folders.
-    /// `QuickAccess::All` clears both categories.
+    /// deletes Explorer's Frequent Folders backing file. `QuickAccess::All`
+    /// clears both categories.
+    ///
+    /// Deleting the Frequent Folders backing file can cause Explorer to rebuild
+    /// default folder pins and remove user-pinned folders even when
+    /// [`EmptyOptions::also_pinned_folders`] is `false`. Set
+    /// [`EmptyOptions::remove_pinned_folders`] to additionally invoke Explorer's
+    /// unpin verb for visible Frequent Folders items.
     ///
     /// # Errors
     ///

@@ -2,15 +2,15 @@
 //!
 //! Provides unified interface for clearing Windows Quick Access items including:
 //! - Recent files
-//! - Frequent folders (both pinned and normal)
+//! - Frequent folders (Explorer backing file and optional explicit pin cleanup)
 //! - Complete Quick Access history
 //!
 //! Implements multiple cleanup strategies with fallback mechanisms
 //!
 //! # Key Functionality
 //! - Clear recent files using Windows Shell API
-//! - Remove frequent folders through file system operations
-//! - Clear pinned folders via PowerShell scripts
+//! - Remove frequent folders by deleting Explorer's backing file
+//! - Optionally clear visible pinned folders through Explorer shell verbs
 //! - Full Quick Access reset capabilities
 //! - Atomic operations with proper cleanup sequencing
 
@@ -30,10 +30,14 @@ const EMPTY_PINNED_FOLDERS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Options for clearing Quick Access items.
 ///
-/// By default, clearing Frequent Folders removes user-visited frequent folders
-/// but leaves pinned folders alone. Use
-/// [`EmptyOptions::remove_pinned_folders`] only when the caller explicitly wants
-/// to unpin user-pinned folders too.
+/// Clearing Frequent Folders deletes Explorer's Frequent Folders backing file.
+/// On current Windows builds, Explorer may rebuild default folder pins and may
+/// remove user-pinned folders even when [`EmptyOptions::also_pinned_folders`]
+/// is `false`.
+///
+/// By default, wincent does not additionally invoke Explorer's unpin verb for
+/// visible pinned folders. Use [`EmptyOptions::remove_pinned_folders`] when the
+/// caller explicitly wants that extra unpin step too.
 ///
 /// # Examples
 ///
@@ -49,7 +53,7 @@ const EMPTY_PINNED_FOLDERS_TIMEOUT: Duration = Duration::from_secs(10);
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EmptyOptions {
-    /// Also attempt to remove pinned folders from Quick Access.
+    /// Also attempt to explicitly unpin visible folders from Quick Access.
     also_pinned_folders: bool,
     /// Refresh open Explorer windows after a successful clear.
     force_refresh: bool,
@@ -62,20 +66,20 @@ impl EmptyOptions {
         Self::default()
     }
 
-    /// Whether pinned folders should also be removed.
+    /// Whether visible pinned folders should also be explicitly unpinned.
     #[must_use]
     pub fn also_pinned_folders(&self) -> bool {
         self.also_pinned_folders
     }
 
-    /// Sets whether pinned folders should also be removed.
+    /// Sets whether visible pinned folders should also be explicitly unpinned.
     #[must_use]
     pub fn with_also_pinned_folders(mut self, also_pinned_folders: bool) -> Self {
         self.also_pinned_folders = also_pinned_folders;
         self
     }
 
-    /// Also removes pinned folders when clearing Frequent Folders or all items.
+    /// Also explicitly unpins visible folders when clearing Frequent Folders or all items.
     #[must_use]
     pub fn remove_pinned_folders(self) -> Self {
         self.with_also_pinned_folders(true)
@@ -211,9 +215,13 @@ pub(crate) fn empty_recent_files() -> WincentResult<()> {
 
 /// Clears the Windows Frequent Folders list from Quick Access.
 ///
-/// Always removes user-visited frequent folders by deleting the jump list file.
-/// Pass `also_pinned_folders: true` to additionally attempt to remove every
-/// item snapshotted from the Frequent Folders namespace through the native
+/// Always deletes Explorer's Frequent Folders backing file. On current Windows
+/// builds, Explorer may rebuild default folder pins and may remove user-pinned
+/// folders after that file is deleted, even when `also_pinned_folders` is
+/// `false`.
+///
+/// Pass `also_pinned_folders: true` to additionally attempt to remove every item
+/// snapshotted from the Frequent Folders namespace through the native
 /// single-item mutation path, including the Windows 11 `pintohome` toggle
 /// workaround.
 ///
@@ -222,8 +230,8 @@ pub(crate) fn empty_recent_files() -> WincentResult<()> {
 /// - `also_pinned_folders` - when `true`, snapshots every item in the Frequent
 ///   Folders namespace before deleting the jump list, then removes those items
 ///   through the native single-item mutation path.
-///   When `false`, only the jump list file is removed; pinned folders are
-///   left untouched.
+///   When `false`, only the backing file is removed; wincent does not
+///   additionally invoke Explorer's unpin verb for visible pinned folders.
 ///
 /// # Returns
 ///
@@ -237,10 +245,10 @@ pub(crate) fn empty_recent_files() -> WincentResult<()> {
 /// use wincent::{empty::empty_frequent_folders, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
-///     // Clear only user-visited frequent folders (jump list); pinned folders remain.
+///     // Delete the Frequent Folders backing file without an extra explicit unpin pass.
 ///     empty_frequent_folders(false)?;
 ///
-///     // Clear user-visited frequent folders AND unpin all pinned folders.
+///     // Delete the backing file and explicitly unpin visible Frequent Folders items.
 ///     empty_frequent_folders(true)?;
 ///
 ///     Ok(())
@@ -296,17 +304,22 @@ fn frequent_folders_cleared_from_error(error: &WincentError) -> bool {
 
 /// Clears items from Windows Quick Access.
 ///
-/// Always clears the Recent Files list and user-visited frequent folders
-/// (jump list file). Pass `also_pinned_folders: true` to additionally unpin
-/// all pinned folders.
+/// Always clears the Recent Files list and deletes Explorer's Frequent Folders
+/// backing file. Deleting that backing file can cause Explorer to rebuild
+/// default folder pins and remove user-pinned folders even when
+/// `also_pinned_folders` is `false`.
+///
+/// Pass `also_pinned_folders: true` to additionally invoke the native
+/// single-item mutation path for every item snapshotted from the Frequent
+/// Folders namespace.
 ///
 /// # Parameters
 ///
-/// - `also_pinned_folders` - when `true`, also invokes `unpinfromhome` on
-///   every item in the Frequent Folders namespace, attempting to clear pinned
-///   entries. Results are reliable on Windows 10; on Windows 11 some items may
-///   persist (no `pintohome` toggle workaround is applied).
-///   When `false`, pinned folders are left untouched.
+/// - `also_pinned_folders` - when `true`, snapshots every item in the Frequent
+///   Folders namespace before deleting the backing file, then removes those
+///   items through the native single-item mutation path.
+///   When `false`, wincent does not additionally invoke Explorer's unpin verb
+///   for visible pinned folders.
 ///
 /// # Returns
 ///
@@ -318,10 +331,10 @@ fn frequent_folders_cleared_from_error(error: &WincentError) -> bool {
 /// use wincent::{empty::empty_quick_access, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
-///     // Clear recent files and frequent folders; leave pinned folders intact.
+///     // Clear recent files and delete the Frequent Folders backing file.
 ///     empty_items(QuickAccess::All, EmptyOptions::new())?;
 ///
-///     // Clear everything, including pinned folders.
+///     // Also explicitly unpin visible Frequent Folders items.
 ///     empty_items(
 ///         QuickAccess::All,
 ///         EmptyOptions::new().with_also_pinned_folders(true),
@@ -1077,10 +1090,10 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that `empty_quick_access(false)` clears Recent Files.
+    /// Verifies that the default Quick Access clear path clears Recent Files.
     ///
     /// Arrange: add a test file to Recent Files.
-    /// Act:     call `empty_quick_access(false)`.
+    /// Act:     call `empty_items(QuickAccess::All, EmptyOptions::new())`.
     /// Assert:  Recent Files is empty.
     ///
     /// Note: the jump list file deletion is already covered by
@@ -1091,8 +1104,8 @@ mod tests {
     /// does not guarantee a shell-pinned entry immune to jump list deletion on
     /// all Windows configurations.
     #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_empty_quick_access_false_preserves_pinned -- --ignored --nocapture"]
-    fn test_empty_quick_access_false_preserves_pinned() -> WincentResult<()> {
+    #[ignore = "Modifies system state - run with: cargo test test_empty_quick_access_default_clears_recent_files -- --ignored --nocapture"]
+    fn test_empty_quick_access_default_clears_recent_files() -> WincentResult<()> {
         let test_dir = setup_test_env()?;
 
         let timestamp = unique_millis()?;
@@ -1111,7 +1124,7 @@ mod tests {
 
         assert!(
             wait_until_recent_files_empty(10)?,
-            "Recent Files should be empty after empty_quick_access(false)"
+            "Recent Files should be empty after the default Quick Access clear"
         );
 
         Ok(())
