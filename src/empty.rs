@@ -17,13 +17,17 @@
 use crate::{
     com::{ComGuard, ComInitStatus},
     error::WincentError,
+    handle::remove_from_frequent_folders_with_timeout,
+    query::get_frequent_folders,
     utils::{get_windows_recent_folder, refresh_explorer_window},
     QuickAccess, WincentResult,
 };
+use std::time::Duration;
 use windows::Win32::UI::Shell::SHAddToRecentDocs;
 
 /// SHARD_PATHW - with a null data pointer, clears all recent documents.
 const SHARD_PATHW: u32 = 0x0000_0003;
+const EMPTY_PINNED_FOLDERS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Options for clearing Quick Access items.
 ///
@@ -143,46 +147,42 @@ pub(crate) fn empty_user_folders_with_jumplist_file() -> WincentResult<()> {
     Ok(())
 }
 
-/// Unpin all pinned folders from Quick Access using PowerShell commands.
-///
-/// Iterates every item in the Frequent Folders namespace and invokes
-/// `unpinfromhome` on each one. On Windows 10 this reliably removes both
-/// user-pinned and system-default entries. On Windows 11, `unpinfromhome`
-/// alone may not remove items that require the `pintohome` toggle workaround;
-/// this function does **not** apply that workaround, so results may be
-/// incomplete on Windows 11.
-fn empty_pinned_folders_powershell() -> WincentResult<()> {
-    use crate::script_executor::ScriptExecutor;
-    use crate::script_strategy::PSScript;
+fn empty_pinned_folders_from_snapshot<F>(
+    paths: &[String],
+    mut remove_folder: F,
+) -> WincentResult<()>
+where
+    F: FnMut(&str) -> WincentResult<()>,
+{
+    let mut first_error = None;
 
-    let start = std::time::Instant::now();
-    let script_path =
-        crate::script_storage::ScriptStorage::get_script_path(PSScript::EmptyPinnedFolders)?;
-    let output = ScriptExecutor::execute_ps_script(PSScript::EmptyPinnedFolders, None)?;
-    let duration = start.elapsed();
-    let _ = ScriptExecutor::parse_output_to_strings(
-        output,
-        PSScript::EmptyPinnedFolders,
-        script_path,
-        None,
-        duration,
-    )?;
+    for path in paths {
+        match remove_folder(path) {
+            Ok(()) | Err(WincentError::NotInQuickAccess { .. }) => {}
+            Err(error) if first_error.is_none() => first_error = Some(error),
+            Err(_) => {}
+        }
+    }
 
-    Ok(())
+    if let Some(error) = first_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
 /// Attempts to unpin all pinned folders from Quick Access.
 ///
-/// Invokes `unpinfromhome` on every item currently in the Frequent Folders
-/// namespace via PowerShell. On Windows 10 this reliably removes all pinned
-/// entries. On Windows 11, items may require a `pintohome` toggle workaround
-/// to be fully removed; this function does **not** apply that workaround, so
-/// some entries may persist on Windows 11.
-///
-/// Currently delegates to the PowerShell fallback. A native COM fast path
-/// with proper Win11 compatibility is planned but not yet implemented.
+/// Snapshots every item currently in the Frequent Folders namespace and removes
+/// each one through the single-item native mutation path. That path tries
+/// `unpinfromhome` first and falls back to the Windows 11 `pintohome` toggle
+/// workaround when needed.
+#[allow(dead_code)]
 pub(crate) fn empty_pinned_folders() -> WincentResult<()> {
-    empty_pinned_folders_powershell()
+    let paths = get_frequent_folders()?;
+    empty_pinned_folders_from_snapshot(&paths, |path| {
+        remove_from_frequent_folders_with_timeout(path, EMPTY_PINNED_FOLDERS_TIMEOUT)
+    })
 }
 
 /****************************************************** Empty Quick Access ******************************************************/
@@ -212,17 +212,16 @@ pub(crate) fn empty_recent_files() -> WincentResult<()> {
 /// Clears the Windows Frequent Folders list from Quick Access.
 ///
 /// Always removes user-visited frequent folders by deleting the jump list file.
-/// Pass `also_pinned_folders: true` to additionally attempt to unpin all pinned
-/// folders via PowerShell (`unpinfromhome`). On Windows 10 this reliably
-/// removes all pinned entries; on Windows 11 some entries may persist because
-/// the PowerShell path does not apply the `pintohome` toggle workaround.
+/// Pass `also_pinned_folders: true` to additionally attempt to remove every
+/// item snapshotted from the Frequent Folders namespace through the native
+/// single-item mutation path, including the Windows 11 `pintohome` toggle
+/// workaround.
 ///
 /// # Parameters
 ///
-/// - `also_pinned_folders` - when `true`, also invokes `unpinfromhome` on
-///   every item in the Frequent Folders namespace, attempting to clear pinned
-///   entries. Results are reliable on Windows 10; on Windows 11 some items may
-///   persist (no `pintohome` toggle workaround is applied).
+/// - `also_pinned_folders` - when `true`, snapshots every item in the Frequent
+///   Folders namespace before deleting the jump list, then removes those items
+///   through the native single-item mutation path.
 ///   When `false`, only the jump list file is removed; pinned folders are
 ///   left untouched.
 ///
@@ -248,9 +247,17 @@ pub(crate) fn empty_recent_files() -> WincentResult<()> {
 /// }
 /// ```
 pub(crate) fn empty_frequent_folders(also_pinned_folders: bool) -> WincentResult<()> {
+    let pinned_snapshot = if also_pinned_folders {
+        Some(get_frequent_folders()?)
+    } else {
+        None
+    };
+
     empty_user_folders_with_jumplist_file()?;
-    if also_pinned_folders {
-        if let Err(source) = empty_pinned_folders() {
+    if let Some(paths) = pinned_snapshot {
+        if let Err(source) = empty_pinned_folders_from_snapshot(&paths, |path| {
+            remove_from_frequent_folders_with_timeout(path, EMPTY_PINNED_FOLDERS_TIMEOUT)
+        }) {
             return Err(partial_frequent_folders_error(source));
         }
     }
@@ -505,6 +512,59 @@ mod tests {
 
         assert!(frequent_folders_cleared_from_error(&partial));
         assert!(!frequent_folders_cleared_from_error(&non_partial));
+    }
+
+    #[test]
+    fn empty_pinned_snapshot_ignores_items_already_absent() -> WincentResult<()> {
+        let paths = vec![
+            "C:\\FolderA".to_string(),
+            "C:\\FolderB".to_string(),
+            "C:\\FolderC".to_string(),
+        ];
+        let mut calls = Vec::new();
+
+        empty_pinned_folders_from_snapshot(&paths, |path| {
+            calls.push(path.to_string());
+            if path.ends_with("FolderB") {
+                Err(WincentError::not_in_quick_access(
+                    path,
+                    QuickAccess::FrequentFolders,
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+
+        assert_eq!(calls, paths);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_pinned_snapshot_returns_first_error_after_trying_all_items() {
+        let paths = vec![
+            "C:\\FolderA".to_string(),
+            "C:\\FolderB".to_string(),
+            "C:\\FolderC".to_string(),
+        ];
+        let mut calls = Vec::new();
+
+        let error = empty_pinned_folders_from_snapshot(&paths, |path| {
+            calls.push(path.to_string());
+            if path.ends_with("FolderB") {
+                Err(WincentError::SystemError("first failure".to_string()))
+            } else if path.ends_with("FolderC") {
+                Err(WincentError::SystemError("second failure".to_string()))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, paths);
+        assert!(matches!(
+            error,
+            WincentError::SystemError(message) if message == "first failure"
+        ));
     }
 
     #[test]
