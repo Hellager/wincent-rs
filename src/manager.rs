@@ -670,11 +670,6 @@ impl QuickAccessManager {
         empty::empty_items(qa_type, options)
     }
 
-    /// Clears internal caches.
-    ///
-    /// Currently this is a no-op retained for API compatibility.
-    pub fn clear_cache(&self) {}
-
     /// Checks whether a Quick Access section is visible in Explorer.
     ///
     /// # Errors

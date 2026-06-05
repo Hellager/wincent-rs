@@ -99,11 +99,6 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "batch-remove" => cmd_batch_remove(&manager, &args[1..]),
         "lock" => cmd_lock(&manager, &args[1..]),
         "empty" => cmd_empty(&manager, &args[1..]),
-        "clear-cache" => {
-            manager.clear_cache();
-            println!("cache cleared (currently a no-op)");
-            Ok(())
-        }
         "retry" => cmd_retry(&args[1..]),
         "classify" => cmd_classify(&args[1..]),
         "invalid-path" => cmd_invalid_path(&args[1..]),
@@ -167,8 +162,6 @@ Core:
   batch-remove [--deep-clean] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
   empty <recent|frequent|all> [--pinned] [--refresh]
-  clear-cache
-
 Utility APIs:
   retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
   classify <stderr text>
