@@ -311,6 +311,26 @@ fn should_force_update_recent_files(options: BatchOptions, recent_files_succeede
     options.force_update() && recent_files_succeeded
 }
 
+fn refresh_recent_files_batch_display() -> WincentResult<()> {
+    QuickAccessDataFiles::new()?.remove_recent_file()?;
+    refresh_explorer_window()?;
+    Ok(())
+}
+
+fn record_batch_refresh_result(
+    succeeded: &mut Vec<String>,
+    failed: &mut Vec<BatchFailure>,
+    refresh_recent_item_index: Option<usize>,
+    refresh_result: WincentResult<()>,
+) {
+    if let (Some(index), Err(error)) = (refresh_recent_item_index, refresh_result) {
+        if index < succeeded.len() {
+            let path = succeeded.remove(index);
+            failed.push(BatchFailure::new(path, error));
+        }
+    }
+}
+
 /// Adds multiple items to Quick Access, collecting per-item failures.
 ///
 /// Each item performs a best-effort existence preflight before invoking the
@@ -325,23 +345,27 @@ pub(crate) fn add_items_batch(
 ) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
-    let mut recent_files_succeeded = false;
+    let mut refresh_recent_item_index = None;
 
     for (path, qa_type) in items {
         match add_item(path, *qa_type, timeout) {
             Ok(()) => {
-                if matches!(qa_type, QuickAccess::RecentFiles) {
-                    recent_files_succeeded = true;
-                }
                 succeeded.push(path.clone());
+                if options.force_update() && matches!(qa_type, QuickAccess::RecentFiles) {
+                    refresh_recent_item_index = Some(succeeded.len() - 1);
+                }
             }
             Err(error) => failed.push(BatchFailure::new(path.clone(), error)),
         }
     }
 
-    if should_force_update_recent_files(options, recent_files_succeeded) {
-        let _ = QuickAccessDataFiles::new().and_then(|data_files| data_files.remove_recent_file());
-        let _ = refresh_explorer_window();
+    if should_force_update_recent_files(options, refresh_recent_item_index.is_some()) {
+        record_batch_refresh_result(
+            &mut succeeded,
+            &mut failed,
+            refresh_recent_item_index,
+            refresh_recent_files_batch_display(),
+        );
     }
 
     BatchResult::new(succeeded, failed)
@@ -426,6 +450,70 @@ mod tests {
             BatchOptions::default(),
             true
         ));
+    }
+
+    #[test]
+    fn refresh_success_preserves_batch_results() {
+        let mut succeeded = vec![
+            "C:\\recent-1.txt".to_string(),
+            "C:\\recent-2.txt".to_string(),
+        ];
+        let mut failed = Vec::new();
+
+        record_batch_refresh_result(&mut succeeded, &mut failed, Some(1), Ok(()));
+
+        assert_eq!(
+            succeeded,
+            vec![
+                "C:\\recent-1.txt".to_string(),
+                "C:\\recent-2.txt".to_string()
+            ]
+        );
+        assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn refresh_failure_moves_tracked_recent_file_to_failed() {
+        let mut succeeded = vec![
+            "C:\\folder".to_string(),
+            "C:\\recent-1.txt".to_string(),
+            "C:\\recent-2.txt".to_string(),
+        ];
+        let mut failed = Vec::new();
+
+        record_batch_refresh_result(
+            &mut succeeded,
+            &mut failed,
+            Some(2),
+            Err(WincentError::SystemError("refresh failed".to_string())),
+        );
+
+        assert_eq!(
+            succeeded,
+            vec!["C:\\folder".to_string(), "C:\\recent-1.txt".to_string()]
+        );
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].path(), "C:\\recent-2.txt");
+        assert!(matches!(
+            failed[0].error(),
+            WincentError::SystemError(message) if message == "refresh failed"
+        ));
+    }
+
+    #[test]
+    fn refresh_failure_without_recent_success_does_not_change_results() {
+        let mut succeeded = vec!["C:\\folder".to_string()];
+        let mut failed = Vec::new();
+
+        record_batch_refresh_result(
+            &mut succeeded,
+            &mut failed,
+            None,
+            Err(WincentError::SystemError("refresh failed".to_string())),
+        );
+
+        assert_eq!(succeeded, vec!["C:\\folder".to_string()]);
+        assert!(failed.is_empty());
     }
 
     #[test]
