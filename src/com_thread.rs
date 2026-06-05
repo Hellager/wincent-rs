@@ -63,11 +63,9 @@ where
                     // Normal case: new thread first-time initialization
                 }
                 ComInitStatus::AlreadyInitialized => {
-                    // Unexpected: new thread should not return S_FALSE
-                    // But continue for robustness. S_FALSE is still a
-                    // successful CoInitializeEx call and is balanced by
-                    // StaComGuard below.
-                    eprintln!("Warning: CoInitializeEx returned S_FALSE on new thread");
+                    // Unexpected: new thread should not return S_FALSE.
+                    // Continue for robustness; S_FALSE is still a successful
+                    // CoInitializeEx call and is balanced by StaComGuard below.
                 }
                 ComInitStatus::ApartmentMismatch => {
                     // Failed CoInitializeEx calls do not require CoUninitialize.

@@ -367,11 +367,7 @@ fn query_recent_powershell(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
 pub(crate) fn query_recent(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     // Try native COM first (fast path)
     let qa_type_clone = qa_type;
-    query_recent_native(qa_type).or_else(|native_error| {
-        eprintln!(
-            "Warning: native Quick Access query for {:?} failed; falling back to PowerShell: {}",
-            qa_type_clone, native_error
-        );
+    query_recent_native(qa_type).or_else(|_native_error| {
         // Fallback to PowerShell if COM fails (compatibility)
         query_recent_powershell(qa_type_clone)
     })

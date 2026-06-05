@@ -255,9 +255,6 @@ fn navigate_back_to_location(
 
 fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
     let started = std::time::Instant::now();
-    let mut polls = 0_u32;
-    let mut last_busy = None;
-    let mut last_ready = None;
 
     while started.elapsed() < timeout {
         let busy = unsafe {
@@ -272,9 +269,6 @@ fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
                 .map(|value| value == READYSTATE_COMPLETE)
                 .unwrap_or(true)
         };
-        polls += 1;
-        last_busy = Some(busy);
-        last_ready = Some(ready);
 
         if !busy && ready {
             return;
@@ -282,14 +276,6 @@ fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
 
         thread::sleep(BROWSER_READY_POLL_INTERVAL);
     }
-
-    eprintln!(
-        "Warning: Explorer browser did not report ready within {:.3}s after {} polls (last_busy={:?}, last_ready={:?})",
-        timeout.as_secs_f64(),
-        polls,
-        last_busy,
-        last_ready
-    );
 }
 
 fn desktop_path() -> WincentResult<PathBuf> {
