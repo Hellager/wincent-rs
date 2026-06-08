@@ -761,7 +761,25 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
 /// - [`remove_recent_file_native()`] - Native COM implementation (fast path)
 /// - [`remove_from_recent_files()`] - Public wrapper with fallback strategy
 pub(crate) fn remove_recent_file_powershell(path: &str) -> WincentResult<()> {
-    execute_script_with_validation(PSScript::RemoveRecentFile, path, PathType::File)
+    match execute_script_with_validation(PSScript::RemoveRecentFile, path, PathType::File) {
+        Err(error) => Err(map_remove_recent_file_powershell_error(path, error)),
+        ok => ok,
+    }
+}
+
+fn map_remove_recent_file_powershell_error(path: &str, error: WincentError) -> WincentError {
+    const NOT_IN_QUICK_ACCESS_SENTINEL: &str = "WINCENT_NOT_IN_QUICK_ACCESS";
+
+    match error {
+        WincentError::PowerShellExecution(ref powershell_error)
+            if powershell_error
+                .raw_stdout()
+                .contains(NOT_IN_QUICK_ACCESS_SENTINEL) =>
+        {
+            WincentError::not_in_quick_access(path, QuickAccess::RecentFiles)
+        }
+        other => other,
+    }
 }
 
 /// Pins a folder to the Windows Quick Access Frequent Folders list using PowerShell
@@ -2054,6 +2072,54 @@ mod tests {
         assert!(result.is_err(), "Should fail with invalid path");
 
         Ok(())
+    }
+
+    #[test]
+    fn remove_recent_file_powershell_sentinel_maps_to_not_in_quick_access() {
+        let error = WincentError::PowerShellExecution(Box::new(
+            crate::error::PowerShellError::builder(
+                crate::error::PowerShellOperation::RemoveRecentFile,
+            )
+            .stdout("WINCENT_NOT_IN_QUICK_ACCESS")
+            .stderr("")
+            .parameters("C:\\report.docx")
+            .build(),
+        ));
+
+        let mapped = map_remove_recent_file_powershell_error("C:\\report.docx", error);
+
+        assert!(
+            matches!(
+                mapped,
+                WincentError::NotInQuickAccess {
+                    ref path,
+                    qa_type: QuickAccess::RecentFiles,
+                } if path == "C:\\report.docx"
+            ),
+            "sentinel should map to NotInQuickAccess, got: {:?}",
+            mapped
+        );
+    }
+
+    #[test]
+    fn remove_recent_file_powershell_keeps_non_sentinel_error() {
+        let error = WincentError::PowerShellExecution(Box::new(
+            crate::error::PowerShellError::builder(
+                crate::error::PowerShellOperation::RemoveRecentFile,
+            )
+            .stdout("ordinary output")
+            .stderr("ordinary failure")
+            .parameters("C:\\report.docx")
+            .build(),
+        ));
+
+        let mapped = map_remove_recent_file_powershell_error("C:\\report.docx", error);
+
+        assert!(
+            matches!(mapped, WincentError::PowerShellExecution(_)),
+            "ordinary PowerShell failures should remain PowerShellExecution, got: {:?}",
+            mapped
+        );
     }
 
     #[test]

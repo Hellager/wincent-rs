@@ -161,14 +161,27 @@ impl ScriptStrategy for RemoveRecentFileStrategy {
             r#"
     {}
     {}
+    function Normalize-WincentPath($p) {{
+        $n = $p.ToLower().Replace('/', '\')
+        if ($n.Length -gt 3 -and $n.EndsWith('\')) {{
+            $n = $n.TrimEnd('\')
+        }}
+        return $n
+    }}
+
+    $requestedPath = '{}';
     $files = $shell.Namespace('{}').Items() | where {{$_.IsFolder -eq $false}};
-    $target = $files | where {{$_.Path -eq '{}'}};
+    $target = $files | Where-Object {{ (Normalize-WincentPath $_.Path) -eq (Normalize-WincentPath $requestedPath) }} | Select-Object -First 1;
+    if ($null -eq $target) {{
+        Write-Output 'WINCENT_NOT_IN_QUICK_ACCESS';
+        exit 1;
+    }}
     $target.InvokeVerb('remove');
 "#,
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
-            ShellNamespaces::QUICK_ACCESS,
-            path
+            path,
+            ShellNamespaces::QUICK_ACCESS
         ))
     }
 }
@@ -403,6 +416,14 @@ mod tests {
         assert!(script.contains("remove"));
         assert!(script.contains(ShellNamespaces::QUICK_ACCESS));
         assert!(script.contains(path));
+        assert!(script.contains("Normalize-WincentPath"));
+        assert!(script.contains("WINCENT_NOT_IN_QUICK_ACCESS"));
+        assert!(script.contains("exit 1"));
+        assert!(script.contains("$requestedPath = 'C:\\Users\\User\\Documents'"));
+        assert!(
+            !script.contains("$_.Path -eq 'C:\\Users\\User\\Documents'"),
+            "RemoveRecentFile should use normalized Windows path comparison"
+        );
     }
 
     #[test]
@@ -560,7 +581,7 @@ mod tests {
         let cases = [
             (
                 PSScript::RemoveRecentFile,
-                format!("$_.Path -eq '{}'", escaped_path),
+                format!("$requestedPath = '{}'", escaped_path),
             ),
             (
                 PSScript::PinToFrequentFolder,
