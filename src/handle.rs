@@ -405,35 +405,6 @@ where
     )))
 }
 
-fn verify_frequent_folder_absent_native(
-    path: &str,
-    timeout: std::time::Duration,
-) -> WincentResult<()> {
-    let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
-        move || {
-            let mut contains = |path: &str| contains_frequent_folder_current_sta(path);
-            let mut sleep = std::thread::sleep;
-
-            if wait_for_frequent_folder_presence_with(
-                &path,
-                false,
-                FREQUENT_FOLDER_VERIFICATION_TIMEOUT,
-                FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL,
-                &mut contains,
-                &mut sleep,
-            )? {
-                Ok(())
-            } else {
-                Err(WincentError::SystemError(format!(
-                    "Failed to remove frequent folder: {}",
-                    path
-                )))
-            }
-        },
-        timeout,
-    )
-}
 ///
 /// This function implements a **safe Windows version-aware strategy**:
 ///
@@ -547,6 +518,23 @@ pub(crate) fn execute_script_with_validation(
     path: &str,
     path_type: PathType,
 ) -> WincentResult<()> {
+    execute_script_with_validation_and_timeout(
+        script,
+        path,
+        path_type,
+        ScriptExecutor::execute_ps_script,
+    )
+}
+
+fn execute_script_with_validation_and_timeout<F>(
+    script: PSScript,
+    path: &str,
+    path_type: PathType,
+    mut execute: F,
+) -> WincentResult<()>
+where
+    F: FnMut(PSScript, Option<&str>) -> WincentResult<std::process::Output>,
+{
     validate_path(path, path_type)?;
 
     let start = std::time::Instant::now();
@@ -555,33 +543,42 @@ pub(crate) fn execute_script_with_validation(
             crate::script_storage::ScriptStorage::get_dynamic_script_path(script, path)?
         }
     };
-    let output = ScriptExecutor::execute_ps_script(script, Some(path))?;
+    let output = execute(script, Some(path))?;
     let duration = start.elapsed();
 
-    match output.status.success() {
-        true => Ok(()),
-        false => {
-            use crate::error::PowerShellError;
-            let stderr = String::from_utf8(output.stderr)
-                .unwrap_or_else(|_| "Unable to parse script error output".to_string());
-            let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+    parse_script_execution_result(output, script, script_path, path, duration)
+}
 
-            // Infer error kind from stderr content
-            let kind = PowerShellError::infer_kind_from_stderr(&stderr);
-
-            Err(WincentError::PowerShellExecution(Box::new(
-                PowerShellError::builder(script.operation())
-                    .kind(kind)
-                    .exit_code(output.status.code())
-                    .stdout(stdout)
-                    .stderr(stderr)
-                    .script_path(script_path)
-                    .parameters(path)
-                    .duration(duration)
-                    .build(),
-            )))
-        }
+fn parse_script_execution_result(
+    output: std::process::Output,
+    script: PSScript,
+    script_path: std::path::PathBuf,
+    path: &str,
+    duration: Duration,
+) -> WincentResult<()> {
+    if output.status.success() {
+        return Ok(());
     }
+
+    use crate::error::PowerShellError;
+    let stderr = String::from_utf8(output.stderr)
+        .unwrap_or_else(|_| "Unable to parse script error output".to_string());
+    let stdout = String::from_utf8(output.stdout).unwrap_or_default();
+
+    // Infer error kind from stderr content
+    let kind = PowerShellError::infer_kind_from_stderr(&stderr);
+
+    Err(WincentError::PowerShellExecution(Box::new(
+        PowerShellError::builder(script.operation())
+            .kind(kind)
+            .exit_code(output.status.code())
+            .stdout(stdout)
+            .stderr(stderr)
+            .script_path(script_path)
+            .parameters(path)
+            .duration(duration)
+            .build(),
+    )))
 }
 
 /// Inner: runs on the current STA thread. Only call from within `run_on_sta_thread`.
@@ -855,8 +852,47 @@ where
 /// - [`unpin_frequent_folder_native()`] - Native COM implementation (fast path)
 /// - [`unpin_frequent_folder()`] - Internal wrapper with fallback strategy
 fn unpin_frequent_folder_powershell(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    execute_script_with_validation(PSScript::UnpinFromFrequentFolder, path, PathType::Directory)?;
-    verify_frequent_folder_absent_native(path, timeout)
+    match execute_unpin_frequent_folder_script_with_timeout(
+        path,
+        timeout,
+        |script, parameter, timeout| {
+            ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
+        },
+    ) {
+        Err(error) => Err(map_unpin_frequent_folder_powershell_error(path, error)),
+        ok => ok,
+    }
+}
+
+fn execute_unpin_frequent_folder_script_with_timeout<F>(
+    path: &str,
+    timeout: Duration,
+    mut execute: F,
+) -> WincentResult<()>
+where
+    F: FnMut(PSScript, Option<&str>, Duration) -> WincentResult<std::process::Output>,
+{
+    execute_script_with_validation_and_timeout(
+        PSScript::UnpinFromFrequentFolder,
+        path,
+        PathType::Directory,
+        |script, parameter| execute(script, parameter, timeout),
+    )
+}
+
+fn map_unpin_frequent_folder_powershell_error(path: &str, error: WincentError) -> WincentError {
+    const NOT_IN_QUICK_ACCESS_SENTINEL: &str = "WINCENT_NOT_IN_QUICK_ACCESS";
+
+    match error {
+        WincentError::PowerShellExecution(ref powershell_error)
+            if powershell_error
+                .raw_stdout()
+                .contains(NOT_IN_QUICK_ACCESS_SENTINEL) =>
+        {
+            WincentError::not_in_quick_access(path, QuickAccess::FrequentFolders)
+        }
+        other => other,
+    }
 }
 
 /// Pins a folder to the Windows Quick Access Frequent Folders list
@@ -2120,6 +2156,87 @@ mod tests {
             "ordinary PowerShell failures should remain PowerShellExecution, got: {:?}",
             mapped
         );
+    }
+
+    #[test]
+    fn unpin_frequent_folder_powershell_sentinel_maps_to_not_in_quick_access() {
+        let error = WincentError::PowerShellExecution(Box::new(
+            crate::error::PowerShellError::builder(
+                crate::error::PowerShellOperation::UnpinFrequentFolder,
+            )
+            .stdout("WINCENT_NOT_IN_QUICK_ACCESS")
+            .stderr("")
+            .parameters("C:\\Folder")
+            .build(),
+        ));
+
+        let mapped = map_unpin_frequent_folder_powershell_error("C:\\Folder", error);
+
+        assert!(
+            matches!(
+                mapped,
+                WincentError::NotInQuickAccess {
+                    ref path,
+                    qa_type: QuickAccess::FrequentFolders,
+                } if path == "C:\\Folder"
+            ),
+            "sentinel should map to NotInQuickAccess, got: {:?}",
+            mapped
+        );
+    }
+
+    #[test]
+    fn unpin_frequent_folder_powershell_keeps_non_sentinel_error() {
+        let error = WincentError::PowerShellExecution(Box::new(
+            crate::error::PowerShellError::builder(
+                crate::error::PowerShellOperation::UnpinFrequentFolder,
+            )
+            .stdout("ordinary output")
+            .stderr("ordinary failure")
+            .parameters("C:\\Folder")
+            .build(),
+        ));
+
+        let mapped = map_unpin_frequent_folder_powershell_error("C:\\Folder", error);
+
+        assert!(
+            matches!(mapped, WincentError::PowerShellExecution(_)),
+            "ordinary PowerShell failures should remain PowerShellExecution, got: {:?}",
+            mapped
+        );
+    }
+
+    #[test]
+    fn unpin_frequent_folder_script_uses_caller_timeout() -> WincentResult<()> {
+        use std::os::windows::process::ExitStatusExt;
+        use std::process::Output;
+
+        let temp_dir = tempfile::tempdir().map_err(|e| WincentError::SystemError(e.to_string()))?;
+        let folder = temp_dir.path().join("timeout-unpin");
+        std::fs::create_dir(&folder).map_err(WincentError::Io)?;
+        let folder = folder.to_string_lossy().into_owned();
+        let expected_folder = folder.clone();
+        let expected_timeout = Duration::from_millis(1234);
+        let observed_timeout = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let observed_timeout_for_closure = std::rc::Rc::clone(&observed_timeout);
+
+        execute_unpin_frequent_folder_script_with_timeout(
+            &folder,
+            expected_timeout,
+            move |script, parameter, timeout| {
+                assert_eq!(script, PSScript::UnpinFromFrequentFolder);
+                assert_eq!(parameter, Some(expected_folder.as_str()));
+                *observed_timeout_for_closure.borrow_mut() = Some(timeout);
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            },
+        )?;
+
+        assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
+        Ok(())
     }
 
     #[test]

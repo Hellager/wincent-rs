@@ -216,17 +216,89 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
     {header}
     {shell}
 
+    function Normalize-WincentPath($p) {{
+        if ($null -eq $p) {{
+            return ''
+        }}
+        $n = $p.ToLower().Replace('/', '\')
+        if ($n.Length -gt 3 -and $n.EndsWith('\')) {{
+            $n = $n.TrimEnd('\')
+        }}
+        return $n
+    }}
+
+    $requestedPath = '{path}';
+
+    function Find-WincentFrequentFolder {{
+        $finderShell = New-Object -ComObject Shell.Application;
+        $folder = $finderShell.Namespace('{frequent_folders}');
+        if ($null -eq $folder) {{
+            throw 'Failed to open Frequent Folders namespace'
+        }}
+        $folder.Items() |
+            Where-Object {{ (Normalize-WincentPath $_.Path) -eq (Normalize-WincentPath $requestedPath) }} |
+            Select-Object -First 1
+    }}
+
+    function Wait-WincentFrequentFolderPresence($expected) {{
+        $deadline = (Get-Date).AddMilliseconds(1000)
+        while ((Get-Date) -lt $deadline) {{
+            $exists = $null -ne (Find-WincentFrequentFolder)
+            if ($exists -eq $expected) {{
+                return $true
+            }}
+
+            $remaining = [int][Math]::Ceiling(($deadline - (Get-Date)).TotalMilliseconds)
+            if ($remaining -le 0) {{
+                break
+            }}
+            Start-Sleep -Milliseconds ([Math]::Min(100, $remaining))
+        }}
+
+        $exists = $null -ne (Find-WincentFrequentFolder)
+        return ($exists -eq $expected)
+    }}
+
+    $target = Find-WincentFrequentFolder;
+    if ($null -eq $target) {{
+        Write-Output 'WINCENT_NOT_IN_QUICK_ACCESS';
+        exit 1;
+    }}
+
+    try {{
+        $target.InvokeVerb('unpinfromhome');
+    }} catch {{}}
+    if (Wait-WincentFrequentFolderPresence $false) {{
+        return
+    }}
+
+    $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome');
+    if (Wait-WincentFrequentFolderPresence $false) {{
+        return
+    }}
+
+    $target = Find-WincentFrequentFolder;
+    if ($null -eq $target) {{
+        return
+    }}
+
     $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
     if ($isWin11)
     {{
-        $shell.Namespace('{path}').Self.InvokeVerb('pintohome')
+        $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')
     }}
     else
     {{
-        $folders = $shell.Namespace('{frequent_folders}').Items();
-        $target = $folders | Where-Object {{$_.Path -eq '{path}'}};
-        $target.InvokeVerb('unpinfromhome');    
-    }} 
+        try {{
+            $target.InvokeVerb('unpinfromhome');
+        }} catch {{}}
+    }}
+
+    if (Wait-WincentFrequentFolderPresence $false) {{
+        return
+    }}
+
+    throw "Failed to remove frequent folder: $requestedPath"
 "#,
             header = BaseScriptStrategy::utf8_header(),
             shell = BaseScriptStrategy::shell_com_object(),
@@ -398,10 +470,13 @@ mod tests {
         // Win11 branch must also be present
         assert!(script.contains("pintohome"));
         assert!(script.contains(ShellNamespaces::FREQUENT_FOLDERS));
-        assert!(script.contains(&format!(
-            "$shell.Namespace('{}').Self.InvokeVerb('pintohome')",
-            path
-        )));
+        assert!(script.contains("Find-WincentFrequentFolder"));
+        assert!(script.contains("Wait-WincentFrequentFolderPresence"));
+        assert!(script.contains("WINCENT_NOT_IN_QUICK_ACCESS"));
+        assert!(script.contains("Failed to remove frequent folder"));
+        assert!(script.contains("$target = Find-WincentFrequentFolder"));
+        assert!(script.contains("$shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')"));
+        assert!(script.contains("$target.InvokeVerb('unpinfromhome')"));
         assert!(
             !script.contains("{path}"),
             "Win11 unpin branch must not contain an unsubstituted path placeholder"
@@ -592,7 +667,7 @@ mod tests {
             ),
             (
                 PSScript::UnpinFromFrequentFolder,
-                format!("$_.Path -eq '{}'", escaped_path),
+                format!("$requestedPath = '{}'", escaped_path),
             ),
         ];
         for (script_type, expected_fragment) in &cases {
@@ -617,12 +692,9 @@ mod tests {
         let unpin_script =
             ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
                 .expect("UnpinFromFrequentFolder generation failed");
-        let win11_fragment = format!(
-            "$shell.Namespace('{}').Self.InvokeVerb('pintohome')",
-            escaped_path
-        );
+        let win11_fragment = "$shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')";
         assert!(
-            unpin_script.contains(&win11_fragment),
+            unpin_script.contains(win11_fragment),
             "UnpinFromFrequentFolder Win11 branch: expected fragment not found.\nExpected: {}\nScript: {}",
             win11_fragment, unpin_script
         );
