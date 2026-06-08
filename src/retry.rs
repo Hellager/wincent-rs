@@ -29,6 +29,7 @@
 //!     .with_jitter(true);
 //! ```
 
+use crate::{WincentError, WincentResult};
 use std::time::Duration;
 
 /// Retry policy configuration
@@ -155,6 +156,56 @@ impl RetryPolicy {
         self
     }
 
+    /// Validates that this retry policy has coherent final configuration.
+    ///
+    /// Custom policies should be validated before direct use with
+    /// [`RetryPolicy::calculate_delay`]. Policies passed through
+    /// [`crate::QuickAccessManagerBuilder`] are validated when the manager is
+    /// built.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidArgument`] when:
+    /// - `backoff_factor` is not finite or is less than `1.0`
+    /// - retries are enabled but `initial_delay` is zero
+    /// - `max_delay` is less than `initial_delay`
+    pub fn validate(&self) -> WincentResult<()> {
+        if !self.backoff_factor.is_finite() || self.backoff_factor < 1.0 {
+            return Err(WincentError::InvalidArgument(
+                "retry backoff_factor must be finite and greater than or equal to 1.0".to_string(),
+            ));
+        }
+
+        if self.max_attempts > 0 && self.initial_delay.is_zero() {
+            return Err(WincentError::InvalidArgument(
+                "retry initial_delay must be greater than zero when retries are enabled"
+                    .to_string(),
+            ));
+        }
+
+        if self.max_delay < self.initial_delay {
+            return Err(WincentError::InvalidArgument(
+                "retry max_delay must be greater than or equal to initial_delay".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validates this retry policy and returns it unchanged on success.
+    ///
+    /// This is useful at the end of a `RetryPolicy::new().with_*()` chain when
+    /// the caller wants a fallible finalization step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidArgument`] for the same conditions as
+    /// [`RetryPolicy::validate`].
+    pub fn validated(self) -> WincentResult<Self> {
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Creates a policy with no retries
     ///
     /// Use this when you want to disable retry behavior entirely.
@@ -247,6 +298,11 @@ impl RetryPolicy {
     ///
     /// Uses exponential backoff: delay(n) = min(initial_delay * backoff_factor^n, max_delay)
     /// If jitter is enabled, adds ±25% random variation.
+    ///
+    /// This method assumes the policy is valid. Use one of the predefined
+    /// policies, pass the policy through [`crate::QuickAccessManagerBuilder`],
+    /// or call [`RetryPolicy::validate`] / [`RetryPolicy::validated`] before
+    /// directly calculating delays for a custom policy.
     ///
     /// # Arguments
     /// * `attempt` - The retry attempt number (0-indexed)
@@ -388,5 +444,71 @@ mod tests {
         assert_eq!(standard.max_delay(), default.max_delay());
         assert_eq!(standard.backoff_factor(), default.backoff_factor());
         assert_eq!(standard.jitter(), default.jitter());
+    }
+
+    #[test]
+    fn predefined_policies_are_valid() {
+        let policies = [
+            RetryPolicy::default(),
+            RetryPolicy::fast(),
+            RetryPolicy::standard(),
+            RetryPolicy::aggressive(),
+            RetryPolicy::no_retry(),
+        ];
+
+        for policy in policies {
+            policy
+                .validate()
+                .expect("predefined policy should be valid");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_invalid_backoff_factor() {
+        for factor in [0.0, 0.99, f64::NAN, f64::INFINITY] {
+            let result = RetryPolicy::new().with_backoff_factor(factor).validate();
+            assert!(
+                matches!(result, Err(WincentError::InvalidArgument(_))),
+                "factor {factor:?} should be rejected, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validated_returns_self_or_error() {
+        let policy = RetryPolicy::new().validated().expect("default is valid");
+        assert_eq!(policy.max_attempts(), RetryPolicy::default().max_attempts());
+
+        let result = RetryPolicy::new().with_backoff_factor(f64::NAN).validated();
+        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn validate_rejects_zero_initial_delay_when_retries_enabled() {
+        let result = RetryPolicy::new()
+            .with_max_attempts(1)
+            .with_initial_delay(Duration::ZERO)
+            .validate();
+
+        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn validate_rejects_max_delay_less_than_initial_delay() {
+        let result = RetryPolicy::new()
+            .with_initial_delay(Duration::from_millis(100))
+            .with_max_delay(Duration::from_millis(50))
+            .validate();
+
+        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn validate_is_order_insensitive_for_final_state() {
+        let policy = RetryPolicy::new()
+            .with_max_delay(Duration::from_millis(50))
+            .with_initial_delay(Duration::from_millis(10));
+
+        assert!(policy.validate().is_ok());
     }
 }

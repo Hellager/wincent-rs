@@ -270,11 +270,27 @@ impl QuickAccessManagerBuilder {
 
     /// Builds a configured [`QuickAccessManager`].
     pub fn build(self) -> QuickAccessManager {
-        QuickAccessManager {
+        self.try_build()
+            .expect("invalid retry policy in QuickAccessManagerBuilder")
+    }
+
+    /// Tries to build a configured [`QuickAccessManager`].
+    ///
+    /// Unlike [`QuickAccessManagerBuilder::build`], this returns
+    /// [`WincentError::InvalidArgument`] instead of panicking when the retry
+    /// policy is invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidArgument`] when the configured retry
+    /// policy fails validation.
+    pub fn try_build(self) -> WincentResult<QuickAccessManager> {
+        self.retry_policy.validate()?;
+        Ok(QuickAccessManager {
             timeout: self.timeout,
             retry_policy: self.retry_policy,
             backend: self.backend,
-        }
+        })
     }
 }
 
@@ -1189,6 +1205,31 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "invalid retry policy in QuickAccessManagerBuilder")]
+    fn builder_build_panics_for_invalid_retry_policy() {
+        let _ = QuickAccessManager::builder()
+            .retry_policy(
+                RetryPolicy::new()
+                    .with_max_attempts(1)
+                    .with_initial_delay(Duration::ZERO),
+            )
+            .build();
+    }
+
+    #[test]
+    fn builder_try_build_returns_error_for_invalid_retry_policy() {
+        let result = QuickAccessManager::builder()
+            .retry_policy(
+                RetryPolicy::new()
+                    .with_max_attempts(1)
+                    .with_initial_delay(Duration::ZERO),
+            )
+            .try_build();
+
+        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
+    }
+
+    #[test]
     fn get_items_passes_manager_timeout_to_backend() -> WincentResult<()> {
         let backend = Arc::new(FakeBackend::default());
         let manager = QuickAccessManager::builder()
@@ -1234,7 +1275,7 @@ mod tests {
             .retry_policy(
                 RetryPolicy::new()
                     .with_max_attempts(2)
-                    .with_initial_delay(Duration::ZERO)
+                    .with_initial_delay(Duration::from_millis(1))
                     .with_jitter(false),
             )
             .build();
@@ -1277,7 +1318,7 @@ mod tests {
             .retry_policy(
                 RetryPolicy::new()
                     .with_max_attempts(2)
-                    .with_initial_delay(Duration::ZERO)
+                    .with_initial_delay(Duration::from_millis(1))
                     .with_jitter(false),
             )
             .build();
