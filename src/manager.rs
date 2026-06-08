@@ -216,7 +216,12 @@ impl Default for QuickAccessManagerBuilder {
 }
 
 impl QuickAccessManagerBuilder {
-    /// Sets the timeout for shell operations that support timeout control.
+    /// Sets the caller-side wait timeout for shell operations that support timeout control.
+    ///
+    /// This bounds how long wincent waits for supported Shell, COM, and
+    /// PowerShell operations to report a result. It does not cancel a Shell COM
+    /// call that is already running inside Windows; after a timeout, that
+    /// underlying operation may still complete later and affect Explorer state.
     ///
     /// # Panics
     ///
@@ -227,7 +232,12 @@ impl QuickAccessManagerBuilder {
         self
     }
 
-    /// Tries to set the timeout for shell operations that support timeout control.
+    /// Tries to set the caller-side wait timeout for shell operations that support timeout control.
+    ///
+    /// This bounds how long wincent waits for supported Shell, COM, and
+    /// PowerShell operations to report a result. It does not cancel a Shell COM
+    /// call that is already running inside Windows; after a timeout, that
+    /// underlying operation may still complete later and affect Explorer state.
     ///
     /// Unlike [`QuickAccessManagerBuilder::timeout`], this returns
     /// [`WincentError::InvalidArgument`] instead of panicking when `duration` is

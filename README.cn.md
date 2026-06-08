@@ -19,7 +19,7 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 - 清空分类（可选同时移除已固定文件夹）
 - 精确路径或关键词检查项目是否存在
 - 批量添加/删除，逐项收集错误
-- 所有 Shell 操作均有超时保护
+- Shell 和 PowerShell 操作具备调用方等待超时保护
 - 可选的快速访问分区可见性控制（`visible` feature）
 - 可选的 DestList 元数据访问（`destlist` feature）
 
@@ -87,6 +87,7 @@ fn main() -> WincentResult<()> {
 - **操作系统**：Windows 10 或 Windows 11。
 - **Rust**：1.60.0 或更高版本。
 - **状态一致性**：快速访问状态由 Windows Explorer 维护，修改操作后结果可能有短暂延迟，Explorer 也可能在不同版本间以异步方式重建状态。
+- **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
 
 ## 贡献指南
 

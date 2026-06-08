@@ -19,7 +19,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 - Clear categories with optional explicit pinned-folder cleanup
 - Check item existence by exact path or keyword
 - Batch add/remove with per-item error collection
-- Timeout protection for all shell operations
+- Caller-side timeout protection for Shell and PowerShell operations
 - Optional visibility control for Quick Access sections (`visible` feature)
 - Optional DestList metadata access (`destlist` feature)
 
@@ -87,6 +87,7 @@ fn main() -> WincentResult<()> {
 - **OS**: Windows 10 or Windows 11.
 - **Rust**: 1.60.0 or later.
 - **Consistency**: Quick Access state is maintained by Windows Explorer. Results may lag behind mutations by a short interval, and Explorer may rebuild state asynchronously across versions.
+- **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
 
 ## Contributing
 
