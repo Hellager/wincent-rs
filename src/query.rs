@@ -18,7 +18,6 @@
 
 #[cfg(test)]
 use crate::com::{ComGuard, ComInitStatus};
-use crate::utils::paths_equal;
 use crate::{error::WincentError, QuickAccess, WincentResult};
 use std::time::Duration;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER};
@@ -77,22 +76,6 @@ fn query_namespace_for(qa_type: QuickAccess) -> (&'static str, QueryFilter) {
             QueryFilter::FoldersOnly,
         ),
     }
-}
-
-fn merge_quick_access_items(
-    mut recent_files: Vec<String>,
-    frequent_folders: Vec<String>,
-) -> Vec<String> {
-    for folder in frequent_folders {
-        if !recent_files
-            .iter()
-            .any(|existing| paths_equal(existing, &folder))
-        {
-            recent_files.push(folder);
-        }
-    }
-
-    recent_files
 }
 
 /// Determines if a FolderItem should be included based on the query filter
@@ -342,13 +325,8 @@ fn query_recent_powershell_single_with_timeout(
 ) -> WincentResult<Vec<String>> {
     use crate::script_executor::ScriptExecutor;
     use crate::script_storage::ScriptStorage;
-    use crate::script_strategy::PSScript;
 
-    let script_type = match qa_type {
-        QuickAccess::RecentFiles => PSScript::QueryRecentFile,
-        QuickAccess::FrequentFolders => PSScript::QueryFrequentFolder,
-        QuickAccess::All => PSScript::QueryQuickAccess,
-    };
+    let script_type = query_script_for(qa_type);
 
     let start = std::time::Instant::now();
     let script_path = ScriptStorage::get_script_path(script_type)?;
@@ -367,15 +345,31 @@ fn query_recent_powershell_with_timeout(
     qa_type: QuickAccess,
     timeout: Duration,
 ) -> WincentResult<Vec<String>> {
+    query_recent_powershell_with_timeout_using(
+        qa_type,
+        timeout,
+        query_recent_powershell_single_with_timeout,
+    )
+}
+
+fn query_recent_powershell_with_timeout_using<F>(
+    qa_type: QuickAccess,
+    timeout: Duration,
+    mut query_single: F,
+) -> WincentResult<Vec<String>>
+where
+    F: FnMut(QuickAccess, Duration) -> WincentResult<Vec<String>>,
+{
+    query_single(qa_type, timeout)
+}
+
+fn query_script_for(qa_type: QuickAccess) -> crate::script_strategy::PSScript {
+    use crate::script_strategy::PSScript;
+
     match qa_type {
-        QuickAccess::All => {
-            let recent_files =
-                query_recent_powershell_single_with_timeout(QuickAccess::RecentFiles, timeout)?;
-            let frequent_folders =
-                query_recent_powershell_single_with_timeout(QuickAccess::FrequentFolders, timeout)?;
-            Ok(merge_quick_access_items(recent_files, frequent_folders))
-        }
-        concrete => query_recent_powershell_single_with_timeout(concrete, timeout),
+        QuickAccess::RecentFiles => PSScript::QueryRecentFile,
+        QuickAccess::FrequentFolders => PSScript::QueryFrequentFolder,
+        QuickAccess::All => PSScript::QueryQuickAccess,
     }
 }
 
@@ -893,46 +887,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merge_quick_access_items_appends_frequent_folders_after_recent_files() {
-        let merged = merge_quick_access_items(
-            vec![
-                "C:\\Work\\report.docx".to_string(),
-                "C:\\Work\\notes.txt".to_string(),
-            ],
-            vec![
-                "C:\\Users\\Alice\\Documents".to_string(),
-                "D:\\Projects".to_string(),
-            ],
-        );
+    fn query_script_for_maps_all_to_quick_access_namespace_script() {
+        use crate::script_strategy::PSScript;
 
         assert_eq!(
-            merged,
-            vec![
-                "C:\\Work\\report.docx".to_string(),
-                "C:\\Work\\notes.txt".to_string(),
-                "C:\\Users\\Alice\\Documents".to_string(),
-                "D:\\Projects".to_string(),
-            ]
+            query_script_for(QuickAccess::All),
+            PSScript::QueryQuickAccess
+        );
+        assert_eq!(
+            query_script_for(QuickAccess::RecentFiles),
+            PSScript::QueryRecentFile
+        );
+        assert_eq!(
+            query_script_for(QuickAccess::FrequentFolders),
+            PSScript::QueryFrequentFolder
         );
     }
 
     #[test]
-    fn merge_quick_access_items_deduplicates_with_windows_path_semantics() {
-        let merged = merge_quick_access_items(
-            vec!["C:\\Work\\Report.docx".to_string()],
-            vec![
-                "c:/work/report.docx".to_string(),
-                "C:\\Work\\Archive".to_string(),
-            ],
-        );
+    fn powershell_all_dispatches_directly_to_query_quick_access() -> WincentResult<()> {
+        let mut calls = Vec::new();
+        let timeout = Duration::from_secs(3);
 
+        let result =
+            query_recent_powershell_with_timeout_using(QuickAccess::All, timeout, |qa_type, t| {
+                calls.push((qa_type, t));
+                Ok(vec!["C:\\QuickAccessItem".to_string()])
+            })?;
+
+        assert_eq!(result, vec!["C:\\QuickAccessItem".to_string()]);
         assert_eq!(
-            merged,
-            vec![
-                "C:\\Work\\Report.docx".to_string(),
-                "C:\\Work\\Archive".to_string(),
-            ]
+            calls,
+            vec![(QuickAccess::All, timeout)],
+            "PowerShell fallback for All should execute QueryQuickAccess once"
         );
+        Ok(())
     }
 
     fn contains_exact_path(items: &[String], path: &str) -> bool {
