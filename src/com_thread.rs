@@ -154,6 +154,18 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::sync::{mpsc, Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
+
+    fn wait_for_active_worker_count(expected: usize, timeout: Duration) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < timeout {
+            if ACTIVE_STA_WORKERS.load(Ordering::Acquire) == expected {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        ACTIVE_STA_WORKERS.load(Ordering::Acquire) == expected
+    }
 
     #[test]
     #[serial(com_thread_active_workers)]
@@ -343,6 +355,10 @@ mod tests {
         for caller in callers {
             caller.join().expect("caller thread should not panic");
         }
+        assert!(
+            wait_for_active_worker_count(0, std::time::Duration::from_secs(5)),
+            "active worker count should return to zero after workers exit"
+        );
 
         let result = run_on_sta_thread(|| Ok(()), std::time::Duration::from_secs(5));
         assert!(

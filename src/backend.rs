@@ -18,8 +18,8 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
 
     fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>>;
 
-    fn add_recent_file(&self, path: &str) -> WincentResult<()>;
-    fn add_recent_file_and_refresh(&self, path: &str) -> WincentResult<()>;
+    fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
+    fn add_recent_file_and_refresh(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
 
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
@@ -31,7 +31,7 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     /// This intentionally keeps the current compound batch refresh semantics.
     fn refresh_recent_files_display(&self) -> WincentResult<()>;
 
-    fn clear_recent_files(&self) -> WincentResult<()>;
+    fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()>;
     fn clear_frequent_folders_jumplist(&self) -> WincentResult<()>;
     fn refresh_explorer(&self) -> WincentResult<()>;
 }
@@ -48,17 +48,18 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
         query::query_recent_with_timeout(qa_type, timeout)
     }
 
-    fn add_recent_file(&self, path: &str) -> WincentResult<()> {
+    fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {
         add_to_recent_files_with_options(
             path,
             AddRecentFileOptions {
                 force_update: false,
             },
+            timeout,
         )
     }
 
-    fn add_recent_file_and_refresh(&self, path: &str) -> WincentResult<()> {
-        add_to_recent_files_with_options(path, AddRecentFileOptions { force_update: true })
+    fn add_recent_file_and_refresh(&self, path: &str, timeout: Duration) -> WincentResult<()> {
+        add_to_recent_files_with_options(path, AddRecentFileOptions { force_update: true }, timeout)
     }
 
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
@@ -82,8 +83,8 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
         refresh_explorer_window()
     }
 
-    fn clear_recent_files(&self) -> WincentResult<()> {
-        empty::empty_recent_files()
+    fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()> {
+        empty::empty_recent_files_with_api(timeout)
     }
 
     fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {

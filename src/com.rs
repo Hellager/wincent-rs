@@ -3,6 +3,7 @@
 //! Provides unified COM initialization classification logic and RAII lifetime management.
 
 use windows::core::HRESULT;
+#[cfg(test)]
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
 /// Raw result classification for COM initialization
@@ -33,11 +34,13 @@ pub(crate) fn classify_coinit_result(hr: HRESULT) -> ComInitStatus {
 }
 
 /// RAII guard that uninitializes COM when dropped
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ComGuard {
     should_uninitialize: bool,
 }
 
+#[cfg(test)]
 impl ComGuard {
     /// Attempts to initialize COM in STA mode
     ///
@@ -65,6 +68,7 @@ impl ComGuard {
     }
 }
 
+#[cfg(test)]
 impl Drop for ComGuard {
     fn drop(&mut self) {
         if self.should_uninitialize {

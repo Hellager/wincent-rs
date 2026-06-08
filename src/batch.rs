@@ -268,7 +268,7 @@ fn add_recent_file(
 ) -> WincentResult<()> {
     backend.validate_path(path, PathType::File)?;
     ensure_not_present(path, QuickAccess::RecentFiles, timeout, backend)?;
-    backend.add_recent_file(path)
+    backend.add_recent_file(path, timeout)
 }
 
 fn add_frequent_folder(

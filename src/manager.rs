@@ -527,9 +527,10 @@ impl QuickAccessManager {
                     .validate_path(&path, crate::utils::PathType::File)?;
                 self.ensure_not_present(&path, qa_type)?;
                 if options.force_update() {
-                    self.backend.add_recent_file_and_refresh(&path)
+                    self.backend
+                        .add_recent_file_and_refresh(&path, self.timeout)
                 } else {
-                    self.backend.add_recent_file(&path)
+                    self.backend.add_recent_file(&path, self.timeout)
                 }
             }
             QuickAccess::FrequentFolders => {
@@ -1099,12 +1100,12 @@ mod tests {
             Ok(self.items.lock().unwrap().clone())
         }
 
-        fn add_recent_file(&self, path: &str) -> WincentResult<()> {
+        fn add_recent_file(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
             self.record(format!("add_recent_file:{path}"));
             Ok(())
         }
 
-        fn add_recent_file_and_refresh(&self, path: &str) -> WincentResult<()> {
+        fn add_recent_file_and_refresh(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
             self.record(format!("add_recent_file_and_refresh:{path}"));
             Ok(())
         }
@@ -1138,7 +1139,7 @@ mod tests {
             Ok(())
         }
 
-        fn clear_recent_files(&self) -> WincentResult<()> {
+        fn clear_recent_files(&self, _timeout: Duration) -> WincentResult<()> {
             self.record("clear_recent_files");
             Ok(())
         }

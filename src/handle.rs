@@ -12,13 +12,12 @@
 //! - Multi-strategy execution (PowerShell/Win32 API)
 //!
 //! # Operation Safety
-//! 1. Automatic COM initialization for API operations
+//! 1. Dedicated STA threading for Shell COM operations
 //! 2. Path validation before execution
 //! 3. PowerShell script sandboxing
 //! 4. Clean error propagation
 
 use crate::{
-    com::{ComGuard, ComInitStatus},
     error::WincentError,
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
     script_executor::{QuickAccessDataFiles, ScriptExecutor},
@@ -564,42 +563,36 @@ pub(crate) fn execute_script_with_validation(
     }
 }
 
-/// Adds a file to the Windows Recent Items list using the Windows API.
-///
-/// Uses the calling thread's COM context because SHAddToRecentDocs is an
-/// asynchronous API that requires the COM context and message pump to remain
-/// active for the Shell to complete cross-process communication.
-/// Unlike synchronous Shell verb operations, this does not cause deadlocks.
-///
-/// # Windows Behavior Notes
-///
-/// - **Deduplication**: Windows has a built-in deduplication mechanism that may
-///   ignore repeated additions of the same file within a short time window.
-///   This is by design to prevent spam and maintain list quality.
-/// - **Asynchronous Processing**: The file may not appear immediately in the
-///   Recent Items list. Windows Shell processes these updates asynchronously.
-pub(crate) fn add_file_to_recent_native(path: &str) -> WincentResult<()> {
-    validate_path(path, PathType::File)?;
-
-    // Initialize COM (handle already-initialized case)
-    let _com = ComGuard::try_initialize().map_err(|status| match status {
-        ComInitStatus::ApartmentMismatch => WincentError::ComApartmentMismatch(
-            "Thread already initialized with incompatible COM apartment model".to_string(),
-        ),
-        ComInitStatus::OtherError(hr) => WincentError::WindowsApi(hr),
-        _ => unreachable!(),
-    })?;
-
+/// Inner: runs on the current STA thread. Only call from within `run_on_sta_thread`.
+fn add_file_to_recent_native_current_sta(path: &str) -> WincentResult<()> {
     unsafe {
         let file_path_wide: Vec<u16> = OsString::from(path)
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
-
         SHAddToRecentDocs(SHARD_PATHW, Some(file_path_wide.as_ptr() as *const _));
     }
-
     Ok(())
+}
+
+/// Adds a file to the Windows Recent Items list via a dedicated STA thread.
+///
+/// `timeout` limits how long the caller waits; the underlying Shell operation
+/// may still complete after the timeout elapses.
+///
+/// # Windows Behavior Notes
+///
+/// - **Deduplication**: Windows may ignore repeated additions of the same file
+///   within a short time window.
+/// - **Asynchronous Processing**: The file may not appear immediately in the
+///   Recent Items list. Windows Shell processes these updates asynchronously.
+pub(crate) fn add_file_to_recent_native(path: &str, timeout: Duration) -> WincentResult<()> {
+    validate_path(path, PathType::File)?;
+    let path = path.to_owned();
+    crate::com_thread::run_on_sta_thread(
+        move || add_file_to_recent_native_current_sta(&path),
+        timeout,
+    )
 }
 
 /// Removes a file from the Windows Recent Items list using native COM API
@@ -926,15 +919,11 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
 
 /// Adds a file to Windows Recent Files.
 ///
-/// # COM Apartment Requirements
+/// # Threading and Timeout
 ///
-/// This function requires the calling thread to be initialized with the
-/// Single-Threaded Apartment (STA) model, or not initialized at all.
-/// If the thread is initialized with Multi-Threaded Apartment (MTA),
-/// this function will return `ComApartmentMismatch` error.
-///
-/// If you need to call this from an MTA thread, consider using
-/// `std::thread::spawn()` to run it on a new thread.
+/// Recent Files add operations run on a dedicated STA thread through the
+/// backend timeout path. The configured timeout limits how long the caller
+/// waits; the underlying Shell operation may still complete later.
 ///
 /// # Arguments
 ///
@@ -942,8 +931,7 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
 ///
 /// # Errors
 ///
-/// Returns `ComApartmentMismatch` if the calling thread is initialized
-/// with an incompatible COM apartment model.
+/// Returns validation, timeout, or Shell operation errors from the backend.
 ///
 /// # Windows Behavior Notes
 ///
@@ -959,7 +947,7 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
 /// use wincent::{handle::add_to_recent_files, error::WincentError};
 ///
 /// fn main() -> Result<(), WincentError> {
-///     add_file_to_recent_native("C:\\Documents\\report.docx")?;
+///     add_file_to_recent_native("C:\\Documents\\report.docx", std::time::Duration::from_secs(10))?;
 ///     Ok(())
 /// }
 /// ```
@@ -967,8 +955,9 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
 pub(crate) fn add_to_recent_files_with_options(
     path: &str,
     options: AddRecentFileOptions,
+    timeout: Duration,
 ) -> WincentResult<()> {
-    add_file_to_recent_native(path)?;
+    add_file_to_recent_native(path, timeout)?;
 
     if options.force_update {
         QuickAccessDataFiles::new()?.remove_recent_file()?;
@@ -1287,33 +1276,6 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
 /// - [`add_to_frequent_folders()`] - Pin a folder to Quick Access
 /// - [`crate::query::get_frequent_folders()`] - Query all frequent folders
 /// - [`crate::query::is_frequent_folder_exact()`] - Check if a folder is pinned
-///
-/// Adds a file to Windows Recent Files with a custom timeout.
-///
-/// # Timeout Behavior
-///
-/// The `timeout` parameter is accepted for API consistency with other
-/// `_with_timeout` variants but has **no effect** on this function.
-///
-/// `SHAddToRecentDocs` is a fire-and-forget API: the call itself returns
-/// within ~1ms after writing to the MRU registry key and posting a shell
-/// notification. The actual UI update is processed asynchronously by
-/// explorer.exe with no synchronization point exposed to the caller.
-/// There is no blocking operation to guard with a timeout.
-///
-/// Moving the call onto a background thread would be counterproductive:
-/// `SHAddToRecentDocs` requires the calling thread's COM apartment and
-/// message pump to remain alive for the shell to deliver its cross-process
-/// callbacks. A thread that exits immediately after the call would prevent
-/// those callbacks from being delivered, silently dropping the registration.
-///
-/// If you need to verify that the file actually appeared in Recent Files,
-/// poll [`crate::query::is_recent_file_exact()`] with your own deadline.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the file to be added
-/// * `_timeout` - Accepted for API consistency; currently has no effect
 ///
 /// Removes a file from Windows Recent Files with a custom COM STA thread timeout.
 ///
@@ -1823,7 +1785,7 @@ mod tests {
         let test_path = path_to_str(&test_file)?;
 
         // Use public API consistently
-        add_file_to_recent_native(test_path)?;
+        add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT)?;
 
         // Wait longer for Windows Shell to process the recent item (20 retries = 10 seconds)
         assert!(
@@ -1873,7 +1835,7 @@ mod tests {
         let test_path = path_to_str(&test_file)?;
 
         // Add file to recent using native API
-        add_file_to_recent_native(test_path)?;
+        add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT)?;
 
         // Wait longer for Windows to process the recent item (20 retries = 10 seconds)
         if !wait_for_file_status(test_path, true, 20)? {
@@ -1924,13 +1886,13 @@ mod tests {
         // Both implementations should fail consistently for the same invalid inputs
 
         // Test add errors
-        let result = add_file_to_recent_native("Z:\\NonExistentFile.txt");
+        let result = add_file_to_recent_native("Z:\\NonExistentFile.txt", DEFAULT_COM_TIMEOUT);
         assert!(result.is_err(), "Should fail with non-existent file");
 
-        let result = add_file_to_recent_native("");
+        let result = add_file_to_recent_native("", DEFAULT_COM_TIMEOUT);
         assert!(result.is_err(), "Should fail with empty path");
 
-        let result = add_file_to_recent_native("\0invalid\0path");
+        let result = add_file_to_recent_native("\0invalid\0path", DEFAULT_COM_TIMEOUT);
         assert!(
             result.is_err(),
             "Invalid path characters should not be allowed"
@@ -1993,13 +1955,13 @@ mod tests {
         let filename1 = format!("test_file_{}.txt", timestamp);
         let test_file = create_test_file(&test_dir, &filename1, "test content")?;
         let test_path = path_to_str(&test_file)?;
-        add_file_to_recent_native(test_path)?;
+        add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT)?;
 
         // Test file with spaces
         let filename2 = format!("test file with spaces {}.txt", timestamp);
         let test_file2 = create_test_file(&test_dir, &filename2, "test content")?;
         let test_path2 = path_to_str(&test_file2)?;
-        add_file_to_recent_native(test_path2)?;
+        add_file_to_recent_native(test_path2, DEFAULT_COM_TIMEOUT)?;
 
         // Wait for both files to appear (20 retries 閼?500ms = 10 seconds)
         if !wait_for_file_status(test_path, true, 20)? {
@@ -2141,12 +2103,10 @@ mod tests {
     #[test]
     #[ignore = "Modifies system state 闁?run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
     fn test_com_s_false_reference_counting() -> WincentResult<()> {
-        // Tests that add_file_to_recent_native() correctly handles S_FALSE
-        // and properly calls CoUninitialize to balance reference counts.
-        //
-        // Strategy: Use multiple init/uninit cycles to amplify reference leaks.
-        // If the library leaks references, COM will remain initialized after
-        // the final CoUninitialize(), which we can detect.
+        // add_file_to_recent_native now runs on a dedicated STA thread via
+        // run_on_sta_thread, so COM reference counting on the calling thread
+        // is not affected. This test verifies the calling thread's apartment
+        // model is unaffected after several calls.
         use windows::Win32::System::Com::{
             CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
         };
@@ -2156,50 +2116,17 @@ mod tests {
         let test_path = path_to_str(&test_file)?;
 
         unsafe {
-            // Cycle 1: User init -> library call -> user uninit
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             assert_eq!(hr.0, 0, "First CoInitializeEx should return S_OK");
 
-            let result = add_file_to_recent_native(test_path);
-            assert!(
-                result.is_ok(),
-                "Should handle S_FALSE correctly: {:?}",
-                result
-            );
+            for _ in 0..3 {
+                let result = add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT);
+                assert!(result.is_ok(), "Should succeed: {:?}", result);
+            }
 
             CoUninitialize();
 
-            // Cycle 2: Repeat to amplify potential leaks
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            assert_eq!(
-                hr.0, 0,
-                "Second cycle should return S_OK (COM was uninitialized)"
-            );
-
-            let result = add_file_to_recent_native(test_path);
-            assert!(
-                result.is_ok(),
-                "Should handle S_FALSE on second cycle: {:?}",
-                result
-            );
-
-            CoUninitialize();
-
-            // Cycle 3: One more time
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            assert_eq!(hr.0, 0, "Third cycle should return S_OK");
-
-            let result = add_file_to_recent_native(test_path);
-            assert!(
-                result.is_ok(),
-                "Should handle S_FALSE on third cycle: {:?}",
-                result
-            );
-
-            CoUninitialize();
-
-            // Verification: Try to initialize with incompatible mode
-            // If there are leaked references, this will fail with RPC_E_CHANGED_MODE
+            // The calling thread has fully uninitialised; MTA should succeed.
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
             assert!(
                 hr.0 == 0 || hr.0 == 1,
@@ -2209,43 +2136,30 @@ mod tests {
             CoUninitialize();
         }
 
-        // Clean up: Remove test file from recent list
         let _ = remove_recent_file_native(test_path, DEFAULT_COM_TIMEOUT);
-
         cleanup_test_env(&test_dir)?;
         Ok(())
     }
 
     #[test]
+    #[ignore = "Modifies system state - run with: cargo test test_com_apartment_mismatch -- --ignored --nocapture"]
     fn test_com_apartment_mismatch() -> WincentResult<()> {
-        // Tests that add_file_to_recent_native() correctly detects and reports
-        // RPC_E_CHANGED_MODE when called from an MTA thread.
-        //
-        // Scenario: Thread is initialized with MTA, then calls STA-only function
-        // Expected: Function returns ComApartmentMismatch error
-        // Risk: If not detected, function may hang or crash
+        // add_file_to_recent_native now routes through run_on_sta_thread which
+        // spawns a fresh STA thread regardless of the caller's apartment model.
+        // Calling from an MTA thread must NOT return ComApartmentMismatch.
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
         unsafe {
-            // Initialize as MTA (multi-threaded apartment)
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
             assert!(hr.is_ok() || hr.0 == 1, "MTA init should succeed");
 
-            // Call STA-only function (should return ComApartmentMismatch)
-            let result = add_file_to_recent_native("C:\\Windows\\notepad.exe");
+            let result = add_file_to_recent_native("C:\\Windows\\notepad.exe", DEFAULT_COM_TIMEOUT);
+            assert!(
+                !matches!(result, Err(WincentError::ComApartmentMismatch(_))),
+                "MTA caller should no longer get ComApartmentMismatch, got: {:?}",
+                result
+            );
 
-            match result {
-                Err(WincentError::ComApartmentMismatch(msg)) => {
-                    assert!(
-                        msg.contains("incompatible"),
-                        "Error message should mention incompatibility: {}",
-                        msg
-                    );
-                }
-                _ => panic!("Expected ComApartmentMismatch error, got: {:?}", result),
-            }
-
-            // Clean up MTA
             CoUninitialize();
         }
 
@@ -2274,6 +2188,13 @@ mod tests {
         );
 
         let r = remove_from_frequent_folders_with_timeout("C:\\Windows", std::time::Duration::ZERO);
+        assert!(
+            matches!(r, Err(WincentError::InvalidArgument(_))),
+            "got: {:?}",
+            r
+        );
+
+        let r = add_file_to_recent_native("C:\\Windows\\notepad.exe", std::time::Duration::ZERO);
         assert!(
             matches!(r, Err(WincentError::InvalidArgument(_))),
             "got: {:?}",
