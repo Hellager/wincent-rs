@@ -116,10 +116,10 @@ impl BatchResult {
         self.failed.is_empty()
     }
 
-    /// Returns true if at least one operation succeeded.
+    /// Returns true if the batch contains both successes and failures.
     #[must_use]
     pub fn has_partial_success(&self) -> bool {
-        !self.succeeded.is_empty()
+        !self.succeeded.is_empty() && !self.failed.is_empty()
     }
 
     /// Returns the success rate (0.0 to 1.0).
@@ -564,6 +564,38 @@ mod tests {
         assert!(!result.is_complete_success());
         assert!(result.has_partial_success());
         assert!((result.success_rate() - 0.666).abs() < 0.01);
+    }
+
+    #[test]
+    fn batch_result_complete_success_is_not_partial_success() {
+        let result = BatchResult::new(
+            vec!["file1.txt".to_string(), "file2.txt".to_string()],
+            vec![],
+        );
+
+        assert_eq!(result.total(), 2);
+        assert!(result.is_complete_success());
+        assert!(!result.has_partial_success());
+        assert_eq!(result.success_rate(), 1.0);
+    }
+
+    #[test]
+    fn batch_result_complete_failure_is_not_partial_success() {
+        let result = BatchResult::new(
+            vec![],
+            vec![BatchFailure::new(
+                "file1.txt".to_string(),
+                WincentError::NotInQuickAccess {
+                    path: "file1.txt".to_string(),
+                    qa_type: QuickAccess::RecentFiles,
+                },
+            )],
+        );
+
+        assert_eq!(result.total(), 1);
+        assert!(!result.is_complete_success());
+        assert!(!result.has_partial_success());
+        assert_eq!(result.success_rate(), 0.0);
     }
 
     #[test]
