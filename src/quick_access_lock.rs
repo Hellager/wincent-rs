@@ -69,6 +69,7 @@ pub struct QuickAccessUnlockReport {
     initial_lnk_paths: Vec<PathBuf>,
     current_lnk_paths: Vec<PathBuf>,
     new_lnk_paths: Vec<PathBuf>,
+    disappeared_lnk_paths: Vec<PathBuf>,
     deleted_lnk_paths: Vec<PathBuf>,
     failed_lnk_deletions: Vec<QuickAccessUnlockFailure>,
 }
@@ -111,6 +112,11 @@ impl QuickAccessUnlockReport {
     #[must_use]
     pub fn new_lnk_paths(&self) -> &[PathBuf] {
         &self.new_lnk_paths
+    }
+
+    #[must_use]
+    pub fn disappeared_lnk_paths(&self) -> &[PathBuf] {
+        &self.disappeared_lnk_paths
     }
 
     #[must_use]
@@ -205,6 +211,7 @@ impl QuickAccessLock {
     ) -> WincentResult<QuickAccessUnlockReport> {
         let current_lnk_paths = recent_lnk_paths(&self.recent_folder)?;
         let new_lnk_paths = diff_new_paths(&self.initial_lnk_paths, &current_lnk_paths);
+        let disappeared_lnk_paths = diff_new_paths(&current_lnk_paths, &self.initial_lnk_paths);
         let mut deleted_lnk_paths = Vec::new();
         let mut failed_lnk_deletions = Vec::new();
 
@@ -225,6 +232,7 @@ impl QuickAccessLock {
             initial_lnk_paths: self.initial_lnk_paths.clone(),
             current_lnk_paths,
             new_lnk_paths,
+            disappeared_lnk_paths,
             deleted_lnk_paths,
             failed_lnk_deletions,
         })
@@ -346,6 +354,35 @@ mod tests {
     }
 
     #[test]
+    fn reversed_diff_reports_disappeared_paths() {
+        let initial = vec![
+            PathBuf::from("a.lnk"),
+            PathBuf::from("b.lnk"),
+            PathBuf::from("gone.lnk"),
+        ];
+        let current = vec![PathBuf::from("a.lnk"), PathBuf::from("b.lnk")];
+
+        assert_eq!(
+            diff_new_paths(&current, &initial),
+            vec![PathBuf::from("gone.lnk")]
+        );
+    }
+
+    #[test]
+    fn reversed_diff_uses_windows_path_comparison() {
+        let initial = vec![
+            PathBuf::from("C:\\Users\\Me\\Recent\\Example.LNK"),
+            PathBuf::from("C:\\Users\\Me\\Recent\\Gone.lnk"),
+        ];
+        let current = vec![PathBuf::from("c:/users/me/recent/example.lnk")];
+
+        assert_eq!(
+            diff_new_paths(&current, &initial),
+            vec![PathBuf::from("C:\\Users\\Me\\Recent\\Gone.lnk")]
+        );
+    }
+
+    #[test]
     fn unlock_failure_accessors_expose_path_and_error() {
         let failure = QuickAccessUnlockFailure {
             path: PathBuf::from("new.lnk"),
@@ -367,10 +404,73 @@ mod tests {
             initial_lnk_paths: Vec::new(),
             current_lnk_paths: vec![PathBuf::from("new.lnk")],
             new_lnk_paths: vec![PathBuf::from("new.lnk")],
+            disappeared_lnk_paths: vec![PathBuf::from("gone.lnk")],
             deleted_lnk_paths: Vec::new(),
             failed_lnk_deletions: vec![failure.clone()],
         };
 
+        assert_eq!(report.disappeared_lnk_paths(), &[PathBuf::from("gone.lnk")]);
         assert_eq!(report.failed_lnk_deletions(), &[failure]);
+    }
+
+    #[test]
+    fn unlock_reports_disappeared_paths_without_cleanup() -> WincentResult<()> {
+        let temp_dir = tempfile::tempdir().map_err(WincentError::Io)?;
+        let recent_folder = temp_dir.path().to_path_buf();
+        let automatic_destinations = recent_folder.join("AutomaticDestinations");
+        fs::create_dir(&automatic_destinations).map_err(WincentError::Io)?;
+
+        let recent_file = automatic_destinations.join(RECENT_FILES_AUTOMATIC_DESTINATION);
+        fs::write(&recent_file, b"lock").map_err(WincentError::Io)?;
+        let existing = recent_folder.join("existing.lnk");
+        let gone = recent_folder.join("gone.lnk");
+        let new = recent_folder.join("new.lnk");
+        fs::write(&existing, b"existing").map_err(WincentError::Io)?;
+        fs::write(&gone, b"gone").map_err(WincentError::Io)?;
+
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )?;
+        fs::remove_file(&gone).map_err(WincentError::Io)?;
+        fs::write(&new, b"new").map_err(WincentError::Io)?;
+
+        let report = lock.unlock(QuickAccessUnlockOptions::new())?;
+
+        assert_eq!(report.new_lnk_paths(), &[new.clone()]);
+        assert_eq!(report.disappeared_lnk_paths(), &[gone]);
+        assert!(report.deleted_lnk_paths().is_empty());
+        assert!(new.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn unlock_cleanup_deleted_paths_are_orthogonal_to_disappeared_paths() -> WincentResult<()> {
+        let temp_dir = tempfile::tempdir().map_err(WincentError::Io)?;
+        let recent_folder = temp_dir.path().to_path_buf();
+        let automatic_destinations = recent_folder.join("AutomaticDestinations");
+        fs::create_dir(&automatic_destinations).map_err(WincentError::Io)?;
+
+        let recent_file = automatic_destinations.join(RECENT_FILES_AUTOMATIC_DESTINATION);
+        fs::write(&recent_file, b"lock").map_err(WincentError::Io)?;
+        let existing = recent_folder.join("existing.lnk");
+        let gone = recent_folder.join("gone.lnk");
+        let new = recent_folder.join("new.lnk");
+        fs::write(&existing, b"existing").map_err(WincentError::Io)?;
+        fs::write(&gone, b"gone").map_err(WincentError::Io)?;
+
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder,
+        )?;
+        fs::remove_file(&gone).map_err(WincentError::Io)?;
+        fs::write(&new, b"new").map_err(WincentError::Io)?;
+
+        let report = lock.unlock(QuickAccessUnlockOptions::new().cleanup_new_recent_links())?;
+
+        assert_eq!(report.disappeared_lnk_paths(), &[gone.clone()]);
+        assert_eq!(report.deleted_lnk_paths(), &[new.clone()]);
+        assert!(!new.exists());
+        Ok(())
     }
 }
