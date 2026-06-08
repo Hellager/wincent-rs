@@ -47,10 +47,9 @@ pub struct BatchResult {
     succeeded: Vec<String>,
     /// Failed items with error details.
     ///
-    /// `AlreadyExists` and `NotInQuickAccess` may come from best-effort preflight
-    /// checks. Explorer state can still change between the preflight query and
-    /// the shell operation, so callers should treat those errors as a snapshot
-    /// of the attempted operation rather than a durable global truth.
+    /// `AlreadyExists` and `NotInQuickAccess` describe the attempted operation.
+    /// Frequent Folders add detects duplicates inside the Shell pin path; other
+    /// operations may still use best-effort preflight checks.
     failed: Vec<BatchFailure>,
 }
 
@@ -58,8 +57,8 @@ pub struct BatchResult {
 ///
 /// The error describes the operation as it was attempted. For example,
 /// [`WincentError::AlreadyExists`] and [`WincentError::NotInQuickAccess`] can
-/// come from best-effort preflight checks, and Explorer state may have changed
-/// by the time the caller inspects the result.
+/// come from the operation itself or best-effort preflight checks, and Explorer
+/// state may have changed by the time the caller inspects the result.
 #[derive(Debug)]
 pub struct BatchFailure {
     path: String,
@@ -277,7 +276,6 @@ fn add_frequent_folder(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     backend.validate_path(path, PathType::Directory)?;
-    ensure_not_present(path, QuickAccess::FrequentFolders, timeout, backend)?;
     backend.add_frequent_folder(path, timeout)
 }
 
@@ -430,7 +428,114 @@ pub(crate) fn remove_items_batch_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::QuickAccessBackend;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct FakeBatchBackend {
+        items: Vec<String>,
+        calls: Mutex<Vec<String>>,
+        get_item_calls: Mutex<usize>,
+        add_frequent_folder_error: Mutex<Option<WincentError>>,
+    }
+
+    impl FakeBatchBackend {
+        fn with_items(items: Vec<String>) -> Self {
+            Self {
+                items,
+                calls: Mutex::new(Vec::new()),
+                get_item_calls: Mutex::new(0),
+                add_frequent_folder_error: Mutex::new(None),
+            }
+        }
+
+        fn fail_add_frequent_folder_with(&self, error: WincentError) {
+            *self.add_frequent_folder_error.lock().unwrap() = Some(error);
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        fn get_item_call_count(&self) -> usize {
+            *self.get_item_calls.lock().unwrap()
+        }
+    }
+
+    impl QuickAccessBackend for FakeBatchBackend {
+        fn validate_path(&self, _path: &str, _expected: PathType) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn get_items(
+            &self,
+            _qa_type: QuickAccess,
+            _timeout: Duration,
+        ) -> WincentResult<Vec<String>> {
+            *self.get_item_calls.lock().unwrap() += 1;
+            Ok(self.items.clone())
+        }
+
+        fn add_recent_file(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("add_recent:{path}"));
+            Ok(())
+        }
+
+        fn add_recent_file_and_refresh(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("add_recent_refresh:{path}"));
+            Ok(())
+        }
+
+        fn add_frequent_folder(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("add_frequent:{path}"));
+            if let Some(error) = self.add_frequent_folder_error.lock().unwrap().take() {
+                return Err(error);
+            }
+            Ok(())
+        }
+
+        fn remove_recent_file(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn remove_frequent_folder(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn delete_recent_links_for_target(
+            &self,
+            _path: &str,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn refresh_recent_files_display(&self) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn clear_recent_files(&self, _timeout: Duration) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn refresh_explorer(&self) -> WincentResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn batch_result_empty_is_complete_success() {
@@ -600,6 +705,53 @@ mod tests {
             result.failed()[0].error(),
             WincentError::UnsupportedOperation(_)
         ));
+    }
+
+    #[test]
+    fn batch_add_frequent_folder_skips_membership_preflight() {
+        let backend = FakeBatchBackend::with_items(vec!["C:\\Projects".to_string()]);
+        let result = add_items_batch(
+            &[("C:\\Projects".to_string(), QuickAccess::FrequentFolders)],
+            BatchOptions::new(),
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert_eq!(result.succeeded(), &["C:\\Projects".to_string()]);
+        assert!(result.failed().is_empty());
+        assert_eq!(backend.get_item_call_count(), 0);
+        assert_eq!(
+            backend.calls(),
+            vec!["add_frequent:C:\\Projects".to_string()]
+        );
+    }
+
+    #[test]
+    fn batch_add_frequent_folder_collects_backend_already_exists() {
+        let backend = FakeBatchBackend::default();
+        backend.fail_add_frequent_folder_with(WincentError::already_exists(
+            "C:\\Projects",
+            QuickAccess::FrequentFolders,
+        ));
+
+        let result = add_items_batch(
+            &[("C:\\Projects".to_string(), QuickAccess::FrequentFolders)],
+            BatchOptions::new(),
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::AlreadyExists { .. }
+        ));
+        assert_eq!(backend.get_item_call_count(), 0);
+        assert_eq!(
+            backend.calls(),
+            vec!["add_frequent:C:\\Projects".to_string()]
+        );
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {

@@ -195,13 +195,25 @@ pub struct AddRecentFileOptions {
 ///
 /// This function performs unsafe COM operations. The dedicated STA thread ensures
 /// proper COM initialization and message pump availability.
-fn invoke_verb_on_self(path: &str, verb: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    let path = path.to_owned();
-    let verb = verb.to_owned();
-    crate::com_thread::run_on_sta_thread(
-        move || invoke_verb_on_self_current_sta(&path, &verb),
-        timeout,
-    )
+fn run_pin_frequent_folder_checked<C, I>(
+    path: &str,
+    mut contains: C,
+    mut invoke_on_self: I,
+) -> WincentResult<()>
+where
+    C: FnMut(&str) -> WincentResult<bool>,
+    I: FnMut(&str, &str) -> WincentResult<()>,
+{
+    // On Windows 11 "pintohome" acts as a toggle. Check in the same STA flow
+    // as the verb invocation so an already-pinned folder is never toggled off.
+    if contains(path)? {
+        return Err(WincentError::already_exists(
+            path,
+            QuickAccess::FrequentFolders,
+        ));
+    }
+
+    invoke_on_self(path, "pintohome")
 }
 
 /// Pins a folder to Quick Access using native COM API
@@ -211,8 +223,9 @@ fn invoke_verb_on_self(path: &str, verb: &str, timeout: std::time::Duration) -> 
 ///
 /// # Threading Model
 ///
-/// Uses [`invoke_verb_on_self()`] which runs on a dedicated STA thread to avoid
-/// Windows 11 deadlock issues.
+/// Runs the duplicate check and `pintohome` invocation inside a single
+/// dedicated STA thread to avoid Windows 11 deadlocks and reduce the race
+/// window between check and invoke.
 ///
 /// # Arguments
 ///
@@ -224,21 +237,28 @@ fn invoke_verb_on_self(path: &str, verb: &str, timeout: std::time::Duration) -> 
 ///
 /// # Errors
 ///
+/// - `AlreadyExists`: The folder is already pinned
 /// - `SystemError`: COM operation failed (e.g., failed to open folder namespace, invoke verb)
 ///
 /// # See Also
 ///
 /// - [`pin_frequent_folder()`] - Public wrapper with PowerShell fallback
-/// - [`invoke_verb_on_self()`] - The underlying verb invocation mechanism
+/// - [`invoke_verb_on_self_current_sta()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    // Pre-check: if the folder is already pinned, return Ok(()) immediately.
-    // On Windows 11 "pintohome" acts as a toggle 闁?calling it on an already-pinned
-    // folder would silently unpin it, violating the documented no-op contract.
-    if is_in_frequent_folders_native(path, timeout)? {
-        return Ok(());
-    }
-
-    invoke_verb_on_self(path, "pintohome", timeout)
+    // Check and invoke in one STA worker to narrow the TOCTOU window.
+    // On Windows 11 "pintohome" acts as a toggle. The check prevents toggling an
+    // already-pinned folder off.
+    let path = path.to_owned();
+    crate::com_thread::run_on_sta_thread(
+        move || {
+            run_pin_frequent_folder_checked(
+                &path,
+                contains_frequent_folder_current_sta,
+                invoke_verb_on_self_current_sta,
+            )
+        },
+        timeout,
+    )
 }
 
 /// Checks if a folder is in the Frequent Folders namespace using native COM
@@ -275,6 +295,7 @@ fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Wince
 /// # See Also
 ///
 /// - [`unpin_frequent_folder_native()`] - Uses this function for pre-check
+#[allow(dead_code)]
 fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> WincentResult<bool> {
     let path = path.to_owned();
     crate::com_thread::run_on_sta_thread(
@@ -775,6 +796,18 @@ fn pin_frequent_folder_powershell(path: &str) -> WincentResult<()> {
     execute_script_with_validation(PSScript::PinToFrequentFolder, path, PathType::Directory)
 }
 
+fn pin_frequent_folder_with_fallback<N, P>(mut native: N, mut powershell: P) -> WincentResult<()>
+where
+    N: FnMut() -> WincentResult<()>,
+    P: FnMut() -> WincentResult<()>,
+{
+    match native() {
+        Ok(()) => Ok(()),
+        Err(e @ WincentError::AlreadyExists { .. }) => Err(e),
+        Err(_) => powershell(),
+    }
+}
+
 /// Unpins a folder from the Windows Quick Access Frequent Folders list using PowerShell
 ///
 /// This is the PowerShell fallback implementation for unpinning folders.
@@ -846,8 +879,13 @@ fn unpin_frequent_folder_powershell(path: &str, timeout: std::time::Duration) ->
 pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     validate_path(path, PathType::Directory)?;
 
-    // Try native COM first (fast path), fallback to PowerShell if it fails
-    pin_frequent_folder_native(path, timeout).or_else(|_| pin_frequent_folder_powershell(path))
+    // Try native COM first (fast path), fallback to PowerShell only for
+    // system/COM failures. AlreadyExists is an authoritative duplicate result
+    // from the native check+pin path and must not be retried via PowerShell.
+    pin_frequent_folder_with_fallback(
+        || pin_frequent_folder_native(path, timeout),
+        || pin_frequent_folder_powershell(path),
+    )
 }
 
 /// Unpins a folder from the Windows Quick Access Frequent Folders list
@@ -1504,6 +1542,112 @@ mod tests {
             actions.borrow().is_empty(),
             "no verbs should be invoked when the folder is absent"
         );
+    }
+
+    #[test]
+    fn test_pin_checked_rejects_existing_without_invoking() {
+        let invoked = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let invoked_for_closure = std::rc::Rc::clone(&invoked);
+
+        let result = run_pin_frequent_folder_checked(
+            "C:\\Folder",
+            |_| Ok(true),
+            move |_, _| {
+                *invoked_for_closure.borrow_mut() = true;
+                Ok(())
+            },
+        );
+
+        assert!(
+            matches!(result, Err(WincentError::AlreadyExists { .. })),
+            "existing folder should be AlreadyExists, got: {:?}",
+            result
+        );
+        assert!(!*invoked.borrow(), "pintohome must not be invoked");
+    }
+
+    #[test]
+    fn test_pin_checked_invokes_pintohome_when_absent() -> WincentResult<()> {
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let actions_for_closure = std::rc::Rc::clone(&actions);
+
+        run_pin_frequent_folder_checked(
+            "C:\\Folder",
+            |_| Ok(false),
+            move |path, verb| {
+                actions_for_closure
+                    .borrow_mut()
+                    .push(format!("{path}:{verb}"));
+                Ok(())
+            },
+        )?;
+
+        assert_eq!(actions.borrow().as_slice(), ["C:\\Folder:pintohome"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pin_checked_propagates_contains_error_without_invoking() {
+        let invoked = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let invoked_for_closure = std::rc::Rc::clone(&invoked);
+
+        let result = run_pin_frequent_folder_checked(
+            "C:\\Folder",
+            |_| Err(WincentError::SystemError("contains failed".to_string())),
+            move |_, _| {
+                *invoked_for_closure.borrow_mut() = true;
+                Ok(())
+            },
+        );
+
+        assert!(
+            matches!(result, Err(WincentError::SystemError(ref message)) if message == "contains failed"),
+            "contains error should propagate, got: {:?}",
+            result
+        );
+        assert!(!*invoked.borrow(), "pintohome must not be invoked");
+    }
+
+    #[test]
+    fn test_pin_fallback_preserves_already_exists_without_powershell() {
+        let fallback_called = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let fallback_called_for_closure = std::rc::Rc::clone(&fallback_called);
+
+        let result = pin_frequent_folder_with_fallback(
+            || {
+                Err(WincentError::already_exists(
+                    "C:\\Folder",
+                    QuickAccess::FrequentFolders,
+                ))
+            },
+            move || {
+                *fallback_called_for_closure.borrow_mut() = true;
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Err(WincentError::AlreadyExists { .. })));
+        assert!(
+            !*fallback_called.borrow(),
+            "PowerShell fallback must not run for AlreadyExists"
+        );
+    }
+
+    #[test]
+    fn test_pin_fallback_runs_powershell_for_system_error() -> WincentResult<()> {
+        let fallback_called = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let fallback_called_for_closure = std::rc::Rc::clone(&fallback_called);
+
+        pin_frequent_folder_with_fallback(
+            || Err(WincentError::SystemError("native failed".to_string())),
+            move || {
+                *fallback_called_for_closure.borrow_mut() = true;
+                Ok(())
+            },
+        )?;
+
+        assert!(*fallback_called.borrow());
+        Ok(())
     }
 
     #[test]

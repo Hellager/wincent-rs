@@ -503,16 +503,17 @@ impl QuickAccessManager {
     /// `QuickAccess::FrequentFolders` pins a folder through Explorer's shell
     /// verbs. `QuickAccess::All` is not a valid target for mutation.
     ///
-    /// The duplicate check is best-effort. Explorer state can change between
-    /// the preflight query and the shell operation.
+    /// Recent Files duplicate checks are best-effort preflight queries.
+    /// Frequent Folders duplicate checks happen inside the Shell pin operation
+    /// to reduce the race window before invoking Explorer's pin verb.
     ///
     /// # Errors
     ///
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
     /// has the wrong file/folder type for `qa_type`; [`WincentError::AlreadyExists`]
-    /// if the preflight query finds the item; [`WincentError::UnsupportedOperation`]
-    /// for `QuickAccess::All`; or a Shell/PowerShell error if the underlying
-    /// operation fails.
+    /// if the item is already present; [`WincentError::UnsupportedOperation`] for
+    /// `QuickAccess::All`; or a Shell/PowerShell error if the underlying operation
+    /// fails.
     ///
     /// # Examples
     ///
@@ -552,7 +553,6 @@ impl QuickAccessManager {
             QuickAccess::FrequentFolders => {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::Directory)?;
-                self.ensure_not_present(&path, qa_type)?;
                 self.execute_with_retry(|| self.backend.add_frequent_folder(&path, self.timeout))
             }
             unsupported => Err(unsupported_add(unsupported)),
@@ -1074,6 +1074,7 @@ mod tests {
         items: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
         get_item_timeouts: Mutex<Vec<Duration>>,
+        add_frequent_folder_error: Mutex<Option<WincentError>>,
     }
 
     impl FakeBackend {
@@ -1082,6 +1083,7 @@ mod tests {
                 items: Mutex::new(items),
                 calls: Mutex::new(Vec::new()),
                 get_item_timeouts: Mutex::new(Vec::new()),
+                add_frequent_folder_error: Mutex::new(None),
             }
         }
 
@@ -1095,6 +1097,10 @@ mod tests {
 
         fn get_item_timeouts(&self) -> Vec<Duration> {
             self.get_item_timeouts.lock().unwrap().clone()
+        }
+
+        fn fail_add_frequent_folder_with(&self, error: WincentError) {
+            *self.add_frequent_folder_error.lock().unwrap() = Some(error);
         }
     }
 
@@ -1128,6 +1134,9 @@ mod tests {
 
         fn add_frequent_folder(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
             self.record(format!("add_frequent_folder:{path}"));
+            if let Some(error) = self.add_frequent_folder_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -1390,6 +1399,46 @@ mod tests {
 
         assert!(matches!(error, WincentError::AlreadyExists { .. }));
         assert!(backend.calls().is_empty());
+    }
+
+    #[test]
+    fn add_frequent_folder_skips_membership_preflight() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        manager.add_item(
+            "C:\\Projects",
+            QuickAccess::FrequentFolders,
+            AddOptions::new(),
+        )?;
+
+        assert!(backend.get_item_timeouts().is_empty());
+        assert_eq!(
+            backend.calls(),
+            vec!["add_frequent_folder:C:\\Projects".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn add_frequent_folder_propagates_backend_already_exists() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.fail_add_frequent_folder_with(WincentError::already_exists(
+            "C:\\Projects",
+            QuickAccess::FrequentFolders,
+        ));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let result = manager.add_item(
+            "C:\\Projects",
+            QuickAccess::FrequentFolders,
+            AddOptions::new(),
+        );
+
+        assert!(matches!(result, Err(WincentError::AlreadyExists { .. })));
+        assert!(backend.get_item_timeouts().is_empty());
     }
 
     #[test]
