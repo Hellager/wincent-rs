@@ -23,8 +23,6 @@ pub(crate) enum PSScript {
     QueryRecentFile,
     /// Query Frequent Folders.
     QueryFrequentFolder,
-    /// Add a file to Recent Files.
-    AddRecentFile,
     /// Remove a file from Recent Files.
     RemoveRecentFile,
     /// Pin a folder to Frequent Folders.
@@ -46,7 +44,6 @@ impl PSScript {
             PSScript::QueryQuickAccess => PowerShellOperation::QueryQuickAccess,
             PSScript::QueryRecentFile => PowerShellOperation::QueryRecentFiles,
             PSScript::QueryFrequentFolder => PowerShellOperation::QueryFrequentFolders,
-            PSScript::AddRecentFile => PowerShellOperation::AddRecentFile,
             PSScript::RemoveRecentFile => PowerShellOperation::RemoveRecentFile,
             PSScript::PinToFrequentFolder => PowerShellOperation::PinFrequentFolder,
             PSScript::UnpinFromFrequentFolder => PowerShellOperation::UnpinFrequentFolder,
@@ -150,26 +147,6 @@ impl ScriptStrategy for QueryQuickAccessStrategy {
             BaseScriptStrategy::utf8_header(),
             BaseScriptStrategy::shell_com_object(),
             ShellNamespaces::QUICK_ACCESS
-        ))
-    }
-}
-
-/// Strategy for adding recent files
-/// Placeholder for now, not implemented
-pub(crate) struct AddRecentFileStrategy;
-
-impl ScriptStrategy for AddRecentFileStrategy {
-    fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
-        Ok(format!(
-            r#"
-    {}
-    {}
-    Write-Output '{}'
-"#,
-            BaseScriptStrategy::utf8_header(),
-            BaseScriptStrategy::shell_com_object(),
-            path
         ))
     }
 }
@@ -364,7 +341,6 @@ impl ScriptStrategyFactory {
             PSScript::QueryQuickAccess => Box::new(QueryQuickAccessStrategy),
             PSScript::QueryRecentFile => Box::new(QueryRecentFileStrategy),
             PSScript::QueryFrequentFolder => Box::new(QueryFrequentFolderStrategy),
-            PSScript::AddRecentFile => Box::new(AddRecentFileStrategy),
             PSScript::RemoveRecentFile => Box::new(RemoveRecentFileStrategy),
             PSScript::PinToFrequentFolder => Box::new(PinToFrequentFolderStrategy),
             PSScript::UnpinFromFrequentFolder => Box::new(UnpinFromFrequentFolderStrategy),
@@ -474,12 +450,6 @@ mod tests {
         assert!(qff.contains(ShellNamespaces::FREQUENT_FOLDERS));
         assert!(qff.contains("$_.Path"));
 
-        // AddRecentFile: must Write-Output the path
-        let arf =
-            ScriptStrategyFactory::generate_script(PSScript::AddRecentFile, Some(path)).unwrap();
-        assert!(arf.contains("Write-Output"));
-        assert!(arf.contains(path));
-
         // RemoveRecentFile: must invoke 'remove' verb
         let rrf =
             ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path)).unwrap();
@@ -520,7 +490,6 @@ mod tests {
         // Scripts that require a path parameter must return MissingParameter when called
         // with None, not panic or produce empty output.
         let requires_param = [
-            PSScript::AddRecentFile,
             PSScript::RemoveRecentFile,
             PSScript::PinToFrequentFolder,
             PSScript::UnpinFromFrequentFolder,
@@ -566,7 +535,6 @@ mod tests {
 
         let path = "C:\\Users\\User\\Documents";
         let param_variants = [
-            PSScript::AddRecentFile,
             PSScript::RemoveRecentFile,
             PSScript::PinToFrequentFolder,
             PSScript::UnpinFromFrequentFolder,
@@ -590,10 +558,6 @@ mod tests {
         let path = "C:\\Users\\O'Brien\\Documents";
         let escaped_path = "C:\\Users\\O''Brien\\Documents";
         let cases = [
-            (
-                PSScript::AddRecentFile,
-                format!("Write-Output '{}'", escaped_path),
-            ),
             (
                 PSScript::RemoveRecentFile,
                 format!("$_.Path -eq '{}'", escaped_path),
