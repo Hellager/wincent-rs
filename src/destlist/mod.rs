@@ -1,13 +1,12 @@
 //! Direct CFB parser for `.automaticDestinations-ms` Jump List backing files.
 //!
-//! This module is gated behind the `destlist` Cargo feature and provides rich
-//! per-entry metadata (access count, pin status, rank, score, FILETIME) that is
-//! not available through the COM/Shell API used by the rest of this crate.
+//! This module provides rich per-entry metadata (access count, pin status, rank,
+//! score, FILETIME) that is not available through the COM/Shell API used by the
+//! rest of this crate.
 //!
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! # #[cfg(feature = "destlist")]
 //! # {
 //! use wincent::destlist::{parse_file, entries, recent_files_dest_path};
 //!

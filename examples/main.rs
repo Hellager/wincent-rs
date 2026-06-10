@@ -1,15 +1,12 @@
 use std::env;
 use std::io::{self, Write};
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use wincent::error::{InvalidPathError, PowerShellError, PowerShellErrorKind, WincentError};
 use wincent::prelude::*;
 
-#[cfg(feature = "destlist")]
-use std::path::PathBuf;
-
-#[cfg(feature = "destlist")]
 use wincent::destlist::{
     entries as dest_entries, experimental_remove_entries_by_rebuild,
     experimental_remove_entry_paths_by_rebuild, filetime_to_system_time,
@@ -143,7 +140,6 @@ fn print_help() {
 Usage:
   cargo run --example main
   cargo run --example main -- [--timeout-ms N] <command> [args]
-  cargo run --example main --all-features -- <command> [args]
 
 Interactive:
   help
@@ -167,7 +163,7 @@ Utility APIs:
   classify <stderr text>
   invalid-path <reason> [path]
 
-Visible feature:
+Visibility APIs:
   visible get <recent|frequent|all>
   visible set <recent|frequent|all> <true|false>
   visible show <recent|frequent|all>
@@ -175,7 +171,7 @@ Visible feature:
   visible get-recent | get-frequent
   visible set-recent <true|false> | set-frequent <true|false>
 
-Destlist feature:
+DestList APIs:
   dest path <recent|frequent>
   dest parse <recent|frequent|file> [path] [--limit N]
   dest parse-bytes <path> [--limit N]
@@ -228,8 +224,8 @@ fn split_command_line(line: &str) -> WincentResult<Vec<String>> {
 }
 
 fn cmd_features() -> WincentResult<()> {
-    println!("visible: {}", cfg!(feature = "visible"));
-    println!("destlist: {}", cfg!(feature = "destlist"));
+    println!("visible: built-in");
+    println!("destlist: built-in");
     Ok(())
 }
 
@@ -540,7 +536,6 @@ fn cmd_invalid_path(args: &[String]) -> WincentResult<()> {
     Ok(())
 }
 
-#[cfg(feature = "visible")]
 fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "visible <command>")?;
     match args[0].as_str() {
@@ -590,14 +585,6 @@ fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
     Ok(())
 }
 
-#[cfg(not(feature = "visible"))]
-fn cmd_visible(_manager: &QuickAccessManager, _args: &[String]) -> WincentResult<()> {
-    Err(WincentError::UnsupportedOperation(
-        "visible feature is not enabled; run with --features visible or --all-features".to_string(),
-    ))
-}
-
-#[cfg(feature = "destlist")]
 fn cmd_dest(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "dest <command>")?;
     match args[0].as_str() {
@@ -626,15 +613,6 @@ fn cmd_dest(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> 
     }
 }
 
-#[cfg(not(feature = "destlist"))]
-fn cmd_dest(_manager: &QuickAccessManager, _args: &[String]) -> WincentResult<()> {
-    Err(WincentError::UnsupportedOperation(
-        "destlist feature is not enabled; run with --features destlist or --all-features"
-            .to_string(),
-    ))
-}
-
-#[cfg(feature = "destlist")]
 fn cmd_dest_parse(args: &[String]) -> WincentResult<()> {
     require_len(
         args,
@@ -661,7 +639,6 @@ fn cmd_dest_parse(args: &[String]) -> WincentResult<()> {
     Ok(())
 }
 
-#[cfg(feature = "destlist")]
 fn cmd_dest_parse_bytes(args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "dest parse-bytes <path> [--limit N]")?;
     let limit = parse_limit(args, 20)?;
@@ -671,7 +648,6 @@ fn cmd_dest_parse_bytes(args: &[String]) -> WincentResult<()> {
     Ok(())
 }
 
-#[cfg(feature = "destlist")]
 fn cmd_dest_manager(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "dest manager <recent|frequent> [--limit N]")?;
     let limit = parse_limit(args, 20)?;
@@ -688,7 +664,6 @@ fn cmd_dest_manager(manager: &QuickAccessManager, args: &[String]) -> WincentRes
     Ok(())
 }
 
-#[cfg(feature = "destlist")]
 fn cmd_dest_remove(use_entries: bool, args: &[String]) -> WincentResult<()> {
     require_len(
         args,
@@ -756,7 +731,6 @@ fn parse_category(value: &str, allow_all: bool) -> WincentResult<QuickAccess> {
     }
 }
 
-#[cfg(feature = "destlist")]
 fn parse_dest_kind(value: &str) -> WincentResult<AutomaticDestinationsKind> {
     match value {
         "recent" | "recent-files" | "files" => Ok(AutomaticDestinationsKind::RecentFiles),
@@ -769,7 +743,6 @@ fn parse_dest_kind(value: &str) -> WincentResult<AutomaticDestinationsKind> {
     }
 }
 
-#[cfg(feature = "destlist")]
 fn dest_path(kind: AutomaticDestinationsKind) -> WincentResult<PathBuf> {
     match kind {
         AutomaticDestinationsKind::RecentFiles => recent_files_dest_path(),
@@ -850,7 +823,6 @@ fn print_batch_result(result: BatchResult) {
     }
 }
 
-#[cfg(feature = "destlist")]
 fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
     let cfb = parsed.cfb_info();
     let dest = parsed.dest_list();
@@ -886,7 +858,6 @@ fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
     print_dest_entries(&dest_entries(dest), limit);
 }
 
-#[cfg(feature = "destlist")]
 fn print_dest_entries(entries: &[wincent::destlist::DestListEntry], limit: usize) {
     println!("entries: {}", entries.len());
     for entry in entries.iter().take(limit) {
@@ -920,7 +891,6 @@ fn print_dest_entries(entries: &[wincent::destlist::DestListEntry], limit: usize
     }
 }
 
-#[cfg(feature = "destlist")]
 fn print_remove_report(report: &wincent::destlist::ExperimentalRemoveReport) {
     println!("kind: {:?}", report.kind());
     println!("recent_folder: {}", report.recent_folder().display());
@@ -1017,7 +987,6 @@ fn print_error(error: &WincentError) {
     }
 }
 
-#[cfg(feature = "destlist")]
 fn parse_limit(args: &[String], default: usize) -> WincentResult<usize> {
     let mut limit = default;
     let mut index = 0;

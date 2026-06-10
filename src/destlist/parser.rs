@@ -357,7 +357,6 @@ impl DestListEntry {
 /// # Examples
 ///
 /// ```rust,no_run
-/// # #[cfg(feature = "destlist")]
 /// # fn main() -> wincent::WincentResult<()> {
 /// use wincent::destlist::{entries, parse_file, recent_files_dest_path};
 ///
@@ -367,8 +366,6 @@ impl DestListEntry {
 /// }
 /// Ok(())
 /// # }
-/// # #[cfg(not(feature = "destlist"))]
-/// # fn main() {}
 /// ```
 pub fn entries(dest_list: &DestList) -> Vec<DestListEntry> {
     dest_list.entries.clone()
@@ -411,7 +408,6 @@ pub fn frequent_folders_dest_path() -> WincentResult<PathBuf> {
 /// # Examples
 ///
 /// ```rust,no_run
-/// # #[cfg(feature = "destlist")]
 /// # fn main() -> wincent::WincentResult<()> {
 /// use wincent::destlist::{parse_file, recent_files_dest_path};
 ///
@@ -419,8 +415,6 @@ pub fn frequent_folders_dest_path() -> WincentResult<PathBuf> {
 /// println!("DestList version {}", parsed.dest_list().version());
 /// Ok(())
 /// # }
-/// # #[cfg(not(feature = "destlist"))]
-/// # fn main() {}
 /// ```
 pub fn parse_file(path: impl AsRef<Path>) -> WincentResult<AutomaticDestinations> {
     let path = path.as_ref();
@@ -852,7 +846,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; reads system Jump List file — run with: cargo test --features destlist parse_recent_files_metadata -- --ignored --nocapture"]
+    #[ignore = "Integration test; reads system Jump List file - run with: cargo test parse_recent_files_metadata -- --ignored --nocapture"]
     fn parse_recent_files_metadata() {
         let path = recent_files_dest_path().expect("failed to get recent files dest path");
         println!("Path: {}", path.display());
@@ -882,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Integration test; reads system Jump List file — run with: cargo test --features destlist parse_frequent_folders_metadata -- --ignored --nocapture"]
+    #[ignore = "Integration test; reads system Jump List file - run with: cargo test parse_frequent_folders_metadata -- --ignored --nocapture"]
     fn parse_frequent_folders_metadata() {
         let path = frequent_folders_dest_path().expect("failed to get frequent folders dest path");
         println!("Path: {}", path.display());

@@ -83,10 +83,8 @@ mod script_strategy;
 mod test_utils;
 mod utils;
 
-#[cfg(feature = "visible")]
 pub mod visible;
 
-#[cfg(feature = "destlist")]
 pub mod destlist;
 
 #[allow(unused)]
@@ -104,7 +102,6 @@ pub mod prelude {
         QuickAccessUnlockReport,
     };
 
-    #[cfg(feature = "visible")]
     pub use crate::visible::{
         is_frequent_folders_visible, is_recent_files_visible, is_visible,
         set_frequent_folders_visible, set_frequent_folders_visible_with_options,
@@ -116,7 +113,6 @@ pub mod prelude {
         BatchOptions, BatchResult, EmptyOptions, QuickAccess, RetryPolicy, WincentResult,
     };
 
-    #[cfg(feature = "destlist")]
     pub use crate::destlist::{
         entries, filetime_to_system_time, frequent_folders_dest_path,
         parse_bytes as parse_dest_bytes, parse_file as parse_dest_file, recent_files_dest_path,

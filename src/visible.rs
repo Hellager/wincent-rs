@@ -20,7 +20,6 @@
 //! - Changing Recent Files visibility through Explorer's Folder Options UI can
 //!   clear all recent file entries.
 
-#![cfg(feature = "visible")]
 use crate::{QuickAccess, WincentResult};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
@@ -265,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Reads and writes the current user's Explorer registry settings — run with: cargo test --features visible recent_files_visibility_round_trip -- --ignored --nocapture"]
+    #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test recent_files_visibility_round_trip -- --ignored --nocapture"]
     fn recent_files_visibility_round_trip() -> WincentResult<()> {
         let initial = is_recent_files_visible()?;
 
@@ -279,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Reads and writes the current user's Explorer registry settings — run with: cargo test --features visible frequent_folders_visibility_round_trip -- --ignored --nocapture"]
+    #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test frequent_folders_visibility_round_trip -- --ignored --nocapture"]
     fn frequent_folders_visibility_round_trip() -> WincentResult<()> {
         let initial = is_frequent_folders_visible()?;
 

@@ -265,7 +265,6 @@ impl ExperimentalRemoveReport {
 /// # Examples
 ///
 /// ```rust,no_run
-/// # #[cfg(feature = "destlist")]
 /// # fn main() -> wincent::WincentResult<()> {
 /// use wincent::destlist::{
 ///     experimental_remove_entry_paths_by_rebuild, AutomaticDestinationsKind,
@@ -283,8 +282,6 @@ impl ExperimentalRemoveReport {
 /// }
 /// Ok(())
 /// # }
-/// # #[cfg(not(feature = "destlist"))]
-/// # fn main() {}
 /// ```
 pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     kind: AutomaticDestinationsKind,

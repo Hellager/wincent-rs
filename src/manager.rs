@@ -1,6 +1,5 @@
 //! Synchronous facade for Windows Quick Access operations.
 
-#[cfg(feature = "visible")]
 use crate::visible;
 use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
@@ -307,8 +306,8 @@ impl QuickAccessManagerBuilder {
 /// and `batch` modules.
 ///
 /// Prefer this facade over lower-level modules. It keeps path conversion,
-/// timeout handling, batch conversion, and feature-gated helpers behind one
-/// stable API surface.
+/// timeout handling, batch conversion, visibility helpers, and DestList helpers
+/// behind one stable API surface.
 ///
 /// # Examples
 ///
@@ -787,7 +786,6 @@ impl QuickAccessManager {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # #[cfg(feature = "visible")]
     /// # fn main() -> wincent::WincentResult<()> {
     /// use wincent::prelude::*;
     ///
@@ -796,10 +794,7 @@ impl QuickAccessManager {
     /// println!("Recent Files visible: {visible}");
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "visible"))]
-    /// # fn main() {}
     /// ```
-    #[cfg(feature = "visible")]
     pub fn is_visible(&self, qa_type: QuickAccess) -> WincentResult<bool> {
         visible::is_visible(qa_type)
     }
@@ -814,7 +809,6 @@ impl QuickAccessManager {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # #[cfg(feature = "visible")]
     /// # fn main() -> wincent::WincentResult<()> {
     /// use wincent::prelude::*;
     ///
@@ -822,10 +816,7 @@ impl QuickAccessManager {
     /// manager.set_visible(QuickAccess::RecentFiles, true)?;
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "visible"))]
-    /// # fn main() {}
     /// ```
-    #[cfg(feature = "visible")]
     pub fn set_visible(&self, qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
         visible::set_visible(qa_type, visible)
     }
@@ -840,17 +831,13 @@ impl QuickAccessManager {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # #[cfg(feature = "visible")]
     /// # fn main() -> wincent::WincentResult<()> {
     /// use wincent::prelude::*;
     ///
     /// QuickAccessManager::new().show_section(QuickAccess::FrequentFolders)?;
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "visible"))]
-    /// # fn main() {}
     /// ```
-    #[cfg(feature = "visible")]
     pub fn show_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
         self.set_visible(qa_type, true)
     }
@@ -865,22 +852,17 @@ impl QuickAccessManager {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # #[cfg(feature = "visible")]
     /// # fn main() -> wincent::WincentResult<()> {
     /// use wincent::prelude::*;
     ///
     /// QuickAccessManager::new().hide_section(QuickAccess::RecentFiles)?;
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "visible"))]
-    /// # fn main() {}
     /// ```
-    #[cfg(feature = "visible")]
     pub fn hide_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
         self.set_visible(qa_type, false)
     }
 
-    #[cfg(feature = "visible")]
     pub fn set_visible_with_options(
         &self,
         qa_type: QuickAccess,
@@ -890,7 +872,6 @@ impl QuickAccessManager {
         visible::set_visible_with_options(qa_type, visible, options)
     }
 
-    #[cfg(feature = "visible")]
     pub fn show_section_with_options(
         &self,
         qa_type: QuickAccess,
@@ -899,7 +880,6 @@ impl QuickAccessManager {
         self.set_visible_with_options(qa_type, true, options)
     }
 
-    #[cfg(feature = "visible")]
     pub fn hide_section_with_options(
         &self,
         qa_type: QuickAccess,
@@ -908,7 +888,6 @@ impl QuickAccessManager {
         self.set_visible_with_options(qa_type, false, options)
     }
 
-    #[cfg(feature = "visible")]
     pub fn set_recent_files_visible_with_options(
         &self,
         visible: bool,
@@ -917,7 +896,6 @@ impl QuickAccessManager {
         visible::set_recent_files_visible_with_options(visible, options)
     }
 
-    #[cfg(feature = "visible")]
     pub fn set_frequent_folders_visible_with_options(
         &self,
         visible: bool,
@@ -1044,7 +1022,6 @@ fn merge_batch_failures(
     BatchResult::new(succeeded, initial_failures)
 }
 
-#[cfg(feature = "destlist")]
 impl QuickAccessManager {
     /// Parses the recent-files `.automaticDestinations-ms` file and returns all entries.
     ///
@@ -1057,7 +1034,6 @@ impl QuickAccessManager {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # #[cfg(feature = "destlist")]
     /// # fn main() -> wincent::WincentResult<()> {
     /// use wincent::prelude::*;
     ///
@@ -1067,8 +1043,6 @@ impl QuickAccessManager {
     /// }
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "destlist"))]
-    /// # fn main() {}
     /// ```
     pub fn get_recent_files_metadata(&self) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
         let parsed = crate::destlist::parse_file(crate::destlist::recent_files_dest_path()?)?;
@@ -1086,7 +1060,6 @@ impl QuickAccessManager {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # #[cfg(feature = "destlist")]
     /// # fn main() -> wincent::WincentResult<()> {
     /// use wincent::prelude::*;
     ///
@@ -1095,8 +1068,6 @@ impl QuickAccessManager {
     /// println!("{} frequent-folder entries", entries.len());
     /// # Ok(())
     /// # }
-    /// # #[cfg(not(feature = "destlist"))]
-    /// # fn main() {}
     /// ```
     pub fn get_frequent_folders_metadata(
         &self,

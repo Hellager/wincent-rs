@@ -326,7 +326,6 @@ where
     Ok(contains(path)? == expected)
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PinnedStatus {
     Pinned,
@@ -338,7 +337,6 @@ fn frequent_folder_pinned_status(path: &str) -> PinnedStatus {
     frequent_folder_pinned_status_impl(path)
 }
 
-#[cfg(feature = "destlist")]
 fn frequent_folder_pinned_status_impl(path: &str) -> PinnedStatus {
     match frequent_folder_pinned_status_from_destlist(path) {
         Ok(status) => status,
@@ -346,12 +344,6 @@ fn frequent_folder_pinned_status_impl(path: &str) -> PinnedStatus {
     }
 }
 
-#[cfg(not(feature = "destlist"))]
-fn frequent_folder_pinned_status_impl(_path: &str) -> PinnedStatus {
-    PinnedStatus::Unknown
-}
-
-#[cfg(feature = "destlist")]
 fn frequent_folder_pinned_status_from_destlist(path: &str) -> WincentResult<PinnedStatus> {
     let parsed = crate::destlist::parse_file(crate::destlist::frequent_folders_dest_path()?)?;
     Ok(frequent_folder_pinned_status_from_entries(
@@ -360,7 +352,6 @@ fn frequent_folder_pinned_status_from_destlist(path: &str) -> WincentResult<Pinn
     ))
 }
 
-#[cfg(feature = "destlist")]
 fn frequent_folder_pinned_status_from_entries(
     path: &str,
     entries: &[crate::destlist::DestListEntry],
@@ -1985,7 +1976,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "destlist")]
     fn destlist_entry_for_test(path: &str, pin_status: i32) -> crate::destlist::DestListEntry {
         crate::destlist::DestListEntry {
             entry_offset: 0,
@@ -2009,7 +1999,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "destlist")]
     #[test]
     fn frequent_folder_pinned_status_from_entries_detects_pinned_entry() {
         let entries = vec![destlist_entry_for_test("C:\\Folder", 0)];
@@ -2020,7 +2009,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "destlist")]
     #[test]
     fn frequent_folder_pinned_status_from_entries_detects_unpinned_entry() {
         let entries = vec![destlist_entry_for_test("C:\\Folder", -1)];
@@ -2031,7 +2019,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "destlist")]
     #[test]
     fn frequent_folder_pinned_status_from_entries_returns_unknown_for_unmatched_path() {
         let entries = vec![destlist_entry_for_test("C:\\Other", 0)];
