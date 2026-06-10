@@ -304,6 +304,7 @@ fn add_frequent_folder(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     backend.validate_path(path, PathType::Directory)?;
+    ensure_not_present(path, QuickAccess::FrequentFolders, timeout, backend)?;
     backend.add_frequent_folder(path, timeout)
 }
 
@@ -542,6 +543,7 @@ mod tests {
         items: Vec<String>,
         calls: Mutex<Vec<String>>,
         get_item_calls: Mutex<usize>,
+        validate_path_error: Mutex<Option<WincentError>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
         delete_recent_files_backing_data_error: Mutex<Option<WincentError>>,
         refresh_explorer_error: Mutex<Option<WincentError>>,
@@ -554,6 +556,7 @@ mod tests {
                 items,
                 calls: Mutex::new(Vec::new()),
                 get_item_calls: Mutex::new(0),
+                validate_path_error: Mutex::new(None),
                 add_frequent_folder_error: Mutex::new(None),
                 delete_recent_files_backing_data_error: Mutex::new(None),
                 refresh_explorer_error: Mutex::new(None),
@@ -563,6 +566,10 @@ mod tests {
 
         fn fail_add_frequent_folder_with(&self, error: WincentError) {
             *self.add_frequent_folder_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_validate_path_with(&self, error: WincentError) {
+            *self.validate_path_error.lock().unwrap() = Some(error);
         }
 
         fn fail_delete_recent_files_backing_data_with(&self, error: WincentError) {
@@ -588,6 +595,9 @@ mod tests {
 
     impl QuickAccessBackend for FakeBatchBackend {
         fn validate_path(&self, _path: &str, _expected: PathType) -> WincentResult<()> {
+            if let Some(error) = self.validate_path_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -902,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_add_frequent_folder_skips_membership_preflight() {
+    fn batch_add_frequent_folder_rejects_existing_before_mutation() {
         let backend = FakeBatchBackend::with_items(vec!["C:\\Projects".to_string()]);
         let result = add_items_batch(
             &[("C:\\Projects".to_string(), QuickAccess::FrequentFolders)],
@@ -911,13 +921,15 @@ mod tests {
             &backend,
         );
 
-        assert_eq!(result.succeeded(), &["C:\\Projects".to_string()]);
-        assert!(result.failed().is_empty());
-        assert_eq!(backend.get_item_call_count(), 0);
-        assert_eq!(
-            backend.calls(),
-            vec!["add_frequent:C:\\Projects".to_string()]
-        );
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert_eq!(result.failed()[0].path(), "C:\\Projects");
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::AlreadyExists { .. }
+        ));
+        assert_eq!(backend.get_item_call_count(), 1);
+        assert!(backend.calls().is_empty());
     }
 
     #[test]
@@ -941,11 +953,34 @@ mod tests {
             result.failed()[0].error(),
             WincentError::AlreadyExists { .. }
         ));
-        assert_eq!(backend.get_item_call_count(), 0);
+        assert_eq!(backend.get_item_call_count(), 1);
         assert_eq!(
             backend.calls(),
             vec!["add_frequent:C:\\Projects".to_string()]
         );
+    }
+
+    #[test]
+    fn batch_add_frequent_folder_validate_error_skips_membership_preflight() {
+        let backend = FakeBatchBackend::default();
+        backend
+            .fail_validate_path_with(WincentError::invalid_path_reason("Path is not a directory"));
+
+        let result = add_items_batch(
+            &[("C:\\Projects".to_string(), QuickAccess::FrequentFolders)],
+            BatchOptions::new(),
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::InvalidPath(_)
+        ));
+        assert_eq!(backend.get_item_call_count(), 0);
+        assert!(backend.calls().is_empty());
     }
 
     #[test]

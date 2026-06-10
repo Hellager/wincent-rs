@@ -560,6 +560,7 @@ impl QuickAccessManager {
             QuickAccess::FrequentFolders => {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::Directory)?;
+                self.ensure_not_present(&path, qa_type)?;
                 self.execute_with_retry(|| self.backend.add_frequent_folder(&path, self.timeout))
             }
             unsupported => Err(unsupported_add(unsupported)),
@@ -1116,6 +1117,7 @@ mod tests {
         items: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
         get_item_timeouts: Mutex<Vec<Duration>>,
+        validate_path_error: Mutex<Option<WincentError>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
         delete_recent_files_backing_data_error: Mutex<Option<WincentError>>,
         refresh_explorer_error: Mutex<Option<WincentError>>,
@@ -1127,6 +1129,7 @@ mod tests {
                 items: Mutex::new(items),
                 calls: Mutex::new(Vec::new()),
                 get_item_timeouts: Mutex::new(Vec::new()),
+                validate_path_error: Mutex::new(None),
                 add_frequent_folder_error: Mutex::new(None),
                 delete_recent_files_backing_data_error: Mutex::new(None),
                 refresh_explorer_error: Mutex::new(None),
@@ -1143,6 +1146,10 @@ mod tests {
 
         fn get_item_timeouts(&self) -> Vec<Duration> {
             self.get_item_timeouts.lock().unwrap().clone()
+        }
+
+        fn fail_validate_path_with(&self, error: WincentError) {
+            *self.validate_path_error.lock().unwrap() = Some(error);
         }
 
         fn fail_add_frequent_folder_with(&self, error: WincentError) {
@@ -1164,6 +1171,9 @@ mod tests {
             _path: &str,
             _expected: crate::utils::PathType,
         ) -> WincentResult<()> {
+            if let Some(error) = self.validate_path_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -1523,23 +1533,20 @@ mod tests {
     }
 
     #[test]
-    fn add_frequent_folder_skips_membership_preflight() -> WincentResult<()> {
+    fn add_frequent_folder_rejects_existing_before_mutation() {
         let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
 
-        manager.add_item(
+        let result = manager.add_item(
             "C:\\Projects",
             QuickAccess::FrequentFolders,
             AddOptions::new(),
-        )?;
-
-        assert!(backend.get_item_timeouts().is_empty());
-        assert_eq!(
-            backend.calls(),
-            vec!["add_frequent_folder:C:\\Projects".to_string()]
         );
-        Ok(())
+
+        assert!(matches!(result, Err(WincentError::AlreadyExists { .. })));
+        assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(10)]);
+        assert!(backend.calls().is_empty());
     }
 
     #[test]
@@ -1559,7 +1566,30 @@ mod tests {
         );
 
         assert!(matches!(result, Err(WincentError::AlreadyExists { .. })));
+        assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(10)]);
+        assert_eq!(
+            backend.calls(),
+            vec!["add_frequent_folder:C:\\Projects".to_string()]
+        );
+    }
+
+    #[test]
+    fn add_frequent_folder_validate_error_skips_membership_preflight() {
+        let backend = Arc::new(FakeBackend::default());
+        backend
+            .fail_validate_path_with(WincentError::invalid_path_reason("Path is not a directory"));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let result = manager.add_item(
+            "C:\\Projects",
+            QuickAccess::FrequentFolders,
+            AddOptions::new(),
+        );
+
+        assert!(matches!(result, Err(WincentError::InvalidPath(_))));
         assert!(backend.get_item_timeouts().is_empty());
+        assert!(backend.calls().is_empty());
     }
 
     #[test]
