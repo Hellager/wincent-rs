@@ -409,14 +409,6 @@ mod tests {
             Ok(())
         }
 
-        fn add_recent_file_and_refresh(
-            &self,
-            _path: &str,
-            _timeout: Duration,
-        ) -> WincentResult<()> {
-            Ok(())
-        }
-
         fn add_frequent_folder(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
             Ok(())
         }
@@ -441,7 +433,7 @@ mod tests {
             Ok(())
         }
 
-        fn refresh_recent_files_display(&self) -> WincentResult<()> {
+        fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
             Ok(())
         }
 

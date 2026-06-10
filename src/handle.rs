@@ -20,7 +20,7 @@
 use crate::{
     error::WincentError,
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
-    script_executor::{QuickAccessDataFiles, ScriptExecutor},
+    script_executor::ScriptExecutor,
     script_strategy::PSScript,
     utils::{paths_equal, validate_path, PathType},
     QuickAccess, WincentResult,
@@ -153,14 +153,6 @@ fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> Win
     }
 
     Ok(false)
-}
-
-/// Options for adding a file to Windows Recent Files.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AddRecentFileOptions {
-    /// Remove the cached Recent Files data file after adding the item so Explorer
-    /// rebuilds the visible list.
-    pub force_update: bool,
 }
 
 /// Invokes a Shell verb directly on a folder using Folder.Self pattern
@@ -1043,21 +1035,6 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
 ///     Ok(())
 /// }
 /// ```
-/// Adds a file to Windows Recent Files with explicit display refresh behavior.
-pub(crate) fn add_to_recent_files_with_options(
-    path: &str,
-    options: AddRecentFileOptions,
-    timeout: Duration,
-) -> WincentResult<()> {
-    add_file_to_recent_native(path, timeout)?;
-
-    if options.force_update {
-        QuickAccessDataFiles::new()?.remove_recent_file()?;
-    }
-
-    Ok(())
-}
-
 /// Removes a file from Windows Recent Files.
 ///
 /// This function uses a **two-tier fallback strategy** to maximize compatibility

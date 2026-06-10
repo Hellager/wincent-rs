@@ -93,7 +93,8 @@ pub mod destlist;
 /// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
     pub use crate::error::{
-        PowerShellError, PowerShellErrorKind, PowerShellOperation, WincentError,
+        PowerShellError, PowerShellErrorKind, PowerShellOperation, QuickAccessPostMutationStep,
+        WincentError,
     };
     pub use crate::manager::{
         AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
@@ -127,6 +128,7 @@ use crate::error::WincentError;
 
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::empty::EmptyOptions;
+pub use crate::error::QuickAccessPostMutationStep;
 pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions};
 pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,

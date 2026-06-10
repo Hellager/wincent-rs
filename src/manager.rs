@@ -6,7 +6,7 @@ use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     batch::{self, BatchFailure, BatchOptions, BatchResult},
     empty::{self, EmptyOptions},
-    error::WincentError,
+    error::{QuickAccessPostMutationStep, WincentError},
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
     utils::paths_equal,
     QuickAccess, RetryPolicy, WincentResult,
@@ -27,8 +27,11 @@ fn path_to_shell_string(path: &Path) -> WincentResult<String> {
 /// Options for adding a single item to Quick Access.
 ///
 /// Use [`AddOptions::refresh_recent_files`] when a newly added Recent Files
-/// entry should become visible immediately in Explorer. Frequent Folders are
-/// pinned through Explorer shell verbs and ignore that option.
+/// entry should be pushed toward immediate visibility in Explorer. The refresh
+/// deletes Explorer's Recent Files backing data and refreshes open Explorer
+/// windows, but it does not synchronously verify that Windows has rebuilt the
+/// item. Frequent Folders are pinned through Explorer shell verbs and ignore
+/// that option.
 ///
 /// # Examples
 ///
@@ -68,6 +71,10 @@ impl AddOptions {
     }
 
     /// Refreshes Recent Files display data after adding a recent file.
+    ///
+    /// If the add succeeds but the display refresh fails, the operation returns
+    /// [`WincentError::PostMutationFailure`] so callers can distinguish a
+    /// completed add from a failed post-mutation refresh.
     #[must_use]
     pub fn refresh_recent_files(self) -> Self {
         self.with_force_update(true)
@@ -512,8 +519,9 @@ impl QuickAccessManager {
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
     /// has the wrong file/folder type for `qa_type`; [`WincentError::AlreadyExists`]
     /// if the item is already present; [`WincentError::UnsupportedOperation`] for
-    /// `QuickAccess::All`; or a Shell/PowerShell error if the underlying operation
-    /// fails.
+    /// `QuickAccess::All`; [`WincentError::PostMutationFailure`] when a Recent
+    /// Files add succeeded but display refresh failed; or a Shell/PowerShell
+    /// error if the underlying operation fails.
     ///
     /// # Examples
     ///
@@ -543,12 +551,11 @@ impl QuickAccessManager {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::File)?;
                 self.ensure_not_present(&path, qa_type)?;
+                self.backend.add_recent_file(&path, self.timeout)?;
                 if options.force_update() {
-                    self.backend
-                        .add_recent_file_and_refresh(&path, self.timeout)
-                } else {
-                    self.backend.add_recent_file(&path, self.timeout)
+                    self.refresh_recent_files_display_after_add(&path)?;
                 }
+                Ok(())
             }
             QuickAccess::FrequentFolders => {
                 self.backend
@@ -570,7 +577,9 @@ impl QuickAccessManager {
     /// Returns [`WincentError::InvalidPath`] when `path` is empty;
     /// [`WincentError::NotInQuickAccess`] if the preflight query does not find
     /// the item; [`WincentError::UnsupportedOperation`] for `QuickAccess::All`;
-    /// or a Shell/PowerShell error if the underlying operation fails.
+    /// [`WincentError::PostMutationFailure`] when a Recent Files remove
+    /// succeeded but Explorer refresh failed; or a Shell/PowerShell error if
+    /// the underlying operation fails.
     ///
     /// # Examples
     ///
@@ -605,6 +614,7 @@ impl QuickAccessManager {
                     .validate_path(&path, crate::utils::PathType::File)?;
                 self.ensure_present(&path, qa_type)?;
                 self.execute_with_retry(|| self.backend.remove_recent_file(&path, self.timeout))?;
+                self.refresh_explorer_after_recent_remove(&path)?;
                 if options.should_deep_clean_links_for(qa_type) {
                     self.backend
                         .delete_recent_links_for_target(&path, self.timeout)?;
@@ -954,6 +964,38 @@ impl QuickAccessManager {
         Ok(())
     }
 
+    fn refresh_recent_files_display_after_add(&self, path: &str) -> WincentResult<()> {
+        self.backend
+            .delete_recent_files_backing_data()
+            .map_err(|source| {
+                WincentError::post_mutation_failure(
+                    path,
+                    QuickAccess::RecentFiles,
+                    QuickAccessPostMutationStep::DeleteRecentFilesBackingData,
+                    source,
+                )
+            })?;
+        self.backend.refresh_explorer().map_err(|source| {
+            WincentError::post_mutation_failure(
+                path,
+                QuickAccess::RecentFiles,
+                QuickAccessPostMutationStep::RefreshExplorer,
+                source,
+            )
+        })
+    }
+
+    fn refresh_explorer_after_recent_remove(&self, path: &str) -> WincentResult<()> {
+        self.backend.refresh_explorer().map_err(|source| {
+            WincentError::post_mutation_failure(
+                path,
+                QuickAccess::RecentFiles,
+                QuickAccessPostMutationStep::RefreshExplorer,
+                source,
+            )
+        })
+    }
+
     fn execute_with_retry<T, F>(&self, mut action: F) -> WincentResult<T>
     where
         F: FnMut() -> WincentResult<T>,
@@ -1075,6 +1117,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         get_item_timeouts: Mutex<Vec<Duration>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
+        delete_recent_files_backing_data_error: Mutex<Option<WincentError>>,
+        refresh_explorer_error: Mutex<Option<WincentError>>,
     }
 
     impl FakeBackend {
@@ -1084,6 +1128,8 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 get_item_timeouts: Mutex::new(Vec::new()),
                 add_frequent_folder_error: Mutex::new(None),
+                delete_recent_files_backing_data_error: Mutex::new(None),
+                refresh_explorer_error: Mutex::new(None),
             }
         }
 
@@ -1101,6 +1147,14 @@ mod tests {
 
         fn fail_add_frequent_folder_with(&self, error: WincentError) {
             *self.add_frequent_folder_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_delete_recent_files_backing_data_with(&self, error: WincentError) {
+            *self.delete_recent_files_backing_data_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_refresh_explorer_with(&self, error: WincentError) {
+            *self.refresh_explorer_error.lock().unwrap() = Some(error);
         }
     }
 
@@ -1124,11 +1178,6 @@ mod tests {
 
         fn add_recent_file(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
             self.record(format!("add_recent_file:{path}"));
-            Ok(())
-        }
-
-        fn add_recent_file_and_refresh(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
-            self.record(format!("add_recent_file_and_refresh:{path}"));
             Ok(())
         }
 
@@ -1159,8 +1208,16 @@ mod tests {
             Ok(())
         }
 
-        fn refresh_recent_files_display(&self) -> WincentResult<()> {
-            self.record("refresh_recent_files_display");
+        fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
+            self.record("delete_recent_files_backing_data");
+            if let Some(error) = self
+                .delete_recent_files_backing_data_error
+                .lock()
+                .unwrap()
+                .take()
+            {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -1176,6 +1233,9 @@ mod tests {
 
         fn refresh_explorer(&self) -> WincentResult<()> {
             self.record("refresh_explorer");
+            if let Some(error) = self.refresh_explorer_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
     }
@@ -1364,7 +1424,7 @@ mod tests {
     }
 
     #[test]
-    fn add_recent_file_refresh_uses_dedicated_backend_method() -> WincentResult<()> {
+    fn add_recent_file_refresh_runs_add_then_display_refresh() -> WincentResult<()> {
         let backend = Arc::new(FakeBackend::default());
         let manager = QuickAccessManager::builder()
             .with_backend_for_tests(backend.clone())
@@ -1378,9 +1438,70 @@ mod tests {
 
         assert_eq!(
             backend.calls(),
-            vec!["add_recent_file_and_refresh:C:\\report.docx".to_string()]
+            vec![
+                "add_recent_file:C:\\report.docx".to_string(),
+                "delete_recent_files_backing_data".to_string(),
+                "refresh_explorer".to_string(),
+            ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn add_recent_file_without_refresh_skips_display_refresh() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager = QuickAccessManager::builder()
+            .with_backend_for_tests(backend.clone())
+            .build();
+
+        manager.add_item(
+            "C:\\report.docx",
+            QuickAccess::RecentFiles,
+            AddOptions::new(),
+        )?;
+
+        assert_eq!(
+            backend.calls(),
+            vec!["add_recent_file:C:\\report.docx".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn add_recent_file_refresh_failure_is_post_mutation_failure() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.fail_delete_recent_files_backing_data_with(WincentError::SystemError(
+            "recent folder unavailable".to_string(),
+        ));
+        let manager = QuickAccessManager::builder()
+            .with_backend_for_tests(backend.clone())
+            .build();
+
+        let error = manager
+            .add_item(
+                "C:\\report.docx",
+                QuickAccess::RecentFiles,
+                AddOptions::new().refresh_recent_files(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WincentError::PostMutationFailure {
+                ref path,
+                qa_type: QuickAccess::RecentFiles,
+                step: crate::error::QuickAccessPostMutationStep::DeleteRecentFilesBackingData,
+                ref source,
+            } if path == "C:\\report.docx"
+                && matches!(source.as_ref(), WincentError::SystemError(message) if message == "recent folder unavailable")
+        ));
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "add_recent_file:C:\\report.docx".to_string(),
+                "delete_recent_files_backing_data".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1457,10 +1578,59 @@ mod tests {
             backend.calls(),
             vec![
                 "remove_recent_file:C:\\report.docx".to_string(),
+                "refresh_explorer".to_string(),
                 "delete_recent_links:C:\\report.docx".to_string(),
             ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn remove_recent_file_refreshes_explorer() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        manager.remove_item("C:\\report.docx", QuickAccess::RecentFiles)?;
+
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "remove_recent_file:C:\\report.docx".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn remove_recent_file_refresh_failure_is_post_mutation_failure() {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
+        backend.fail_refresh_explorer_with(WincentError::SystemError("refresh failed".to_string()));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let error = manager
+            .remove_item("C:\\report.docx", QuickAccess::RecentFiles)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WincentError::PostMutationFailure {
+                ref path,
+                qa_type: QuickAccess::RecentFiles,
+                step: crate::error::QuickAccessPostMutationStep::RefreshExplorer,
+                ref source,
+            } if path == "C:\\report.docx"
+                && matches!(source.as_ref(), WincentError::SystemError(message) if message == "refresh failed")
+        ));
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "remove_recent_file:C:\\report.docx".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use crate::{
     backend::QuickAccessBackend,
-    error::WincentError,
+    error::{QuickAccessPostMutationStep, WincentError},
     manager::RemoveOptions,
     utils::{paths_equal, PathType},
     QuickAccess, WincentResult,
@@ -161,10 +161,9 @@ pub struct BatchOptions {
     /// Batch mode coalesces this into one post-batch data-file refresh instead of
     /// deleting the Recent Files data file for every individual item.
     ///
-    /// This option is intentionally add-only: `remove_items_batch` ignores it.
-    /// Removal paths operate on the shell item directly, while deleting backing
-    /// data files as a removal refresh would be more destructive than the
-    /// requested per-item operation.
+    /// This option is intentionally add-only: removal paths operate on the
+    /// shell item directly and coalesce Explorer refresh without deleting Recent
+    /// Files backing data.
     force_update: bool,
 }
 
@@ -240,23 +239,52 @@ fn remove_item(
     options: RemoveOptions,
     timeout: Duration,
     backend: &dyn QuickAccessBackend,
-) -> WincentResult<()> {
+) -> RemoveItemResult {
     match qa_type {
         QuickAccess::RecentFiles => {
-            remove_recent_file(path, timeout, backend)?;
-            if options.should_deep_clean_links_for(QuickAccess::RecentFiles) {
-                backend.delete_recent_links_for_target(path, timeout)?;
+            if let Err(error) = remove_recent_file(path, timeout, backend) {
+                return RemoveItemResult::failed(error, false);
             }
-            Ok(())
+            if options.should_deep_clean_links_for(QuickAccess::RecentFiles) {
+                if let Err(error) = backend.delete_recent_links_for_target(path, timeout) {
+                    return RemoveItemResult::failed(error, true);
+                }
+            }
+            RemoveItemResult::succeeded(true)
         }
         QuickAccess::FrequentFolders => {
-            remove_frequent_folder(path, timeout, backend)?;
-            if options.should_deep_clean_links_for(QuickAccess::FrequentFolders) {
-                backend.delete_recent_links_for_target(path, timeout)?;
+            if let Err(error) = remove_frequent_folder(path, timeout, backend) {
+                return RemoveItemResult::failed(error, false);
             }
-            Ok(())
+            if options.should_deep_clean_links_for(QuickAccess::FrequentFolders) {
+                if let Err(error) = backend.delete_recent_links_for_target(path, timeout) {
+                    return RemoveItemResult::failed(error, false);
+                }
+            }
+            RemoveItemResult::succeeded(false)
         }
-        unsupported => Err(unsupported_remove(unsupported)),
+        unsupported => RemoveItemResult::failed(unsupported_remove(unsupported), false),
+    }
+}
+
+struct RemoveItemResult {
+    result: WincentResult<()>,
+    recent_file_removed: bool,
+}
+
+impl RemoveItemResult {
+    fn succeeded(recent_file_removed: bool) -> Self {
+        Self {
+            result: Ok(()),
+            recent_file_removed,
+        }
+    }
+
+    fn failed(error: WincentError, recent_file_removed: bool) -> Self {
+        Self {
+            result: Err(error),
+            recent_file_removed,
+        }
     }
 }
 
@@ -337,13 +365,62 @@ fn record_batch_refresh_result(
     succeeded: &mut Vec<String>,
     failed: &mut Vec<BatchFailure>,
     refresh_recent_item_index: Option<usize>,
+    fallback_path: Option<String>,
     refresh_result: WincentResult<()>,
-) {
-    if let (Some(index), Err(error)) = (refresh_recent_item_index, refresh_result) {
-        if index < succeeded.len() {
-            let path = succeeded.remove(index);
+    step: QuickAccessPostMutationStep,
+) -> bool {
+    if let Err(error) = refresh_result {
+        let path = refresh_recent_item_index
+            .and_then(|index| {
+                if index < succeeded.len() {
+                    Some(succeeded.remove(index))
+                } else {
+                    None
+                }
+            })
+            .or(fallback_path);
+
+        if let Some(path) = path {
+            let error = WincentError::post_mutation_failure(
+                path.clone(),
+                QuickAccess::RecentFiles,
+                step,
+                error,
+            );
             failed.push(BatchFailure::new(path, error));
         }
+        return false;
+    }
+
+    true
+}
+
+fn record_batch_recent_files_display_refresh_result(
+    succeeded: &mut Vec<String>,
+    failed: &mut Vec<BatchFailure>,
+    refresh_recent_item_index: Option<usize>,
+    backend: &dyn QuickAccessBackend,
+) {
+    if !record_batch_refresh_result(
+        succeeded,
+        failed,
+        refresh_recent_item_index,
+        None,
+        backend.delete_recent_files_backing_data(),
+        QuickAccessPostMutationStep::DeleteRecentFilesBackingData,
+    ) {
+        return;
+    }
+
+    if refresh_recent_item_index.is_some() {
+        record_batch_refresh_result(
+            succeeded,
+            failed,
+            refresh_recent_item_index,
+            None,
+            backend.refresh_explorer(),
+            QuickAccessPostMutationStep::RefreshExplorer,
+        );
     }
 }
 
@@ -353,7 +430,9 @@ fn record_batch_refresh_result(
 /// shell operation. If Explorer changes between those two steps, batch results
 /// may report `AlreadyExists` or a later operation error that reflects that
 /// race. Successful Recent Files additions can be coalesced into one display
-/// refresh with [`BatchOptions::force_update`].
+/// refresh with [`BatchOptions::force_update`]. If that shared refresh fails,
+/// the failure is attached to the last successful Recent Files item as a coarse
+/// attribution of a batch-wide display update failure.
 pub(crate) fn add_items_batch(
     items: &[(String, QuickAccess)],
     options: BatchOptions,
@@ -377,11 +456,11 @@ pub(crate) fn add_items_batch(
     }
 
     if should_force_update_recent_files(options, refresh_recent_item_index.is_some()) {
-        record_batch_refresh_result(
+        record_batch_recent_files_display_refresh_result(
             &mut succeeded,
             &mut failed,
             refresh_recent_item_index,
-            backend.refresh_recent_files_display(),
+            backend,
         );
     }
 
@@ -393,10 +472,12 @@ pub(crate) fn add_items_batch(
 /// Each item performs a best-effort existence preflight before invoking the
 /// shell operation. If Explorer changes between those two steps, batch results
 /// may report `NotInQuickAccess` or a later operation error that reflects that race.
-/// `BatchOptions::force_update` is intentionally ignored for removals because
-/// the remove operations target shell items directly and should not delete
-/// Recent Files or Frequent Folders backing data as a broad refresh side effect.
-/// With [`RemoveOptions::deep_clean_recent_links`], a cleanup failure after a
+/// `BatchOptions::force_update` is intentionally ignored for removals. Recent
+/// Files removals coalesce Explorer refresh into one post-batch refresh when at
+/// least one Recent Files item succeeds. If that shared refresh fails, the
+/// failure is attached to the last successful Recent Files item as a coarse
+/// attribution of a batch-wide display update failure. With
+/// [`RemoveOptions::deep_clean_recent_links`], a cleanup failure after a
 /// successful shell remove is reported as a per-item failure.
 pub(crate) fn remove_items_batch(
     items: &[(String, QuickAccess)],
@@ -414,12 +495,36 @@ pub(crate) fn remove_items_batch_with_options(
 ) -> BatchResult {
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
+    let mut refresh_recent_item_index = None;
+    let mut refresh_recent_fallback_path = None;
+    let mut recent_file_removed_for_refresh = false;
 
     for (path, qa_type) in items {
-        match remove_item(path, *qa_type, options, timeout, backend) {
-            Ok(()) => succeeded.push(path.clone()),
+        let outcome = remove_item(path, *qa_type, options, timeout, backend);
+        if outcome.recent_file_removed {
+            recent_file_removed_for_refresh = true;
+        }
+        match outcome.result {
+            Ok(()) => {
+                succeeded.push(path.clone());
+                if outcome.recent_file_removed {
+                    refresh_recent_item_index = Some(succeeded.len() - 1);
+                    refresh_recent_fallback_path = Some(path.clone());
+                }
+            }
             Err(error) => failed.push(BatchFailure::new(path.clone(), error)),
         }
+    }
+
+    if recent_file_removed_for_refresh {
+        record_batch_refresh_result(
+            &mut succeeded,
+            &mut failed,
+            refresh_recent_item_index,
+            refresh_recent_fallback_path,
+            backend.refresh_explorer(),
+            QuickAccessPostMutationStep::RefreshExplorer,
+        );
     }
 
     BatchResult::new(succeeded, failed)
@@ -438,6 +543,9 @@ mod tests {
         calls: Mutex<Vec<String>>,
         get_item_calls: Mutex<usize>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
+        delete_recent_files_backing_data_error: Mutex<Option<WincentError>>,
+        refresh_explorer_error: Mutex<Option<WincentError>>,
+        delete_recent_links_error: Mutex<Option<WincentError>>,
     }
 
     impl FakeBatchBackend {
@@ -447,11 +555,26 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 get_item_calls: Mutex::new(0),
                 add_frequent_folder_error: Mutex::new(None),
+                delete_recent_files_backing_data_error: Mutex::new(None),
+                refresh_explorer_error: Mutex::new(None),
+                delete_recent_links_error: Mutex::new(None),
             }
         }
 
         fn fail_add_frequent_folder_with(&self, error: WincentError) {
             *self.add_frequent_folder_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_delete_recent_files_backing_data_with(&self, error: WincentError) {
+            *self.delete_recent_files_backing_data_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_refresh_explorer_with(&self, error: WincentError) {
+            *self.refresh_explorer_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_delete_recent_links_with(&self, error: WincentError) {
+            *self.delete_recent_links_error.lock().unwrap() = Some(error);
         }
 
         fn calls(&self) -> Vec<String> {
@@ -485,14 +608,6 @@ mod tests {
             Ok(())
         }
 
-        fn add_recent_file_and_refresh(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("add_recent_refresh:{path}"));
-            Ok(())
-        }
-
         fn add_frequent_folder(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
             self.calls
                 .lock()
@@ -504,7 +619,11 @@ mod tests {
             Ok(())
         }
 
-        fn remove_recent_file(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
+        fn remove_recent_file(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("remove_recent:{path}"));
             Ok(())
         }
 
@@ -514,13 +633,32 @@ mod tests {
 
         fn delete_recent_links_for_target(
             &self,
-            _path: &str,
+            path: &str,
             _timeout: Duration,
         ) -> WincentResult<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("delete_recent_links:{path}"));
+            if let Some(error) = self.delete_recent_links_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
 
-        fn refresh_recent_files_display(&self) -> WincentResult<()> {
+        fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push("delete_recent_files_backing_data".to_string());
+            if let Some(error) = self
+                .delete_recent_files_backing_data_error
+                .lock()
+                .unwrap()
+                .take()
+            {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -533,6 +671,13 @@ mod tests {
         }
 
         fn refresh_explorer(&self) -> WincentResult<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push("refresh_explorer".to_string());
+            if let Some(error) = self.refresh_explorer_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
     }
@@ -618,7 +763,14 @@ mod tests {
         ];
         let mut failed = Vec::new();
 
-        record_batch_refresh_result(&mut succeeded, &mut failed, Some(1), Ok(()));
+        record_batch_refresh_result(
+            &mut succeeded,
+            &mut failed,
+            Some(1),
+            None,
+            Ok(()),
+            QuickAccessPostMutationStep::RefreshExplorer,
+        );
 
         assert_eq!(
             succeeded,
@@ -643,7 +795,9 @@ mod tests {
             &mut succeeded,
             &mut failed,
             Some(2),
+            None,
             Err(WincentError::SystemError("refresh failed".to_string())),
+            QuickAccessPostMutationStep::RefreshExplorer,
         );
 
         assert_eq!(
@@ -654,7 +808,13 @@ mod tests {
         assert_eq!(failed[0].path(), "C:\\recent-2.txt");
         assert!(matches!(
             failed[0].error(),
-            WincentError::SystemError(message) if message == "refresh failed"
+            WincentError::PostMutationFailure {
+                path,
+                qa_type: QuickAccess::RecentFiles,
+                step: QuickAccessPostMutationStep::RefreshExplorer,
+                source,
+            } if path == "C:\\recent-2.txt"
+                && matches!(source.as_ref(), WincentError::SystemError(message) if message == "refresh failed")
         ));
     }
 
@@ -667,7 +827,9 @@ mod tests {
             &mut succeeded,
             &mut failed,
             None,
+            None,
             Err(WincentError::SystemError("refresh failed".to_string())),
+            QuickAccessPostMutationStep::RefreshExplorer,
         );
 
         assert_eq!(succeeded, vec!["C:\\folder".to_string()]);
@@ -784,6 +946,210 @@ mod tests {
             backend.calls(),
             vec!["add_frequent:C:\\Projects".to_string()]
         );
+    }
+
+    #[test]
+    fn batch_add_recent_files_coalesces_refresh_once() {
+        let backend = FakeBatchBackend::default();
+
+        let result = add_items_batch(
+            &[
+                ("C:\\one.txt".to_string(), QuickAccess::RecentFiles),
+                ("C:\\two.txt".to_string(), QuickAccess::RecentFiles),
+            ],
+            BatchOptions::new().refresh_recent_files(),
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert_eq!(
+            result.succeeded(),
+            &["C:\\one.txt".to_string(), "C:\\two.txt".to_string()]
+        );
+        assert!(result.failed().is_empty());
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "add_recent:C:\\one.txt".to_string(),
+                "add_recent:C:\\two.txt".to_string(),
+                "delete_recent_files_backing_data".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_add_recent_refresh_failure_moves_last_recent_success_to_failed() {
+        let backend = FakeBatchBackend::default();
+        backend.fail_delete_recent_files_backing_data_with(WincentError::SystemError(
+            "recent folder unavailable".to_string(),
+        ));
+
+        let result = add_items_batch(
+            &[
+                ("C:\\one.txt".to_string(), QuickAccess::RecentFiles),
+                ("C:\\two.txt".to_string(), QuickAccess::RecentFiles),
+            ],
+            BatchOptions::new().refresh_recent_files(),
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert_eq!(result.succeeded(), &["C:\\one.txt".to_string()]);
+        assert_eq!(result.failed().len(), 1);
+        assert_eq!(result.failed()[0].path(), "C:\\two.txt");
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::PostMutationFailure {
+                path,
+                qa_type: QuickAccess::RecentFiles,
+                step: QuickAccessPostMutationStep::DeleteRecentFilesBackingData,
+                source,
+            } if path == "C:\\two.txt"
+                && matches!(source.as_ref(), WincentError::SystemError(message) if message == "recent folder unavailable")
+        ));
+    }
+
+    #[test]
+    fn batch_remove_recent_files_coalesces_refresh_once() {
+        let backend = FakeBatchBackend::with_items(vec![
+            "C:\\one.txt".to_string(),
+            "C:\\two.txt".to_string(),
+        ]);
+
+        let result = remove_items_batch(
+            &[
+                ("C:\\one.txt".to_string(), QuickAccess::RecentFiles),
+                ("C:\\two.txt".to_string(), QuickAccess::RecentFiles),
+            ],
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert_eq!(
+            result.succeeded(),
+            &["C:\\one.txt".to_string(), "C:\\two.txt".to_string()]
+        );
+        assert!(result.failed().is_empty());
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "remove_recent:C:\\one.txt".to_string(),
+                "remove_recent:C:\\two.txt".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_remove_recent_refresh_failure_moves_last_recent_success_to_failed() {
+        let backend = FakeBatchBackend::with_items(vec![
+            "C:\\one.txt".to_string(),
+            "C:\\two.txt".to_string(),
+        ]);
+        backend.fail_refresh_explorer_with(WincentError::SystemError("refresh failed".to_string()));
+
+        let result = remove_items_batch(
+            &[
+                ("C:\\one.txt".to_string(), QuickAccess::RecentFiles),
+                ("C:\\two.txt".to_string(), QuickAccess::RecentFiles),
+            ],
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert_eq!(result.succeeded(), &["C:\\one.txt".to_string()]);
+        assert_eq!(result.failed().len(), 1);
+        assert_eq!(result.failed()[0].path(), "C:\\two.txt");
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::PostMutationFailure {
+                path,
+                qa_type: QuickAccess::RecentFiles,
+                step: QuickAccessPostMutationStep::RefreshExplorer,
+                source,
+            } if path == "C:\\two.txt"
+                && matches!(source.as_ref(), WincentError::SystemError(message) if message == "refresh failed")
+        ));
+    }
+
+    #[test]
+    fn batch_remove_recent_deep_clean_failure_still_refreshes_explorer() {
+        let backend = FakeBatchBackend::with_items(vec!["C:\\one.txt".to_string()]);
+        backend
+            .fail_delete_recent_links_with(WincentError::SystemError("clean failed".to_string()));
+
+        let result = remove_items_batch_with_options(
+            &[("C:\\one.txt".to_string(), QuickAccess::RecentFiles)],
+            RemoveOptions::new().deep_clean_recent_links(),
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert_eq!(result.failed()[0].path(), "C:\\one.txt");
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::SystemError(message) if message == "clean failed"
+        ));
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "remove_recent:C:\\one.txt".to_string(),
+                "delete_recent_links:C:\\one.txt".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_remove_recent_deep_clean_and_refresh_failures_do_not_duplicate_failed_path() {
+        let backend = FakeBatchBackend::with_items(vec!["C:\\one.txt".to_string()]);
+        backend
+            .fail_delete_recent_links_with(WincentError::SystemError("clean failed".to_string()));
+        backend.fail_refresh_explorer_with(WincentError::SystemError("refresh failed".to_string()));
+
+        let result = remove_items_batch_with_options(
+            &[("C:\\one.txt".to_string(), QuickAccess::RecentFiles)],
+            RemoveOptions::new().deep_clean_recent_links(),
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert!(result.succeeded().is_empty());
+        assert_eq!(result.failed().len(), 1);
+        assert_eq!(result.failed()[0].path(), "C:\\one.txt");
+        assert!(matches!(
+            result.failed()[0].error(),
+            WincentError::SystemError(message) if message == "clean failed"
+        ));
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "remove_recent:C:\\one.txt".to_string(),
+                "delete_recent_links:C:\\one.txt".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_remove_without_recent_success_does_not_refresh() {
+        let backend = FakeBatchBackend::with_items(vec!["C:\\Folder".to_string()]);
+
+        let result = remove_items_batch(
+            &[("C:\\Folder".to_string(), QuickAccess::FrequentFolders)],
+            Duration::from_secs(10),
+            &backend,
+        );
+
+        assert_eq!(result.succeeded(), &["C:\\Folder".to_string()]);
+        assert!(result.failed().is_empty());
+        assert!(backend
+            .calls()
+            .iter()
+            .all(|call| call != "refresh_explorer"));
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {

@@ -1,9 +1,8 @@
 use crate::{
     empty,
     handle::{
-        add_to_frequent_folders_with_timeout, add_to_recent_files_with_options,
+        add_file_to_recent_native, add_to_frequent_folders_with_timeout,
         remove_from_frequent_folders_with_timeout, remove_from_recent_files_with_timeout,
-        AddRecentFileOptions,
     },
     query, recent_links,
     script_executor::QuickAccessDataFiles,
@@ -19,7 +18,6 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>>;
 
     fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
-    fn add_recent_file_and_refresh(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
 
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
@@ -27,9 +25,8 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
 
     fn delete_recent_links_for_target(&self, path: &str, timeout: Duration) -> WincentResult<()>;
 
-    /// Batch-add display refresh: remove Recent Files backing data and refresh Explorer.
-    /// This intentionally keeps the current compound batch refresh semantics.
-    fn refresh_recent_files_display(&self) -> WincentResult<()>;
+    /// Deletes Explorer's Recent Files backing data so Explorer can rebuild it.
+    fn delete_recent_files_backing_data(&self) -> WincentResult<()>;
 
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()>;
     fn clear_frequent_folders_jumplist(&self) -> WincentResult<()>;
@@ -49,17 +46,7 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
     }
 
     fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        add_to_recent_files_with_options(
-            path,
-            AddRecentFileOptions {
-                force_update: false,
-            },
-            timeout,
-        )
-    }
-
-    fn add_recent_file_and_refresh(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        add_to_recent_files_with_options(path, AddRecentFileOptions { force_update: true }, timeout)
+        add_file_to_recent_native(path, timeout)
     }
 
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
@@ -78,9 +65,8 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
         recent_links::delete_recent_links_for_target(path, timeout).map(|_: Vec<PathBuf>| ())
     }
 
-    fn refresh_recent_files_display(&self) -> WincentResult<()> {
-        QuickAccessDataFiles::new()?.remove_recent_file()?;
-        refresh_explorer_window()
+    fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
+        QuickAccessDataFiles::new()?.remove_recent_file()
     }
 
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()> {
