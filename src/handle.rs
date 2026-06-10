@@ -356,17 +356,23 @@ fn frequent_folder_pinned_status_from_entries(
     path: &str,
     entries: &[crate::destlist::DestListEntry],
 ) -> PinnedStatus {
-    entries
+    let mut matched = false;
+
+    for entry in entries
         .iter()
-        .find(|entry| paths_equal(entry.path(), path))
-        .map(|entry| {
-            if entry.is_pinned() {
-                PinnedStatus::Pinned
-            } else {
-                PinnedStatus::Unpinned
-            }
-        })
-        .unwrap_or(PinnedStatus::Unknown)
+        .filter(|entry| paths_equal(entry.path(), path))
+    {
+        matched = true;
+        if entry.is_pinned() {
+            return PinnedStatus::Pinned;
+        }
+    }
+
+    if matched {
+        PinnedStatus::Unpinned
+    } else {
+        PinnedStatus::Unknown
+    }
 }
 
 fn run_unpin_frequent_folder_state_machine<C, N, S, W, Sleep>(
@@ -2016,6 +2022,19 @@ mod tests {
         assert_eq!(
             frequent_folder_pinned_status_from_entries("C:\\Folder", &entries),
             PinnedStatus::Unpinned
+        );
+    }
+
+    #[test]
+    fn frequent_folder_pinned_status_from_entries_prefers_any_pinned_match() {
+        let entries = vec![
+            destlist_entry_for_test("C:\\Folder", -1),
+            destlist_entry_for_test("C:\\Folder", 0),
+        ];
+
+        assert_eq!(
+            frequent_folder_pinned_status_from_entries("C:\\Folder", &entries),
+            PinnedStatus::Pinned
         );
     }
 
