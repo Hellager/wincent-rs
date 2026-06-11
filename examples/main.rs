@@ -275,7 +275,7 @@ fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     let qa_type = parse_category(&args[0], false)?;
     let mut options = AddOptions::new();
     if args.iter().skip(2).any(|arg| arg == "--refresh") {
-        options = options.refresh_recent_files();
+        options = options.force_recent_files_rebuild().refresh_explorer();
     }
 
     manager.add_item(&args[1], qa_type, options)?;
@@ -306,7 +306,9 @@ fn cmd_batch_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult
 
     let items = parse_batch_items(&item_args)?;
     let options = if refresh {
-        BatchOptions::new().refresh_recent_files()
+        BatchOptions::new()
+            .force_recent_files_rebuild()
+            .refresh_explorer()
     } else {
         BatchOptions::new()
     };
@@ -316,7 +318,8 @@ fn cmd_batch_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult
 }
 
 fn cmd_batch_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    let (deep_clean, item_args) = split_deep_clean(args);
+    let (refresh, refresh_args) = split_refresh(args);
+    let (deep_clean, item_args) = split_deep_clean(&refresh_args);
     if item_args.is_empty() {
         return Err(WincentError::InvalidArgument(
             "batch-remove requires at least one item".to_string(),
@@ -329,7 +332,12 @@ fn cmd_batch_remove(manager: &QuickAccessManager, args: &[String]) -> WincentRes
     } else {
         RemoveOptions::new()
     };
-    let result = manager.remove_items_batch_with_options(&items, options);
+    let batch_options = if refresh {
+        BatchOptions::new().refresh_explorer()
+    } else {
+        BatchOptions::new()
+    };
+    let result = manager.remove_items_batch_with_batch_options(&items, batch_options, options);
     print_batch_result(result);
     Ok(())
 }

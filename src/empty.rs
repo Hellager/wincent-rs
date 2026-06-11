@@ -48,14 +48,14 @@ const EMPTY_PINNED_FOLDERS_TIMEOUT: Duration = Duration::from_secs(10);
 ///     .refresh_explorer();
 ///
 /// assert!(options.also_pinned_folders());
-/// assert!(options.force_refresh());
+/// assert!(options.refresh_explorer_enabled());
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EmptyOptions {
     /// Also attempt to explicitly unpin visible folders from Quick Access.
     also_pinned_folders: bool,
     /// Refresh open Explorer windows after a successful clear.
-    force_refresh: bool,
+    refresh_explorer: bool,
 }
 
 impl EmptyOptions {
@@ -86,21 +86,21 @@ impl EmptyOptions {
 
     /// Whether open Explorer windows should be refreshed after a successful clear.
     #[must_use]
-    pub fn force_refresh(&self) -> bool {
-        self.force_refresh
+    pub fn refresh_explorer_enabled(&self) -> bool {
+        self.refresh_explorer
     }
 
     /// Sets whether open Explorer windows should be refreshed after a successful clear.
     #[must_use]
-    pub fn with_force_refresh(mut self, force_refresh: bool) -> Self {
-        self.force_refresh = force_refresh;
+    pub fn with_refresh_explorer(mut self, enabled: bool) -> Self {
+        self.refresh_explorer = enabled;
         self
     }
 
     /// Refreshes open Explorer windows after a successful clear.
     #[must_use]
     pub fn refresh_explorer(self) -> Self {
-        self.with_force_refresh(true)
+        self.with_refresh_explorer(true)
     }
 }
 
@@ -305,8 +305,8 @@ enum RefreshPolicy {
     Skip,
 }
 
-fn refresh_policy_for_result(result: &WincentResult<()>, force_refresh: bool) -> RefreshPolicy {
-    if !force_refresh {
+fn refresh_policy_for_result(result: &WincentResult<()>, refresh_explorer: bool) -> RefreshPolicy {
+    if !refresh_explorer {
         return RefreshPolicy::Skip;
     }
 
@@ -338,7 +338,7 @@ pub(crate) fn empty_items_with_backend(
         QuickAccess::All => empty_all_items_with_backend(options, timeout, backend),
     };
 
-    match refresh_policy_for_result(&result, options.force_refresh()) {
+    match refresh_policy_for_result(&result, options.refresh_explorer_enabled()) {
         RefreshPolicy::PropagateFailure => backend.refresh_explorer()?,
         RefreshPolicy::BestEffort => {
             // Preserve the cleanup failure while still trying to show any
@@ -517,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_policy_skip_when_no_force_refresh() {
+    fn refresh_policy_skip_when_no_refresh_explorer() {
         assert_eq!(
             refresh_policy_for_result(&Ok(()), false),
             RefreshPolicy::Skip

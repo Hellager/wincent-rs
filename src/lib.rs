@@ -34,7 +34,9 @@
 //!     manager.add_item(
 //!         "C:\\path\\to\\file.txt",
 //!         QuickAccess::RecentFiles,
-//!         AddOptions::new().refresh_recent_files(),
+//!         AddOptions::new()
+//!             .force_recent_files_rebuild()
+//!             .refresh_explorer(),
 //!     )?;
 //!     
 //!     // Query all Quick Access items as PathBuf values
@@ -55,12 +57,12 @@
 //!
 //! - Validates all paths before operations
 //! - Provides comprehensive error handling
-//! - Supports force refresh for consistency
+//! - Separates Recent Files backing-data rebuilds from Explorer window refreshes
 //! - Manages system resources properly
 //!
 //! ## Best Practices
 //!
-//! - Use [`AddOptions::refresh_recent_files`] when adding recent files for immediate visibility
+//! - Use [`AddOptions::force_recent_files_rebuild`] when adding recent files for immediate visibility
 //! - Use [`EmptyOptions::remove_pinned_folders`] only when you intend to remove user-pinned folders
 //!
 

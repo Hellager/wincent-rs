@@ -45,7 +45,9 @@ fn main() -> WincentResult<()> {
     manager.add_item(
         "C:\\Projects\\report.docx",
         QuickAccess::RecentFiles,
-        AddOptions::new().refresh_recent_files(),
+        AddOptions::new()
+            .force_recent_files_rebuild()
+            .refresh_explorer(),
     )?;
 
     // Pin a folder to Frequent Folders.
