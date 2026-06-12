@@ -270,20 +270,33 @@ fn empty_all_items_with_backend(
     timeout: Duration,
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
-    if let Err(source) = backend.clear_recent_files(timeout) {
-        return Err(WincentError::PartialEmpty {
-            recent_files_cleared: false,
-            frequent_folders_cleared: false,
-            source: Box::new(source),
-        });
+    let mut recent_files_cleared = false;
+    let frequent_folders_cleared;
+    let mut first_error = None;
+
+    match backend.clear_recent_files(timeout) {
+        Ok(()) => recent_files_cleared = true,
+        Err(source) => first_error = Some(source),
     }
 
-    if let Err(source) =
-        empty_frequent_folders_with_backend(options.also_pinned_folders(), timeout, backend)
-    {
-        let frequent_folders_cleared = frequent_folders_cleared_from_error(&source);
+    match empty_frequent_folders_with_backend(options.also_pinned_folders(), timeout, backend) {
+        Ok(()) => {
+            frequent_folders_cleared = true;
+        }
+        Err(source) => {
+            frequent_folders_cleared = frequent_folders_cleared_from_error(&source);
+            if first_error.is_none() {
+                first_error = Some(source);
+            }
+        }
+    }
+
+    if let Some(source) = first_error {
+        // The outer fields describe the whole QuickAccess::All operation. If
+        // the source came from the frequent-only path and is itself PartialEmpty,
+        // its recent_files_cleared value belongs to that inner context only.
         return Err(WincentError::PartialEmpty {
-            recent_files_cleared: true,
+            recent_files_cleared,
             frequent_folders_cleared,
             source: Box::new(source),
         });
@@ -368,6 +381,10 @@ mod tests {
     struct FakeEmptyBackend {
         items: Vec<String>,
         calls: Mutex<Vec<String>>,
+        clear_recent_files_error: Option<String>,
+        clear_frequent_folders_jumplist_error: Option<String>,
+        remove_frequent_folder_error: Option<String>,
+        refresh_explorer_error: Option<String>,
     }
 
     impl FakeEmptyBackend {
@@ -375,7 +392,34 @@ mod tests {
             Self {
                 items,
                 calls: Mutex::new(Vec::new()),
+                clear_recent_files_error: None,
+                clear_frequent_folders_jumplist_error: None,
+                remove_frequent_folder_error: None,
+                refresh_explorer_error: None,
             }
+        }
+
+        fn with_clear_recent_files_error(mut self, message: impl Into<String>) -> Self {
+            self.clear_recent_files_error = Some(message.into());
+            self
+        }
+
+        fn with_clear_frequent_folders_jumplist_error(
+            mut self,
+            message: impl Into<String>,
+        ) -> Self {
+            self.clear_frequent_folders_jumplist_error = Some(message.into());
+            self
+        }
+
+        fn with_remove_frequent_folder_error(mut self, message: impl Into<String>) -> Self {
+            self.remove_frequent_folder_error = Some(message.into());
+            self
+        }
+
+        fn with_refresh_explorer_error(mut self, message: impl Into<String>) -> Self {
+            self.refresh_explorer_error = Some(message.into());
+            self
         }
 
         fn record(&self, call: impl Into<String>) {
@@ -422,6 +466,9 @@ mod tests {
                 "remove_frequent_folder:{path}:{}",
                 timeout.as_secs()
             ));
+            if let Some(error) = &self.remove_frequent_folder_error {
+                return Err(WincentError::SystemError(error.clone()));
+            }
             Ok(())
         }
 
@@ -439,16 +486,25 @@ mod tests {
 
         fn clear_recent_files(&self, _timeout: Duration) -> WincentResult<()> {
             self.record("clear_recent_files");
+            if let Some(error) = &self.clear_recent_files_error {
+                return Err(WincentError::SystemError(error.clone()));
+            }
             Ok(())
         }
 
         fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
             self.record("clear_frequent_folders_jumplist");
+            if let Some(error) = &self.clear_frequent_folders_jumplist_error {
+                return Err(WincentError::SystemError(error.clone()));
+            }
             Ok(())
         }
 
         fn refresh_explorer(&self) -> WincentResult<()> {
             self.record("refresh_explorer");
+            if let Some(error) = &self.refresh_explorer_error {
+                return Err(WincentError::SystemError(error.clone()));
+            }
             Ok(())
         }
     }
@@ -544,6 +600,150 @@ mod tests {
                 true,
             ),
             RefreshPolicy::BestEffort
+        );
+    }
+
+    fn assert_partial_empty(
+        error: WincentError,
+        expected_recent_files_cleared: bool,
+        expected_frequent_folders_cleared: bool,
+        expected_source: &str,
+    ) {
+        match error {
+            WincentError::PartialEmpty {
+                recent_files_cleared,
+                frequent_folders_cleared,
+                source,
+            } => {
+                assert_eq!(recent_files_cleared, expected_recent_files_cleared);
+                assert_eq!(frequent_folders_cleared, expected_frequent_folders_cleared);
+                assert!(matches!(
+                    *source,
+                    WincentError::SystemError(ref message) if message == expected_source
+                ));
+            }
+            other => panic!("Expected PartialEmpty, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_all_continues_to_frequent_folders_when_recent_files_fails() {
+        let backend =
+            FakeEmptyBackend::new(Vec::new()).with_clear_recent_files_error("recent failed");
+
+        let error = empty_items_with_backend(
+            QuickAccess::All,
+            EmptyOptions::new(),
+            Duration::from_secs(3),
+            &backend,
+        )
+        .unwrap_err();
+
+        assert_partial_empty(error, false, true, "recent failed");
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "clear_recent_files".to_string(),
+                "clear_frequent_folders_jumplist".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_all_preserves_recent_error_when_both_categories_fail_before_frequent_progress() {
+        let backend = FakeEmptyBackend::new(Vec::new())
+            .with_clear_recent_files_error("recent failed")
+            .with_clear_frequent_folders_jumplist_error("frequent failed");
+
+        let error = empty_items_with_backend(
+            QuickAccess::All,
+            EmptyOptions::new(),
+            Duration::from_secs(3),
+            &backend,
+        )
+        .unwrap_err();
+
+        assert_partial_empty(error, false, false, "recent failed");
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "clear_recent_files".to_string(),
+                "clear_frequent_folders_jumplist".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_all_preserves_recent_error_when_frequent_pinned_cleanup_also_fails() {
+        let backend = FakeEmptyBackend::new(vec!["C:\\FolderA".to_string()])
+            .with_clear_recent_files_error("recent failed")
+            .with_remove_frequent_folder_error("pinned failed");
+
+        let error = empty_items_with_backend(
+            QuickAccess::All,
+            EmptyOptions::new().remove_pinned_folders(),
+            Duration::from_secs(3),
+            &backend,
+        )
+        .unwrap_err();
+
+        assert_partial_empty(error, false, true, "recent failed");
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "clear_recent_files".to_string(),
+                "get_items:FrequentFolders".to_string(),
+                "clear_frequent_folders_jumplist".to_string(),
+                "remove_frequent_folder:C:\\FolderA:3".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_all_reports_frequent_error_when_recent_files_succeeds() {
+        let backend = FakeEmptyBackend::new(Vec::new())
+            .with_clear_frequent_folders_jumplist_error("frequent failed");
+
+        let error = empty_items_with_backend(
+            QuickAccess::All,
+            EmptyOptions::new(),
+            Duration::from_secs(3),
+            &backend,
+        )
+        .unwrap_err();
+
+        assert_partial_empty(error, true, false, "frequent failed");
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "clear_recent_files".to_string(),
+                "clear_frequent_folders_jumplist".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_all_partial_from_recent_failure_refreshes_best_effort_without_overwriting_error() {
+        let backend = FakeEmptyBackend::new(Vec::new())
+            .with_clear_recent_files_error("recent failed")
+            .with_refresh_explorer_error("refresh failed");
+
+        let error = empty_items_with_backend(
+            QuickAccess::All,
+            EmptyOptions::new().refresh_explorer(),
+            Duration::from_secs(3),
+            &backend,
+        )
+        .unwrap_err();
+
+        assert_partial_empty(error, false, true, "recent failed");
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "clear_recent_files".to_string(),
+                "clear_frequent_folders_jumplist".to_string(),
+                "refresh_explorer".to_string(),
+            ]
         );
     }
 
