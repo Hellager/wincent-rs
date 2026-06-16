@@ -35,7 +35,8 @@ pub use experimental_remove::{
     AutomaticDestinationsKind, ExperimentalRemoveOptions, ExperimentalRemoveReport,
 };
 pub use parser::{
-    entries, frequent_folders_dest_path, parse_bytes, parse_file, recent_files_dest_path,
-    AutomaticDestinations, CfbDirectoryEntry, CfbInfo, DestList, DestListEntry,
+    entries, frequent_folders_dest_path, parse_bytes, parse_file, quick_access_entries,
+    recent_files_dest_path, visible_entries, AutomaticDestinations, CfbDirectoryEntry, CfbInfo,
+    DestList, DestListEntry, Diagnostic, DiagnosticSeverity, PathSource,
 };
 pub use time::filetime_to_system_time;

@@ -1986,9 +1986,17 @@ mod tests {
         crate::destlist::DestListEntry {
             entry_offset: 0,
             entry_len: 0,
+            mru_position: 0,
+            checksum: 0,
             entry_id: 1,
             entry_number: 1,
             entry_number_unknown: 0,
+            hostname: String::new(),
+            volume_droid: String::new(),
+            file_droid: String::new(),
+            volume_birth_droid: String::new(),
+            file_birth_droid: String::new(),
+            file_droid_mac: String::new(),
             stream_name: "1".to_string(),
             raw_path: path.to_string(),
             path: path.to_string(),
@@ -2002,6 +2010,10 @@ mod tests {
             last_access_filetime: None,
             last_interaction_filetime: None,
             sps_size: None,
+            reserved_78: None,
+            reserved_7c: None,
+            path_sources: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 

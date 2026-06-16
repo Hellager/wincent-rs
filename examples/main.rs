@@ -852,17 +852,15 @@ fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
     println!("dest.version: {}", dest.version());
     println!("dest.declared_entry_count: {}", dest.declared_entry_count());
     println!("dest.pinned_entry_count: {}", dest.pinned_entry_count());
+    println!("dest.header_counter_raw: {}", dest.header_counter_raw());
+    println!("dest.header_counter_f32: {}", dest.header_counter_f32());
     println!("dest.last_entry_id: {}", dest.last_entry_id());
     println!("dest.last_entry_number: {}", dest.last_entry_number());
     println!(
-        "dest.last_entry_number_unknown: {}",
-        dest.last_entry_number_unknown()
+        "dest.add_delete_action_count: {}",
+        dest.add_delete_action_count()
     );
-    println!("dest.last_revision_number: {}", dest.last_revision_number());
-    println!(
-        "dest.last_revision_number_unknown: {}",
-        dest.last_revision_number_unknown()
-    );
+    println!("dest.diagnostics: {}", dest.diagnostics().len());
     print_dest_entries(&dest_entries(dest), limit);
 }
 
@@ -871,16 +869,20 @@ fn print_dest_entries(entries: &[wincent::destlist::DestListEntry], limit: usize
     for entry in entries.iter().take(limit) {
         println!(
             concat!(
-                "entry offset={} len={} id={} number={} number_unknown={} ",
-                "stream={} pinned={} pin_status={} pin_order={:?} rank={} recent_rank={} ",
+                "entry offset={} len={} mru={} checksum={} id={} number={} number_unknown={} ",
+                "host={} stream={} pinned={} pin_status={} pin_order={:?} rank={} recent_rank={} ",
                 "count={} access_count={} score={} last_access={:?} ",
-                "last_interaction={:?} sps_size={:?} raw_path={} path={}"
+                "last_interaction={:?} sps_size={:?} reserved_78={:?} reserved_7c={:?} ",
+                "droid={} mac={} warnings={} raw_path={} path={}"
             ),
             entry.entry_offset(),
             entry.entry_len(),
+            entry.mru_position(),
+            entry.checksum(),
             entry.entry_id(),
             entry.entry_number(),
             entry.entry_number_unknown(),
+            entry.hostname(),
             entry.stream_name(),
             entry.is_pinned(),
             entry.pin_status(),
@@ -893,6 +895,11 @@ fn print_dest_entries(entries: &[wincent::destlist::DestListEntry], limit: usize
             entry.last_access_filetime(),
             entry.last_interaction_filetime(),
             entry.sps_size(),
+            entry.reserved_78(),
+            entry.reserved_7c(),
+            entry.file_droid(),
+            entry.file_droid_mac(),
+            entry.warnings().len(),
             entry.raw_path(),
             entry.path()
         );
