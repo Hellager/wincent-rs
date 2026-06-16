@@ -110,6 +110,11 @@ pub fn is_visible(qa_type: QuickAccess) -> WincentResult<bool> {
 /// Passing `QuickAccess::All` applies the same value to both Recent Files and
 /// Frequent Folders.
 ///
+/// When hiding `QuickAccess::FrequentFolders` through this registry-backed API,
+/// Explorer hides unpinned frequent folders, while pinned folders remain
+/// visible. Passing `QuickAccess::All` with `visible` set to `false` has the
+/// same Frequent Folders behavior.
+///
 /// This updates registry values for the current user. It does not clear Quick
 /// Access history or invoke Explorer's Folder Options UI.
 ///
@@ -158,6 +163,9 @@ pub fn set_recent_files_visible(visible: bool) -> WincentResult<()> {
 
 /// Sets whether Frequent Folders are visible in Windows Quick Access.
 ///
+/// When hiding Frequent Folders through this registry-backed API, Explorer hides
+/// unpinned frequent folders, while pinned folders remain visible.
+///
 /// # Errors
 ///
 /// Returns registry I/O errors if Explorer visibility settings cannot be
@@ -200,6 +208,11 @@ impl VisibilityOptions {
 
 /// Sets whether a Quick Access section is visible, with optional Explorer refresh.
 ///
+/// When hiding `QuickAccess::FrequentFolders` through this registry-backed API,
+/// Explorer hides unpinned frequent folders, while pinned folders remain
+/// visible. Passing `QuickAccess::All` with `visible` set to `false` has the
+/// same Frequent Folders behavior.
+///
 /// If `options.refresh_explorer_enabled()` is true, calls `refresh_explorer_window()`
 /// after the registry write. Registry write is NOT rolled back if refresh fails.
 pub fn set_visible_with_options(
@@ -239,6 +252,9 @@ pub fn set_recent_files_visible_with_options(
 }
 
 /// Sets whether Frequent Folders are visible, with optional Explorer refresh.
+///
+/// When hiding Frequent Folders through this registry-backed API, Explorer hides
+/// unpinned frequent folders, while pinned folders remain visible.
 pub fn set_frequent_folders_visible_with_options(
     visible: bool,
     options: VisibilityOptions,

@@ -857,6 +857,11 @@ impl QuickAccessManager {
 
     /// Sets whether a Quick Access section is visible in Explorer.
     ///
+    /// When hiding `QuickAccess::FrequentFolders` through this registry-backed
+    /// API, Explorer hides unpinned frequent folders, while pinned folders
+    /// remain visible. Passing `QuickAccess::All` with `visible` set to `false`
+    /// has the same Frequent Folders behavior.
+    ///
     /// # Errors
     ///
     /// Returns registry I/O errors when the current user's Explorer settings
@@ -900,6 +905,10 @@ impl QuickAccessManager {
 
     /// Hides a Quick Access section in Explorer.
     ///
+    /// Hiding `QuickAccess::FrequentFolders` through this registry-backed API
+    /// hides unpinned frequent folders, while pinned folders remain visible.
+    /// Passing `QuickAccess::All` has the same Frequent Folders behavior.
+    ///
     /// # Errors
     ///
     /// Returns registry I/O errors when Explorer visibility settings cannot be
@@ -919,6 +928,19 @@ impl QuickAccessManager {
         self.set_visible(qa_type, false)
     }
 
+    /// Sets whether a Quick Access section is visible in Explorer, with optional
+    /// Explorer refresh.
+    ///
+    /// When hiding `QuickAccess::FrequentFolders` through this registry-backed
+    /// API, Explorer hides unpinned frequent folders, while pinned folders
+    /// remain visible. Passing `QuickAccess::All` with `visible` set to `false`
+    /// has the same Frequent Folders behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current user's Explorer settings
+    /// cannot be created or updated. If `options` requests Explorer refresh,
+    /// refresh errors are also returned after the registry write.
     pub fn set_visible_with_options(
         &self,
         qa_type: QuickAccess,
@@ -928,6 +950,13 @@ impl QuickAccessManager {
         visible::set_visible_with_options(qa_type, visible, options)
     }
 
+    /// Shows a Quick Access section in Explorer, with optional Explorer refresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when Explorer visibility settings cannot be
+    /// updated. If `options` requests Explorer refresh, refresh errors are also
+    /// returned after the registry write.
     pub fn show_section_with_options(
         &self,
         qa_type: QuickAccess,
@@ -936,6 +965,17 @@ impl QuickAccessManager {
         self.set_visible_with_options(qa_type, true, options)
     }
 
+    /// Hides a Quick Access section in Explorer, with optional Explorer refresh.
+    ///
+    /// Hiding `QuickAccess::FrequentFolders` through this registry-backed API
+    /// hides unpinned frequent folders, while pinned folders remain visible.
+    /// Passing `QuickAccess::All` has the same Frequent Folders behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when Explorer visibility settings cannot be
+    /// updated. If `options` requests Explorer refresh, refresh errors are also
+    /// returned after the registry write.
     pub fn hide_section_with_options(
         &self,
         qa_type: QuickAccess,
@@ -944,6 +984,13 @@ impl QuickAccessManager {
         self.set_visible_with_options(qa_type, false, options)
     }
 
+    /// Sets whether Recent Files are visible, with optional Explorer refresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when Explorer visibility settings cannot be
+    /// updated. If `options` requests Explorer refresh, refresh errors are also
+    /// returned after the registry write.
     pub fn set_recent_files_visible_with_options(
         &self,
         visible: bool,
@@ -952,6 +999,16 @@ impl QuickAccessManager {
         visible::set_recent_files_visible_with_options(visible, options)
     }
 
+    /// Sets whether Frequent Folders are visible, with optional Explorer refresh.
+    ///
+    /// When hiding Frequent Folders through this registry-backed API, Explorer
+    /// hides unpinned frequent folders, while pinned folders remain visible.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when Explorer visibility settings cannot be
+    /// updated. If `options` requests Explorer refresh, refresh errors are also
+    /// returned after the registry write.
     pub fn set_frequent_folders_visible_with_options(
         &self,
         visible: bool,
