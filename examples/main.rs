@@ -81,6 +81,9 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         print_help();
         return Ok(());
     }
+    if args[0] == "clear" {
+        return cmd_clear();
+    }
 
     let manager = QuickAccessManager::builder().try_timeout(timeout)?.build();
 
@@ -105,6 +108,11 @@ fn run(args: Vec<String>) -> WincentResult<()> {
             "unknown command: {other}"
         ))),
     }
+}
+
+fn cmd_clear() -> WincentResult<()> {
+    print!("\x1B[2J\x1B[H");
+    io::stdout().flush().map_err(WincentError::Io)
 }
 
 fn parse_global_options(args: Vec<String>) -> WincentResult<(Duration, Vec<String>)> {
@@ -143,6 +151,7 @@ Usage:
 
 Interactive:
   help
+  clear
   exit
   quit
 
@@ -152,12 +161,12 @@ Core:
   list-paths <recent|frequent|all>
   check <recent|frequent|all> <path>
   contains <recent|frequent|all> <keyword>
-  add <recent|frequent> <path> [--refresh]
-  remove <recent|frequent> <path> [--deep-clean]
-  batch-add [--refresh] <recent:path|frequent:path>...
-  batch-remove [--deep-clean] <recent:path|frequent:path>...
+  add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
+  remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
+  batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
+  batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
-  empty <recent|frequent|all> [--pinned] [--refresh]
+  empty <recent|frequent|all> [--pinned] [--refresh-explorer]
 Utility APIs:
   retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
   classify <stderr text>
@@ -165,11 +174,11 @@ Utility APIs:
 
 Visibility APIs:
   visible get <recent|frequent|all>
-  visible set <recent|frequent|all> <true|false>
-  visible show <recent|frequent|all>
-  visible hide <recent|frequent|all>
+  visible set <recent|frequent|all> <true|false> [--refresh-explorer]
+  visible show <recent|frequent|all> [--refresh-explorer]
+  visible hide <recent|frequent|all> [--refresh-explorer]
   visible get-recent | get-frequent
-  visible set-recent <true|false> | set-frequent <true|false>
+  visible set-recent <true|false> [--refresh-explorer] | set-frequent <true|false> [--refresh-explorer]
 
 DestList APIs:
   dest path <recent|frequent>
@@ -192,13 +201,6 @@ fn split_command_line(line: &str) -> WincentResult<Vec<String>> {
     while let Some(ch) = chars.next() {
         match (quote, ch) {
             (Some(q), c) if c == q => quote = None,
-            (Some(_), '\\') => {
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                } else {
-                    current.push('\\');
-                }
-            }
             (Some(_), c) => current.push(c),
             (None, '"' | '\'') => quote = Some(ch),
             (None, c) if c.is_whitespace() => {
@@ -271,12 +273,13 @@ fn cmd_contains(manager: &QuickAccessManager, args: &[String]) -> WincentResult<
 }
 
 fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 2, "add <recent|frequent> <path> [--refresh]")?;
+    require_len(
+        args,
+        2,
+        "add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]",
+    )?;
     let qa_type = parse_category(&args[0], false)?;
-    let mut options = AddOptions::new();
-    if args.iter().skip(2).any(|arg| arg == "--refresh") {
-        options = options.force_recent_files_rebuild().refresh_explorer();
-    }
+    let options = parse_add_options(&args[2..])?;
 
     manager.add_item(&args[1], qa_type, options)?;
     println!("added {}", args[1]);
@@ -284,12 +287,13 @@ fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
 }
 
 fn cmd_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 2, "remove <recent|frequent> <path> [--deep-clean]")?;
+    require_len(
+        args,
+        2,
+        "remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]",
+    )?;
     let qa_type = parse_category(&args[0], false)?;
-    let mut options = RemoveOptions::new();
-    if args.iter().skip(2).any(|arg| arg == "--deep-clean") {
-        options = options.deep_clean_recent_links();
-    }
+    let options = parse_remove_options(&args[2..])?;
 
     manager.remove_item_with_options(&args[1], qa_type, options)?;
     println!("removed {}", args[1]);
@@ -297,7 +301,7 @@ fn cmd_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()
 }
 
 fn cmd_batch_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    let (refresh, item_args) = split_refresh(args);
+    let (options, item_args) = split_batch_add_options(args)?;
     if item_args.is_empty() {
         return Err(WincentError::InvalidArgument(
             "batch-add requires at least one item".to_string(),
@@ -305,21 +309,13 @@ fn cmd_batch_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult
     }
 
     let items = parse_batch_items(&item_args)?;
-    let options = if refresh {
-        BatchOptions::new()
-            .force_recent_files_rebuild()
-            .refresh_explorer()
-    } else {
-        BatchOptions::new()
-    };
     let result = manager.add_items_batch(&items, options);
     print_batch_result(result);
     Ok(())
 }
 
 fn cmd_batch_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    let (refresh, refresh_args) = split_refresh(args);
-    let (deep_clean, item_args) = split_deep_clean(&refresh_args);
+    let (batch_options, remove_options, item_args) = split_batch_remove_options(args)?;
     if item_args.is_empty() {
         return Err(WincentError::InvalidArgument(
             "batch-remove requires at least one item".to_string(),
@@ -327,17 +323,8 @@ fn cmd_batch_remove(manager: &QuickAccessManager, args: &[String]) -> WincentRes
     }
 
     let items = parse_batch_items(&item_args)?;
-    let options = if deep_clean {
-        RemoveOptions::new().deep_clean_recent_links()
-    } else {
-        RemoveOptions::new()
-    };
-    let batch_options = if refresh {
-        BatchOptions::new().refresh_explorer()
-    } else {
-        BatchOptions::new()
-    };
-    let result = manager.remove_items_batch_with_batch_options(&items, batch_options, options);
+    let result =
+        manager.remove_items_batch_with_batch_options(&items, batch_options, remove_options);
     print_batch_result(result);
     Ok(())
 }
@@ -406,7 +393,7 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
     require_len(
         args,
         1,
-        "empty <recent|frequent|all> [--pinned] [--refresh]",
+        "empty <recent|frequent|all> [--pinned] [--refresh-explorer]",
     )?;
     let qa_type = parse_category(&args[0], true)?;
     let mut options = EmptyOptions::new();
@@ -414,7 +401,7 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
     for arg in args.iter().skip(1) {
         match arg.as_str() {
             "--pinned" => options = options.remove_pinned_folders(),
-            "--refresh" => options = options.refresh_explorer(),
+            "--refresh-explorer" => options = options.refresh_explorer(),
             other => {
                 return Err(WincentError::InvalidArgument(format!(
                     "unknown empty option: {other}"
@@ -556,32 +543,64 @@ fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
             require_len(
                 &args[1..],
                 2,
-                "visible set <recent|frequent|all> <true|false>",
+                "visible set <recent|frequent|all> <true|false> [--refresh-explorer]",
             )?;
             let qa_type = parse_category(&args[1], true)?;
-            manager.set_visible(qa_type, parse_bool(&args[2])?)?;
+            manager.set_visible_with_options(
+                qa_type,
+                parse_bool(&args[2])?,
+                parse_visibility_options(&args[3..])?,
+            )?;
             println!("updated visibility");
         }
         "show" => {
-            require_len(&args[1..], 1, "visible show <recent|frequent|all>")?;
-            manager.show_section(parse_category(&args[1], true)?)?;
+            require_len(
+                &args[1..],
+                1,
+                "visible show <recent|frequent|all> [--refresh-explorer]",
+            )?;
+            manager.show_section_with_options(
+                parse_category(&args[1], true)?,
+                parse_visibility_options(&args[2..])?,
+            )?;
             println!("shown");
         }
         "hide" => {
-            require_len(&args[1..], 1, "visible hide <recent|frequent|all>")?;
-            manager.hide_section(parse_category(&args[1], true)?)?;
+            require_len(
+                &args[1..],
+                1,
+                "visible hide <recent|frequent|all> [--refresh-explorer]",
+            )?;
+            manager.hide_section_with_options(
+                parse_category(&args[1], true)?,
+                parse_visibility_options(&args[2..])?,
+            )?;
             println!("hidden");
         }
         "get-recent" => println!("{}", wincent::visible::is_recent_files_visible()?),
         "get-frequent" => println!("{}", wincent::visible::is_frequent_folders_visible()?),
         "set-recent" => {
-            require_len(&args[1..], 1, "visible set-recent <true|false>")?;
-            wincent::visible::set_recent_files_visible(parse_bool(&args[1])?)?;
+            require_len(
+                &args[1..],
+                1,
+                "visible set-recent <true|false> [--refresh-explorer]",
+            )?;
+            manager.set_recent_files_visible_with_options(
+                parse_bool(&args[1])?,
+                parse_visibility_options(&args[2..])?,
+            )?;
             println!("updated recent visibility");
         }
         "set-frequent" => {
-            require_len(&args[1..], 1, "visible set-frequent <true|false>")?;
-            wincent::visible::set_frequent_folders_visible(parse_bool(&args[1])?)?;
+            require_len(
+                &args[1..],
+                1,
+                "visible set-frequent <true|false> [--refresh-explorer]",
+            )?;
+            manager.set_frequent_folders_visible_with_options(
+                parse_bool(&args[1])?,
+                parse_visibility_options(&args[2..])?,
+            )?;
             println!("updated frequent visibility");
         }
         other => {
@@ -789,30 +808,92 @@ fn parse_batch_items(args: &[String]) -> WincentResult<Vec<QuickAccessItem>> {
         .collect()
 }
 
-fn split_refresh(args: &[String]) -> (bool, Vec<String>) {
-    let mut refresh = false;
-    let mut rest = Vec::new();
+fn parse_add_options(args: &[String]) -> WincentResult<AddOptions> {
+    let mut options = AddOptions::new();
     for arg in args {
-        if arg == "--refresh" {
-            refresh = true;
-        } else {
-            rest.push(arg.clone());
+        match arg.as_str() {
+            "--force-recent-files-rebuild" => options = options.force_recent_files_rebuild(),
+            "--refresh-explorer" => options = options.refresh_explorer(),
+            other => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown add option: {other}"
+                )))
+            }
         }
     }
-    (refresh, rest)
+    Ok(options)
 }
 
-fn split_deep_clean(args: &[String]) -> (bool, Vec<String>) {
-    let mut deep_clean = false;
-    let mut rest = Vec::new();
+fn parse_remove_options(args: &[String]) -> WincentResult<RemoveOptions> {
+    let mut options = RemoveOptions::new();
     for arg in args {
-        if arg == "--deep-clean" {
-            deep_clean = true;
-        } else {
-            rest.push(arg.clone());
+        match arg.as_str() {
+            "--deep-clean" => options = options.deep_clean_recent_links(),
+            "--refresh-explorer" => options = options.refresh_explorer(),
+            other => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown remove option: {other}"
+                )))
+            }
         }
     }
-    (deep_clean, rest)
+    Ok(options)
+}
+
+fn split_batch_add_options(args: &[String]) -> WincentResult<(BatchOptions, Vec<String>)> {
+    let mut options = BatchOptions::new();
+    let mut rest = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--force-recent-files-rebuild" => options = options.force_recent_files_rebuild(),
+            "--refresh-explorer" => options = options.refresh_explorer(),
+            other if other.starts_with("--") => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown batch-add option: {other}"
+                )))
+            }
+            _ => rest.push(arg.clone()),
+        }
+    }
+    Ok((options, rest))
+}
+
+fn split_batch_remove_options(
+    args: &[String],
+) -> WincentResult<(BatchOptions, RemoveOptions, Vec<String>)> {
+    let mut batch_options = BatchOptions::new();
+    let mut remove_options = RemoveOptions::new();
+    let mut rest = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--deep-clean" => remove_options = remove_options.deep_clean_recent_links(),
+            "--refresh-explorer" => {
+                batch_options = batch_options.refresh_explorer();
+            }
+            other if other.starts_with("--") => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown batch-remove option: {other}"
+                )))
+            }
+            _ => rest.push(arg.clone()),
+        }
+    }
+    Ok((batch_options, remove_options, rest))
+}
+
+fn parse_visibility_options(args: &[String]) -> WincentResult<VisibilityOptions> {
+    let mut options = VisibilityOptions::new();
+    for arg in args {
+        match arg.as_str() {
+            "--refresh-explorer" => options = options.refresh_explorer(),
+            other => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown visible option: {other}"
+                )))
+            }
+        }
+    }
+    Ok(options)
 }
 
 fn print_batch_result(result: BatchResult) {
@@ -1051,5 +1132,53 @@ fn require_len(args: &[String], min: usize, usage: &str) -> WincentResult<()> {
         Err(WincentError::InvalidArgument(format!("usage: {usage}")))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_command_line_preserves_quoted_windows_path_backslashes() {
+        let args =
+            split_command_line(r#"remove recent "D:\Temp\wincent-rs-test\scripts\Copy-Admin.ps1""#)
+                .unwrap();
+
+        assert_eq!(
+            args,
+            vec![
+                "remove",
+                "recent",
+                r#"D:\Temp\wincent-rs-test\scripts\Copy-Admin.ps1"#
+            ]
+        );
+    }
+
+    #[test]
+    fn split_command_line_preserves_quoted_path_with_spaces() {
+        let args =
+            split_command_line(r#"remove recent "D:\Temp\wincent rs test\file.ps1""#).unwrap();
+
+        assert_eq!(
+            args,
+            vec!["remove", "recent", r#"D:\Temp\wincent rs test\file.ps1"#]
+        );
+    }
+
+    #[test]
+    fn split_command_line_preserves_trailing_backslash_before_closing_quote() {
+        let args = split_command_line(r#"list-paths "D:\Temp\wincent-rs-test\""#).unwrap();
+
+        assert_eq!(args, vec!["list-paths", r#"D:\Temp\wincent-rs-test\"#]);
+    }
+
+    #[test]
+    fn split_command_line_reports_unterminated_quote() {
+        let error = split_command_line(r#"remove recent "D:\Temp"#).unwrap_err();
+
+        assert!(
+            matches!(error, WincentError::InvalidArgument(message) if message == "unterminated quote: \"")
+        );
     }
 }
