@@ -78,8 +78,8 @@ pub mod manager;
 mod query;
 mod quick_access_lock;
 mod recent_links;
-mod retry;
 mod restore;
+mod retry;
 mod script_executor;
 mod script_storage;
 mod script_strategy;
@@ -138,11 +138,11 @@ pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
     QuickAccessUnlockReport,
 };
-pub use crate::retry::RetryPolicy;
 pub use crate::restore::{
     FrequentRawPathRemoveReport, FrequentRestoreReport, RecentRestoreReport,
     RestoreDefaultsOptions, RestoreDefaultsReport,
 };
+pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

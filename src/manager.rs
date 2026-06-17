@@ -2149,7 +2149,9 @@ mod tests {
                 .with_rebuild_poll_timeout(Duration::ZERO),
         )?;
 
-        assert!(report.recent_report().is_some_and(|report| report.success()));
+        assert!(report
+            .recent_report()
+            .is_some_and(|report| report.success()));
         assert!(report
             .frequent_report()
             .is_some_and(|report| !report.success()));

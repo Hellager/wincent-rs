@@ -471,7 +471,14 @@ where
     }
 }
 
-fn restore_frequent_folders_defaults_with<FList, FResolve, FDeleteLnk, FDeleteDest, FRefresh, FWait>(
+fn restore_frequent_folders_defaults_with<
+    FList,
+    FResolve,
+    FDeleteLnk,
+    FDeleteDest,
+    FRefresh,
+    FWait,
+>(
     options: RestoreDefaultsOptions,
     list_lnk_files: FList,
     resolve_lnk: FResolve,
