@@ -430,6 +430,7 @@ fn record_batch_explorer_refresh_result(
     item_index: Option<usize>,
     fallback_path: Option<String>,
     qa_type: QuickAccess,
+    timeout: Duration,
     backend: &dyn QuickAccessBackend,
 ) {
     record_batch_refresh_result(
@@ -437,7 +438,7 @@ fn record_batch_explorer_refresh_result(
         failed,
         item_index,
         fallback_path,
-        backend.refresh_explorer(),
+        backend.refresh_explorer(timeout),
         qa_type,
         QuickAccessPostMutationStep::RefreshExplorer,
     );
@@ -498,6 +499,7 @@ pub(crate) fn add_items_batch(
             refresh_item_index,
             None,
             refresh_item_type,
+            timeout,
             backend,
         );
     }
@@ -556,11 +558,9 @@ pub(crate) fn remove_items_batch_with_options(
                     attempted_refresh_without_attribution = true;
                     refresh_item_type = QuickAccess::RecentFiles;
                 }
-            } else if recent_refresh_item_index.is_none() {
-                if outcome.result.is_err() {
-                    attempted_refresh_without_attribution = true;
-                    refresh_item_type = mutated_type;
-                }
+            } else if recent_refresh_item_index.is_none() && outcome.result.is_err() {
+                attempted_refresh_without_attribution = true;
+                refresh_item_type = mutated_type;
             }
         }
         match outcome.result {
@@ -597,6 +597,7 @@ pub(crate) fn remove_items_batch_with_options(
             item_index,
             fallback_path,
             refresh_item_type,
+            timeout,
             backend,
         );
     }
@@ -780,7 +781,7 @@ mod tests {
             Ok(())
         }
 
-        fn refresh_explorer(&self) -> WincentResult<()> {
+        fn refresh_explorer(&self, _timeout: Duration) -> WincentResult<()> {
             self.calls
                 .lock()
                 .unwrap()

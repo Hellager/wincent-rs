@@ -352,11 +352,11 @@ pub(crate) fn empty_items_with_backend(
     };
 
     match refresh_policy_for_result(&result, options.refresh_explorer_enabled()) {
-        RefreshPolicy::PropagateFailure => backend.refresh_explorer()?,
+        RefreshPolicy::PropagateFailure => backend.refresh_explorer(timeout)?,
         RefreshPolicy::BestEffort => {
             // Preserve the cleanup failure while still trying to show any
             // successfully cleared category in Explorer.
-            let _ = backend.refresh_explorer();
+            let _ = backend.refresh_explorer(timeout);
         }
         RefreshPolicy::Skip => {}
     }
@@ -527,7 +527,7 @@ mod tests {
             Ok(())
         }
 
-        fn refresh_explorer(&self) -> WincentResult<()> {
+        fn refresh_explorer(&self, _timeout: Duration) -> WincentResult<()> {
             self.record("refresh_explorer");
             if let Some(error) = &self.refresh_explorer_error {
                 return Err(WincentError::SystemError(error.clone()));
@@ -966,6 +966,8 @@ mod tests {
     fn test_com_apartment_mismatch() -> WincentResult<()> {
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
+        // SAFETY: The MTA initialization in this test is balanced by
+        // CoUninitialize before returning.
         unsafe {
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
             assert!(hr.is_ok() || hr.0 == 1, "MTA init should succeed");
@@ -1002,6 +1004,8 @@ mod tests {
             CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
         };
 
+        // SAFETY: The test pairs each successful CoInitializeEx with
+        // CoUninitialize on the same thread.
         unsafe {
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             assert_eq!(hr.0, 0, "CoInitializeEx should return S_OK");

@@ -49,6 +49,9 @@ impl ComGuard {
     /// - `Ok(guard)`: initialization succeeded (S_OK or S_FALSE)
     /// - `Err(ComInitStatus)`: initialization failed
     pub(crate) fn try_initialize() -> Result<Self, ComInitStatus> {
+        // SAFETY: CoInitializeEx is called for the current thread with an STA
+        // apartment request. Every successful HRESULT, including S_FALSE, is
+        // balanced by ComGuard's Drop on the same thread.
         unsafe {
             let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_APARTMENTTHREADED);
 
@@ -72,6 +75,8 @@ impl ComGuard {
 impl Drop for ComGuard {
     fn drop(&mut self) {
         if self.should_uninitialize {
+            // SAFETY: `should_uninitialize` is set only after a successful
+            // CoInitializeEx call on this thread, so this balances that call.
             unsafe {
                 CoUninitialize();
             }
@@ -88,6 +93,8 @@ mod tests {
 
     impl Drop for TestComGuard {
         fn drop(&mut self) {
+            // SAFETY: TestComGuard is constructed only after a successful
+            // CoInitializeEx in these tests and is dropped on the same thread.
             unsafe {
                 CoUninitialize();
             }
@@ -131,6 +138,8 @@ mod tests {
 
     #[test]
     fn test_guard_balances_already_initialized_sta() {
+        // SAFETY: The test pairs each successful CoInitializeEx with a
+        // CoUninitialize via TestComGuard or explicit cleanup on the same thread.
         unsafe {
             {
                 let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_APARTMENTTHREADED);
@@ -173,6 +182,8 @@ mod tests {
 
     #[test]
     fn test_guard_apartment_mismatch() {
+        // SAFETY: The test initializes COM on the current thread and uses
+        // TestComGuard to balance successful initialization before returning.
         unsafe {
             let hr = CoInitializeEx(Some(std::ptr::null_mut()), COINIT_MULTITHREADED);
             if hr.is_ok() {

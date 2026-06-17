@@ -244,8 +244,9 @@ mod tests {
             current_version()
         );
 
-        // Clean up test files
-        let _ = fs::remove_file(path);
+        // Static scripts are shared by all tests for this crate version. Leave
+        // the deterministic cache file in place so parallel tests do not race
+        // with this test's cleanup.
     }
 
     #[test]
@@ -358,8 +359,6 @@ mod tests {
             on_disk, expected,
             "regenerated script must exactly match the current strategy output"
         );
-        // Clean up
-        let _ = fs::remove_file(result2);
         Ok(())
     }
 

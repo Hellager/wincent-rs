@@ -1305,7 +1305,7 @@ fn parse_link_info(data: &[u8], link_info_start: usize) -> Option<LinkInfoSummar
 
     let local_path = match (&base, &suffix) {
         (Some(base), Some(suffix)) if !base.is_empty() && !suffix.is_empty() => {
-            Some(join_windows_path(&base, &suffix))
+            Some(join_windows_path(base, suffix))
         }
         (Some(base), _) if looks_like_windows_path(base) => Some(base.clone()),
         (_, Some(suffix)) if looks_like_windows_path(suffix) => Some(suffix.clone()),
@@ -1775,7 +1775,7 @@ mod tests {
 
     fn build_minimal_cfb_with_dest_list(path: &str) -> Vec<u8> {
         let dest_list = build_dest_list(path);
-        let num_mini_sectors = (dest_list.len() + 63) / 64;
+        let num_mini_sectors = dest_list.len().div_ceil(64);
         let mini_stream_size = num_mini_sectors * 64;
         let mut file = vec![0u8; 512 + 512 * 4];
 
@@ -1797,7 +1797,14 @@ mod tests {
 
         // Directory at sector 0: Root Entry (mini stream container at sector 1), DestList in mini sector 0
         write_directory_entry(&mut file, 512, "Root Entry", 5, 1, mini_stream_size as u64);
-        write_directory_entry(&mut file, 512 + 128, "DestList", 2, 0, dest_list.len() as u64);
+        write_directory_entry(
+            &mut file,
+            512 + 128,
+            "DestList",
+            2,
+            0,
+            dest_list.len() as u64,
+        );
 
         // Mini stream container at sector 1
         file[512 + 512..512 + 512 + dest_list.len()].copy_from_slice(&dest_list);

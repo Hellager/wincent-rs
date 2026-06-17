@@ -372,6 +372,7 @@ struct ExperimentalRemoveBase {
 }
 
 impl ExperimentalRemoveBase {
+    #[allow(clippy::too_many_arguments)]
     fn report(
         self,
         deleted_lnk_paths: Vec<PathBuf>,
@@ -783,7 +784,7 @@ mod tests {
             report.post_delete_error(),
             Some("System error: refresh failed")
         );
-        assert_eq!(report.deleted_lnk_paths(), &[matching.clone()]);
+        assert_eq!(report.deleted_lnk_paths(), std::slice::from_ref(&matching));
         assert!(report.missing_lnk_target_paths().is_empty());
         assert!(!matching.exists());
         assert!(other.exists());

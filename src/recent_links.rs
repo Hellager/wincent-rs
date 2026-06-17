@@ -169,12 +169,13 @@ fn parse_shell_link_summary(data: &[u8]) -> Option<ShellLinkSummary> {
     }
 
     let mut link_info = None;
-    if flags & HAS_LINK_INFO != 0 && flags & FORCE_NO_LINK_INFO == 0 {
-        if offset.checked_add(28).is_some_and(|end| end <= data.len()) {
-            link_info = parse_link_info(data, offset);
-            if let Some(info) = &link_info {
-                offset = offset.saturating_add(info.size).min(data.len());
-            }
+    if flags & HAS_LINK_INFO != 0
+        && flags & FORCE_NO_LINK_INFO == 0
+        && offset.checked_add(28).is_some_and(|end| end <= data.len())
+    {
+        link_info = parse_link_info(data, offset);
+        if let Some(info) = &link_info {
+            offset = offset.saturating_add(info.size).min(data.len());
         }
     }
 

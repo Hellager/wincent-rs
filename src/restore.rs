@@ -166,11 +166,11 @@ impl RestoreDefaultsReport {
     pub fn success(&self) -> bool {
         self.recent
             .as_ref()
-            .map_or(true, RecentRestoreReport::success)
+            .is_none_or(RecentRestoreReport::success)
             && self
                 .frequent
                 .as_ref()
-                .map_or(true, FrequentRestoreReport::success)
+                .is_none_or(FrequentRestoreReport::success)
     }
 }
 
@@ -292,8 +292,8 @@ impl FrequentRestoreReport {
         self.backing_file_deleted
             && self.rebuilt
             && self.error.is_none()
-            && self.raw_path_remove_report.as_ref().map_or(
-                self.non_default_raw_paths.is_empty(),
+            && self.raw_path_remove_report.as_ref().map_or_else(
+                || self.non_default_raw_paths.is_empty(),
                 FrequentRawPathRemoveReport::success,
             )
     }
@@ -417,9 +417,9 @@ pub(crate) fn restore_frequent_folders_defaults(
         |path, timeout| backend.resolve_lnk_with_type(path, timeout),
         |path| backend.delete_lnk_file(path),
         || backend.delete_frequent_folders_backing_file(),
-        || {
+        |timeout| {
             if options.refresh_explorer_enabled() {
-                backend.refresh_explorer()
+                backend.refresh_explorer(timeout)
             } else {
                 Ok(())
             }
@@ -492,7 +492,7 @@ where
     FResolve: FnMut(&Path, Duration) -> WincentResult<Option<LnkResolution>>,
     FDeleteLnk: FnMut(&Path) -> WincentResult<()>,
     FDeleteDest: FnMut() -> WincentResult<()>,
-    FRefresh: FnMut() -> WincentResult<()>,
+    FRefresh: FnMut(Duration) -> WincentResult<()>,
     FWait: FnMut(Duration) -> WincentResult<Vec<DestListEntry>>,
 {
     let lnk_cleanup = delete_matching_lnk_files(
@@ -528,7 +528,7 @@ where
         }
     };
 
-    if let Err(error) = refresh_explorer() {
+    if let Err(error) = refresh_explorer(options.clear_timeout()) {
         return Ok(FrequentRestoreReport::new(
             lnk_cleanup.deleted_lnk_paths,
             backing_file_deleted,
@@ -596,7 +596,7 @@ fn frequent_raw_path_remove_with<FDelete, FRefresh, FWait>(
 ) -> FrequentRawPathRemoveReport
 where
     FDelete: FnMut() -> WincentResult<()>,
-    FRefresh: FnMut() -> WincentResult<()>,
+    FRefresh: FnMut(Duration) -> WincentResult<()>,
     FWait: FnMut(Duration) -> WincentResult<Vec<DestListEntry>>,
 {
     let requested_raw_paths = non_default_raw_paths(entries);
@@ -617,7 +617,7 @@ where
         }
     };
 
-    if let Err(error) = refresh_explorer() {
+    if let Err(error) = refresh_explorer(options.clear_timeout()) {
         return FrequentRawPathRemoveReport::new(
             requested_raw_paths,
             backing_file_deleted,
@@ -709,11 +709,10 @@ fn should_delete_lnk_for_restore(
     target: &RestoreTarget,
     resolution: Option<&LnkResolution>,
 ) -> bool {
-    match (target, resolution.and_then(|resolution| resolution.is_dir)) {
-        (RestoreTarget::RecentFiles, Some(true)) => false,
-        (RestoreTarget::FrequentFolders, Some(false)) => false,
-        _ => true,
-    }
+    !matches!(
+        (target, resolution.and_then(|resolution| resolution.is_dir)),
+        (RestoreTarget::RecentFiles, Some(true)) | (RestoreTarget::FrequentFolders, Some(false))
+    )
 }
 
 fn non_default_raw_paths(entries: &[DestListEntry]) -> Vec<String> {
@@ -843,7 +842,7 @@ mod tests {
                 Ok(())
             },
             || Ok(()),
-            || Ok(()),
+            |_| Ok(()),
             |_| Ok(vec![entry("knownfolder:{guid}")]),
         )?;
 
@@ -867,7 +866,7 @@ mod tests {
             |_, _| Ok(None),
             |_| Ok(()),
             || Ok(()),
-            || Ok(()),
+            |_| Ok(()),
             |_| Err(WincentError::Timeout("no rebuild".to_string())),
         )?;
 
@@ -888,7 +887,7 @@ mod tests {
             |_, _| Ok(None),
             |_| Ok(()),
             || Ok(()),
-            || Ok(()),
+            |_| Ok(()),
             |_| {
                 let mut calls = raw_remove_calls.borrow_mut();
                 *calls += 1;
@@ -922,7 +921,7 @@ mod tests {
                 calls.borrow_mut().push("delete_backing");
                 Ok(())
             },
-            || {
+            |_| {
                 calls.borrow_mut().push("refresh");
                 Ok(())
             },
@@ -949,7 +948,7 @@ mod tests {
             RestoreDefaultsOptions::new().with_rebuild_delay(Duration::ZERO),
             &[entry("C:\\Projects")],
             || Ok(()),
-            || Ok(()),
+            |_| Ok(()),
             |_| Ok(vec![entry("C:\\Projects")]),
         );
 

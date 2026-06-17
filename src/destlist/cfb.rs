@@ -40,7 +40,9 @@ impl CompoundFile {
         }
         let major_version = read_u16(&data, 0x1a)?;
         if major_version != 3 && major_version != 4 {
-            return Err(format!("unsupported CFB major version {major_version:#06x}"));
+            return Err(format!(
+                "unsupported CFB major version {major_version:#06x}"
+            ));
         }
 
         let sector_size = 1usize
@@ -90,7 +92,8 @@ impl CompoundFile {
 
         let mini_fat = if first_mini_fat_sector == FREE_SECTOR
             || first_mini_fat_sector == END_OF_CHAIN
-            || num_mini_fat_sectors == 0 {
+            || num_mini_fat_sectors == 0
+        {
             Vec::new()
         } else {
             let bytes = read_regular_stream_sized(

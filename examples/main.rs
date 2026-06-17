@@ -197,10 +197,10 @@ DestList APIs:
 fn split_command_line(line: &str) -> WincentResult<Vec<String>> {
     let mut args = Vec::new();
     let mut current = String::new();
-    let mut chars = line.chars().peekable();
+    let chars = line.chars();
     let mut quote = None;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         match (quote, ch) {
             (Some(q), c) if c == q => quote = None,
             (Some(_), c) => current.push(c),
@@ -1081,9 +1081,15 @@ fn print_restore_report(report: &RestoreDefaultsReport) {
     }
     if let Some(f) = report.frequent_report() {
         println!("frequent.success: {}", f.success());
-        println!("frequent.backing_file_deleted: {}", f.backing_file_deleted());
+        println!(
+            "frequent.backing_file_deleted: {}",
+            f.backing_file_deleted()
+        );
         println!("frequent.rebuilt: {}", f.rebuilt());
-        println!("frequent.deleted_lnk_paths: {}", f.deleted_lnk_paths().len());
+        println!(
+            "frequent.deleted_lnk_paths: {}",
+            f.deleted_lnk_paths().len()
+        );
         for p in f.deleted_lnk_paths() {
             println!("  {}", p.display());
         }

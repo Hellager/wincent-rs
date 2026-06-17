@@ -246,6 +246,8 @@ struct LockedFile {
 impl LockedFile {
     fn open(path: &Path) -> WincentResult<Self> {
         let mut wide_path = os_str_to_wide_null(path.as_os_str());
+        // SAFETY: `wide_path` is null-terminated and lives until CreateFileW
+        // returns. The returned HANDLE is owned by LockedFile and closed in Drop.
         let handle = unsafe {
             CreateFileW(
                 PCWSTR::from_raw(wide_path.as_mut_ptr()),
@@ -267,6 +269,8 @@ impl LockedFile {
 
 impl Drop for LockedFile {
     fn drop(&mut self) {
+        // SAFETY: `handle` was returned by CreateFileW and is closed exactly
+        // once when LockedFile is dropped.
         unsafe {
             let _ = CloseHandle(self.handle);
         }
@@ -437,7 +441,7 @@ mod tests {
 
         let report = lock.unlock(QuickAccessUnlockOptions::new())?;
 
-        assert_eq!(report.new_lnk_paths(), &[new.clone()]);
+        assert_eq!(report.new_lnk_paths(), std::slice::from_ref(&new));
         assert_eq!(report.disappeared_lnk_paths(), &[gone]);
         assert!(report.deleted_lnk_paths().is_empty());
         assert!(new.exists());
@@ -468,8 +472,8 @@ mod tests {
 
         let report = lock.unlock(QuickAccessUnlockOptions::new().cleanup_new_recent_links())?;
 
-        assert_eq!(report.disappeared_lnk_paths(), &[gone.clone()]);
-        assert_eq!(report.deleted_lnk_paths(), &[new.clone()]);
+        assert_eq!(report.disappeared_lnk_paths(), std::slice::from_ref(&gone));
+        assert_eq!(report.deleted_lnk_paths(), std::slice::from_ref(&new));
         assert!(!new.exists());
         Ok(())
     }

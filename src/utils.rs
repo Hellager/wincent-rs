@@ -5,6 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
+use std::time::Duration;
 
 /// Lightweight path normalization without I/O operations.
 ///
@@ -65,6 +66,30 @@ pub(crate) enum PathType {
     Directory,
 }
 
+/// Refreshes the Windows Explorer windows with a caller-supplied timeout for the PowerShell fallback.
+///
+/// Attempts native COM first (~1-10ms). If that fails, falls back to PowerShell
+/// with `timeout` capping how long the caller waits.
+pub(crate) fn refresh_explorer_window_with_timeout(timeout: Duration) -> WincentResult<()> {
+    refresh_explorer_window_with_timeout_using(
+        timeout,
+        refresh_explorer_native_with_timeout,
+        refresh_explorer_powershell_with_timeout,
+    )
+}
+
+fn refresh_explorer_window_with_timeout_using<N, P>(
+    timeout: Duration,
+    native: N,
+    powershell: P,
+) -> WincentResult<()>
+where
+    N: FnOnce(Duration) -> WincentResult<()>,
+    P: FnOnce(Duration) -> WincentResult<()>,
+{
+    native(timeout).or_else(|_| powershell(timeout))
+}
+
 /// Refreshes the Windows Explorer windows.
 ///
 /// This function attempts to refresh all open Explorer windows using native COM API first,
@@ -88,6 +113,10 @@ fn refresh_explorer_native() -> WincentResult<()> {
     crate::explorer_window::refresh_explorer_shell_views()
 }
 
+fn refresh_explorer_native_with_timeout(timeout: Duration) -> WincentResult<()> {
+    crate::explorer_window::refresh_explorer_shell_views_with_timeout(timeout)
+}
+
 /// Refreshes Explorer windows using PowerShell script (fallback).
 ///
 /// This is the original implementation, kept as a fallback for compatibility.
@@ -105,6 +134,25 @@ fn refresh_explorer_powershell() -> WincentResult<()> {
         duration,
     )?;
 
+    Ok(())
+}
+
+/// Refreshes Explorer windows using PowerShell with a caller-supplied timeout.
+fn refresh_explorer_powershell_with_timeout(timeout: Duration) -> WincentResult<()> {
+    use std::time::Instant;
+    let start = Instant::now();
+    let script_path =
+        crate::script_storage::ScriptStorage::get_script_path(PSScript::RefreshExplorer)?;
+    let output =
+        ScriptExecutor::execute_ps_script_with_timeout(PSScript::RefreshExplorer, None, timeout)?;
+    let duration = start.elapsed();
+    let _ = ScriptExecutor::parse_output_to_strings(
+        output,
+        PSScript::RefreshExplorer,
+        script_path,
+        None,
+        duration,
+    )?;
     Ok(())
 }
 
@@ -133,8 +181,13 @@ pub(crate) fn validate_path(path: &str, expected_type: PathType) -> WincentResul
 
 /// Get Windows Recent Folder path
 pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
+    // SAFETY: SHGetKnownFolderPath writes a heap-allocated wide string into `result`.
+    // FOLDERID_Recent is a well-known constant, the flag is 0, and no token handle is needed.
     let result = unsafe { SHGetKnownFolderPath(&FOLDERID_Recent, KNOWN_FOLDER_FLAG(0x00), None) }?;
 
+    // SAFETY: `result` is a valid PWSTR allocated by the shell (above). We
+    // copy its contents into an OsString before freeing the allocation with
+    // CoTaskMemFree, which is the documented cleanup method for SHGetKnownFolderPath output.
     let recent_folder = unsafe {
         let wide_str = OsString::from_wide(result.as_wide());
         CoTaskMemFree(Some(result.as_ptr() as _));
@@ -149,6 +202,47 @@ pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
 #[cfg(test)]
 mod utils_test {
     use super::*;
+
+    #[test]
+    fn refresh_explorer_window_with_timeout_passes_timeout_to_native() -> WincentResult<()> {
+        let timeout = Duration::from_millis(4321);
+        let observed = std::cell::Cell::new(None);
+
+        refresh_explorer_window_with_timeout_using(
+            timeout,
+            |actual| {
+                observed.set(Some(actual));
+                Ok(())
+            },
+            |_| panic!("PowerShell fallback should not run when native succeeds"),
+        )?;
+
+        assert_eq!(observed.get(), Some(timeout));
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_explorer_window_with_timeout_passes_timeout_to_fallback() -> WincentResult<()> {
+        let timeout = Duration::from_millis(4321);
+        let native_observed = std::cell::Cell::new(None);
+        let fallback_observed = std::cell::Cell::new(None);
+
+        refresh_explorer_window_with_timeout_using(
+            timeout,
+            |actual| {
+                native_observed.set(Some(actual));
+                Err(WincentError::SystemError("native failed".to_string()))
+            },
+            |actual| {
+                fallback_observed.set(Some(actual));
+                Ok(())
+            },
+        )?;
+
+        assert_eq!(native_observed.get(), Some(timeout));
+        assert_eq!(fallback_observed.get(), Some(timeout));
+        Ok(())
+    }
 
     #[test]
     #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer -- --ignored --nocapture"]

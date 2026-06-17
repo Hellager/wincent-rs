@@ -28,10 +28,11 @@ pub(crate) struct NavigationCycleResult {
 }
 
 pub(crate) fn refresh_explorer_shell_views() -> WincentResult<()> {
-    crate::com_thread::run_on_sta_thread(
-        refresh_explorer_shell_views_on_sta,
-        Duration::from_secs(10),
-    )
+    refresh_explorer_shell_views_with_timeout(Duration::from_secs(10))
+}
+
+pub(crate) fn refresh_explorer_shell_views_with_timeout(timeout: Duration) -> WincentResult<()> {
+    crate::com_thread::run_on_sta_thread(refresh_explorer_shell_views_on_sta, timeout)
 }
 
 #[allow(dead_code)]
@@ -70,11 +71,15 @@ fn refresh_explorer_shell_views_on_sta() -> WincentResult<()> {
 }
 
 fn shell_windows_with_count() -> WincentResult<(IShellWindows, i32)> {
+    // SAFETY: Called from a COM-initialized STA worker. ShellWindows is a
+    // local-server COM class and the returned interface is owned by the wrapper.
     let shell_windows: IShellWindows = unsafe {
         CoCreateInstance(&ShellWindows, None, CLSCTX_LOCAL_SERVER)
     }
     .map_err(|e| WincentError::SystemError(format!("Failed to create ShellWindows: {}", e)))?;
 
+    // SAFETY: `shell_windows` came from a successful CoCreateInstance call and
+    // remains alive for the duration of the Count call.
     let count = unsafe { shell_windows.Count() }
         .map_err(|e| WincentError::SystemError(format!("Failed to get window count: {}", e)))?;
 
@@ -121,6 +126,8 @@ fn find_recent_access_web_browser(
     count: i32,
 ) -> WincentResult<Option<IWebBrowser2>> {
     for index in 0..count {
+        // SAFETY: `shell_windows` is a live COM collection from ShellWindows;
+        // the VARIANT index is valid for the duration of the call.
         let dispatch = match unsafe { shell_windows.Item(&index.into()) } {
             Ok(dispatch) => dispatch,
             Err(_) => continue,
@@ -162,6 +169,8 @@ fn refresh_matching_shell_views(
     let mut result = RefreshResult::default();
 
     for index in 0..count {
+        // SAFETY: `shell_windows` is a live COM collection from ShellWindows;
+        // failures for individual windows are handled by skipping them.
         let dispatch = match unsafe { shell_windows.Item(&index.into()) } {
             Ok(dispatch) => dispatch,
             Err(_) => continue,
@@ -187,12 +196,16 @@ fn refresh_matching_shell_views(
 }
 
 fn browser_location(web_browser: &IWebBrowser2) -> ExplorerLocation {
+    // SAFETY: `web_browser` is a live IWebBrowser2 interface obtained from
+    // ShellWindows; errors are converted to empty strings for best-effort detection.
     let location_name = unsafe {
         web_browser
             .LocationName()
             .map(|value| value.to_string())
             .unwrap_or_else(|_| String::new())
     };
+    // SAFETY: Same live IWebBrowser2 interface as above; LocationURL is
+    // best-effort and failures are intentionally treated as unknown.
     let location_url = unsafe {
         web_browser
             .LocationURL()
@@ -209,6 +222,8 @@ fn browser_location(web_browser: &IWebBrowser2) -> ExplorerLocation {
 fn navigate_to_url(web_browser: &IWebBrowser2, url: &str) -> WincentResult<()> {
     let target = VARIANT::from(url);
     let empty = VARIANT::default();
+    // SAFETY: `web_browser` is a live IWebBrowser2 interface and all VARIANT
+    // arguments live until Navigate2 returns.
     unsafe {
         web_browser
             .Navigate2(
@@ -257,12 +272,16 @@ fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
     let started = std::time::Instant::now();
 
     while started.elapsed() < timeout {
+        // SAFETY: `web_browser` is a live IWebBrowser2 interface; failures are
+        // treated as not busy so the wait remains best-effort.
         let busy = unsafe {
             web_browser
                 .Busy()
                 .map(|value| value.0 != 0)
                 .unwrap_or(false)
         };
+        // SAFETY: Same live IWebBrowser2 interface; failures are treated as
+        // ready to avoid waiting forever on a disappearing window.
         let ready = unsafe {
             web_browser
                 .ReadyState()
@@ -279,11 +298,15 @@ fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
 }
 
 fn desktop_path() -> WincentResult<PathBuf> {
+    // SAFETY: SHGetKnownFolderPath allocates a PWSTR for a known folder ID with
+    // no token handle; the allocation is freed below with CoTaskMemFree.
     let path = unsafe { SHGetKnownFolderPath(&FOLDERID_Desktop, KNOWN_FOLDER_FLAG(0x00), None) }
         .map_err(|e| {
             WincentError::SystemError(format!("Failed to get Desktop known folder path: {}", e))
         })?;
 
+    // SAFETY: `path` is the PWSTR allocated by SHGetKnownFolderPath above. Its
+    // contents are copied before freeing with the documented allocator.
     let desktop = unsafe {
         let wide = OsString::from_wide(path.as_wide());
         CoTaskMemFree(Some(path.as_ptr() as _));
@@ -308,6 +331,8 @@ fn refresh_shell_view(dispatch: &IDispatch) -> WincentResult<()> {
             e
         ))
     })?;
+    // SAFETY: QueryService is called on the IServiceProvider interface obtained
+    // from the Explorer dispatch and returns the active top-level Shell browser.
     let browser: IShellBrowser = unsafe {
         service_provider
             .QueryService(&SID_STopLevelBrowser)
@@ -315,12 +340,15 @@ fn refresh_shell_view(dispatch: &IDispatch) -> WincentResult<()> {
                 WincentError::SystemError(format!("Failed to query top-level Shell browser: {}", e))
             })?
     };
+    // SAFETY: `browser` is a live IShellBrowser returned by QueryService.
     let view = unsafe {
         browser.QueryActiveShellView().map_err(|e| {
             WincentError::SystemError(format!("Failed to query active Shell view: {}", e))
         })?
     };
 
+    // SAFETY: `view` is the active Shell view returned by IShellBrowser and is
+    // valid for this immediate Refresh call.
     unsafe {
         view.Refresh()
             .map_err(|e| WincentError::SystemError(format!("Failed to refresh Shell view: {}", e)))
@@ -358,6 +386,8 @@ fn list_detected_explorer_locations() -> WincentResult<Vec<ExplorerLocation>> {
             let mut locations = Vec::new();
 
             for index in 0..count {
+                // SAFETY: `shell_windows` is a live COM collection; individual
+                // access failures are ignored while collecting diagnostics.
                 let dispatch = match unsafe { shell_windows.Item(&index.into()) } {
                     Ok(dispatch) => dispatch,
                     Err(_) => continue,

@@ -18,6 +18,8 @@ struct StaComGuard;
 
 impl Drop for StaComGuard {
     fn drop(&mut self) {
+        // SAFETY: StaComGuard is created only after CoInitializeEx succeeds on
+        // this worker thread and is dropped before the thread exits.
         unsafe {
             CoUninitialize();
         }
@@ -99,6 +101,9 @@ where
         .name("wincent-com-sta".into())
         .spawn(move || {
             let _active_worker = active_worker;
+            // SAFETY: This is the first COM setup performed by the dedicated
+            // worker. Successful initialization is balanced by StaComGuard on
+            // the same thread.
             let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
             match classify_coinit_result(hr) {
@@ -167,9 +172,17 @@ mod tests {
         ACTIVE_STA_WORKERS.load(Ordering::Acquire) == expected
     }
 
+    fn wait_for_idle_workers() {
+        assert!(
+            wait_for_active_worker_count(0, Duration::from_secs(5)),
+            "active worker count should be zero before this test starts"
+        );
+    }
+
     #[test]
     #[serial(com_thread_active_workers)]
     fn test_run_on_sta_thread_zero_timeout_rejected() {
+        wait_for_idle_workers();
         // Duration::ZERO must be rejected immediately with InvalidArgument,
         // not silently converted to a near-instant recv_timeout that races.
         let result: WincentResult<()> = run_on_sta_thread(|| Ok(()), std::time::Duration::ZERO);
@@ -219,6 +232,7 @@ mod tests {
     #[test]
     #[serial(com_thread_active_workers)]
     fn test_run_on_sta_thread_success() {
+        wait_for_idle_workers();
         // Tests the normal path: new thread, S_OK from CoInitializeEx
         let result = run_on_sta_thread(|| Ok(42), std::time::Duration::from_secs(10));
         assert_eq!(result.unwrap(), 42);
@@ -227,6 +241,7 @@ mod tests {
     #[test]
     #[serial(com_thread_active_workers)]
     fn test_run_on_sta_thread_error_propagation() {
+        wait_for_idle_workers();
         // Tests that errors from the closure are properly propagated
         let result: WincentResult<()> = run_on_sta_thread(
             || Err(WincentError::invalid_path_reason("test")),
@@ -238,6 +253,7 @@ mod tests {
     #[test]
     #[serial(com_thread_active_workers)]
     fn test_run_on_sta_thread_multiple_calls() {
+        wait_for_idle_workers();
         // Verify multiple calls work correctly (no COM reference leaks)
         // Each call spawns a new thread, so each should get S_OK
         for i in 0..5 {
@@ -249,6 +265,7 @@ mod tests {
     #[test]
     #[serial(com_thread_active_workers)]
     fn test_run_on_sta_thread_panic_becomes_system_error() {
+        wait_for_idle_workers();
         // A panicking closure must not leak COM state or produce a misleading
         // "timed out / disconnected" error — it should surface as SystemError.
         let result: WincentResult<()> = run_on_sta_thread(
@@ -265,6 +282,7 @@ mod tests {
     #[test]
     #[serial(com_thread_active_workers)]
     fn test_active_worker_limit_rejects_extra_worker_and_recovers() {
+        wait_for_idle_workers();
         let release_pair = Arc::new((Mutex::new(false), Condvar::new()));
         let (ready_tx, ready_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
@@ -287,7 +305,7 @@ mod tests {
                         }
                         Ok(())
                     },
-                    std::time::Duration::from_millis(20),
+                    std::time::Duration::from_millis(250),
                 );
                 result_tx
                     .send(result)

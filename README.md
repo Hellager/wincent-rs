@@ -80,7 +80,7 @@ fn main() -> WincentResult<()> {
 ## System Requirements and Limitations
 
 - **OS**: Windows 10 or Windows 11.
-- **Rust**: 1.60.0 or later.
+- **Rust**: 1.85.0 or later.
 - **Consistency**: Quick Access state is maintained by Windows Explorer. Results may lag behind mutations by a short interval, and Explorer may rebuild state asynchronously across versions.
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
 

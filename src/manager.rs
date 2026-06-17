@@ -1107,14 +1107,16 @@ impl QuickAccessManager {
         path: &str,
         qa_type: QuickAccess,
     ) -> WincentResult<()> {
-        self.backend.refresh_explorer().map_err(|source| {
-            WincentError::post_mutation_failure(
-                path,
-                qa_type,
-                QuickAccessPostMutationStep::RefreshExplorer,
-                source,
-            )
-        })
+        self.backend
+            .refresh_explorer(self.timeout)
+            .map_err(|source| {
+                WincentError::post_mutation_failure(
+                    path,
+                    qa_type,
+                    QuickAccessPostMutationStep::RefreshExplorer,
+                    source,
+                )
+            })
     }
 
     fn execute_with_retry<T, F>(&self, mut action: F) -> WincentResult<T>
@@ -1231,6 +1233,7 @@ mod tests {
         calls: Mutex<Vec<String>>,
         lnk_files: Mutex<Vec<PathBuf>>,
         get_item_timeouts: Mutex<Vec<Duration>>,
+        refresh_explorer_timeouts: Mutex<Vec<Duration>>,
         validate_path_error: Mutex<Option<WincentError>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
         delete_recent_files_backing_data_error: Mutex<Option<WincentError>>,
@@ -1246,6 +1249,7 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 lnk_files: Mutex::new(Vec::new()),
                 get_item_timeouts: Mutex::new(Vec::new()),
+                refresh_explorer_timeouts: Mutex::new(Vec::new()),
                 validate_path_error: Mutex::new(None),
                 add_frequent_folder_error: Mutex::new(None),
                 delete_recent_files_backing_data_error: Mutex::new(None),
@@ -1403,8 +1407,9 @@ mod tests {
             Ok(())
         }
 
-        fn refresh_explorer(&self) -> WincentResult<()> {
+        fn refresh_explorer(&self, timeout: Duration) -> WincentResult<()> {
             self.record("refresh_explorer");
+            self.refresh_explorer_timeouts.lock().unwrap().push(timeout);
             if let Some(error) = self.refresh_explorer_error.lock().unwrap().take() {
                 return Err(error);
             }
@@ -1424,6 +1429,31 @@ mod tests {
             .timeout(Duration::from_secs(30))
             .build();
         assert_eq!(manager.timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn refresh_explorer_receives_manager_timeout() {
+        let custom_timeout = Duration::from_millis(500);
+        // FakeBackend has no items, so add_item will not short-circuit with AlreadyExists.
+        let backend = Arc::new(FakeBackend::with_items(vec![]));
+        let manager = QuickAccessManager::with_backend_for_tests(custom_timeout, backend.clone());
+
+        // add_item with refresh_explorer option triggers refresh_explorer on the backend.
+        let _ = manager.add_item(
+            "C:\\Projects\\report.docx",
+            QuickAccess::RecentFiles,
+            AddOptions::new().refresh_explorer(),
+        );
+
+        let recorded = backend.refresh_explorer_timeouts.lock().unwrap().clone();
+        assert!(
+            !recorded.is_empty(),
+            "refresh_explorer must be called when option is enabled"
+        );
+        assert!(
+            recorded.iter().all(|&t| t == custom_timeout),
+            "each refresh_explorer call must receive the manager-configured timeout"
+        );
     }
 
     #[test]

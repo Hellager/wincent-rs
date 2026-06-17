@@ -34,7 +34,6 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations
-#[cfg(test)]
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const FREQUENT_FOLDER_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(1);
 const FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -47,9 +46,14 @@ extern "system" {
 }
 
 fn current_windows_build_number() -> WincentResult<u32> {
-    let mut version_info = OSVERSIONINFOW::default();
-    version_info.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+    let mut version_info = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
 
+    // SAFETY: version_info is initialized with the correct size in `dwOSVersionInfoSize`.
+    // RtlGetVersion fills the struct in-place. This is the recommended API for reliable
+    // OS version detection that bypasses compatibility shims.
     let status = unsafe { RtlGetVersion(&mut version_info) };
     if status != 0 {
         return Err(WincentError::SystemError(format!(
@@ -67,6 +71,9 @@ fn is_windows_11_or_later() -> WincentResult<bool> {
 fn invoke_verb_on_self_current_sta(path: &str, verb: &str) -> WincentResult<()> {
     let folder = shell_folder(path)?;
 
+    // SAFETY: This runs on a COM-initialized STA thread. `folder` is a live
+    // Shell Folder interface for `path`, and the verb VARIANT lives until
+    // InvokeVerb returns.
     unsafe {
         let folder3: Folder3 = folder.cast().map_err(|e| {
             WincentError::SystemError(format!("Failed to cast to Folder3 for {}: {}", path, e))
@@ -92,6 +99,7 @@ fn contains_frequent_folder_current_sta(path: &str) -> WincentResult<bool> {
     let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
     let items = folder_items(&folder)?;
 
+    // SAFETY: `items` is a live FolderItems collection on the current STA thread.
     let count = unsafe {
         items
             .Count()
@@ -100,6 +108,8 @@ fn contains_frequent_folder_current_sta(path: &str) -> WincentResult<bool> {
 
     for index in 0..count {
         let index_variant = VARIANT::from(index);
+        // SAFETY: The collection is live for the loop and the index VARIANT
+        // lives until Item returns. Per-item failures are skipped.
         let item = unsafe {
             match items.Item(&index_variant) {
                 Ok(item) => item,
@@ -121,6 +131,7 @@ fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> Win
     let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
     let items = folder_items(&folder)?;
 
+    // SAFETY: `items` is a live FolderItems collection on the current STA thread.
     let count = unsafe {
         items
             .Count()
@@ -129,6 +140,8 @@ fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> Win
 
     for index in 0..count {
         let index_variant = VARIANT::from(index);
+        // SAFETY: The collection is live for the loop and the index VARIANT
+        // lives until Item returns. Per-item failures are skipped.
         let item = unsafe {
             match items.Item(&index_variant) {
                 Ok(item) => item,
@@ -139,6 +152,8 @@ fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> Win
         if let Some(item_path_str) = item_path(&item) {
             if paths_equal(&item_path_str, path) {
                 let verb_variant = VARIANT::from(verb);
+                // SAFETY: `item` is a live FolderItem and `verb_variant`
+                // remains alive for the synchronous InvokeVerb call.
                 unsafe {
                     item.InvokeVerb(&verb_variant).map_err(|e| {
                         WincentError::SystemError(format!(
@@ -375,6 +390,7 @@ fn frequent_folder_pinned_status_from_entries(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_unpin_frequent_folder_state_machine<C, N, S, W, Sleep>(
     path: &str,
     pinned_status: PinnedStatus,
@@ -563,6 +579,7 @@ fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Win
 ///
 /// - [`crate::script_executor::ScriptExecutor`] - PowerShell script executor
 /// - [`crate::script_storage::ScriptStorage`] - Script storage and retrieval
+#[allow(dead_code)]
 pub(crate) fn execute_script_with_validation(
     script: PSScript,
     path: &str,
@@ -633,6 +650,9 @@ fn parse_script_execution_result(
 
 /// Inner: runs on the current STA thread. Only call from within `run_on_sta_thread`.
 fn add_file_to_recent_native_current_sta(path: &str) -> WincentResult<()> {
+    // SAFETY: `path` was validated before reaching here; the wide string is
+    // null-terminated and its lifetime extends past the SHAddToRecentDocs call.
+    // SHARD_PATHW instructs the Shell to accept a wide-string path pointer.
     unsafe {
         let file_path_wide: Vec<u16> = OsString::from(path)
             .encode_wide()
@@ -731,6 +751,7 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
             let folder = shell_folder(recent_namespace)?;
             let items = folder_items(&folder)?;
 
+            // SAFETY: `items` is a live FolderItems collection on the STA worker.
             let count = unsafe {
                 items.Count().map_err(|e| {
                     WincentError::SystemError(format!("Failed to get item count: {}", e))
@@ -740,6 +761,8 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
             // Search for the target file
             for index in 0..count {
                 let index_variant = VARIANT::from(index);
+                // SAFETY: `items` is live for this loop and the VARIANT index
+                // lives until Item returns. Per-item failures are skipped.
                 let item = unsafe {
                     match items.Item(&index_variant) {
                         Ok(item) => item,
@@ -748,6 +771,7 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
                 };
 
                 // Check if this is a file (not folder)
+                // SAFETY: `item` is a live FolderItem returned by the Shell collection.
                 let is_folder = unsafe { item.IsFolder().map(bool::from).unwrap_or(true) };
                 if is_folder {
                     continue;
@@ -757,6 +781,8 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
                     if paths_equal(&item_path_str, &path) {
                         // Found the file, invoke remove verb
                         let verb_variant = VARIANT::from("remove");
+                        // SAFETY: `item` is a live FolderItem and the verb
+                        // VARIANT remains alive until InvokeVerb returns.
                         unsafe {
                             item.InvokeVerb(&verb_variant).map_err(|e| {
                                 WincentError::SystemError(format!(
@@ -807,11 +833,38 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
 ///
 /// - [`remove_recent_file_native()`] - Native COM implementation (fast path)
 /// - [`remove_from_recent_files()`] - Public wrapper with fallback strategy
+#[allow(dead_code)]
 pub(crate) fn remove_recent_file_powershell(path: &str) -> WincentResult<()> {
-    match execute_script_with_validation(PSScript::RemoveRecentFile, path, PathType::File) {
+    remove_recent_file_powershell_with_timeout(path, DEFAULT_COM_TIMEOUT)
+}
+
+fn remove_recent_file_powershell_with_timeout(path: &str, timeout: Duration) -> WincentResult<()> {
+    match execute_remove_recent_file_script_with_timeout(
+        path,
+        timeout,
+        |script, parameter, timeout| {
+            ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
+        },
+    ) {
         Err(error) => Err(map_remove_recent_file_powershell_error(path, error)),
         ok => ok,
     }
+}
+
+fn execute_remove_recent_file_script_with_timeout<F>(
+    path: &str,
+    timeout: Duration,
+    mut execute: F,
+) -> WincentResult<()>
+where
+    F: FnMut(PSScript, Option<&str>, Duration) -> WincentResult<std::process::Output>,
+{
+    execute_script_with_validation_and_timeout(
+        PSScript::RemoveRecentFile,
+        path,
+        PathType::File,
+        |script, parameter| execute(script, parameter, timeout),
+    )
 }
 
 fn map_remove_recent_file_powershell_error(path: &str, error: WincentError) -> WincentError {
@@ -857,8 +910,31 @@ fn map_remove_recent_file_powershell_error(path: &str, error: WincentError) -> W
 ///
 /// - [`pin_frequent_folder_native()`] - Native COM implementation (fast path)
 /// - [`pin_frequent_folder()`] - Internal wrapper with fallback strategy
+#[allow(dead_code)]
 fn pin_frequent_folder_powershell(path: &str) -> WincentResult<()> {
-    execute_script_with_validation(PSScript::PinToFrequentFolder, path, PathType::Directory)
+    pin_frequent_folder_powershell_with_timeout(path, DEFAULT_COM_TIMEOUT)
+}
+
+fn pin_frequent_folder_powershell_with_timeout(path: &str, timeout: Duration) -> WincentResult<()> {
+    execute_pin_frequent_folder_script_with_timeout(path, timeout, |script, parameter, timeout| {
+        ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
+    })
+}
+
+fn execute_pin_frequent_folder_script_with_timeout<F>(
+    path: &str,
+    timeout: Duration,
+    mut execute: F,
+) -> WincentResult<()>
+where
+    F: FnMut(PSScript, Option<&str>, Duration) -> WincentResult<std::process::Output>,
+{
+    execute_script_with_validation_and_timeout(
+        PSScript::PinToFrequentFolder,
+        path,
+        PathType::Directory,
+        |script, parameter| execute(script, parameter, timeout),
+    )
 }
 
 fn pin_frequent_folder_with_fallback<N, P>(mut native: N, mut powershell: P) -> WincentResult<()>
@@ -988,7 +1064,7 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
     // from the native check+pin path and must not be retried via PowerShell.
     pin_frequent_folder_with_fallback(
         || pin_frequent_folder_native(path, timeout),
-        || pin_frequent_folder_powershell(path),
+        || pin_frequent_folder_powershell_with_timeout(path, timeout),
     )
 }
 
@@ -1428,7 +1504,7 @@ pub(crate) fn remove_from_recent_files_with_timeout(
         Ok(()) => Ok(()),
         Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
         Err(e @ WincentError::InvalidPath(_)) => Err(e),
-        Err(_) => remove_recent_file_powershell(path),
+        Err(_) => remove_recent_file_powershell_with_timeout(path, timeout),
     }
 }
 
@@ -1529,10 +1605,14 @@ mod tests {
     // Tries "unpinfromhome" first (Windows 10), falls back to "pintohome" toggle (Windows 11).
     fn unpin_folder_item(item: &FolderItem) -> WincentResult<()> {
         let verb_variant = VARIANT::from("unpinfromhome");
+        // SAFETY: Test helper receives a live FolderItem from a COM STA worker;
+        // the verb VARIANT remains alive for the InvokeVerb call.
         match unsafe { item.InvokeVerb(&verb_variant) } {
             Ok(()) => Ok(()),
             Err(_) => {
                 let verb_variant = VARIANT::from("pintohome");
+                // SAFETY: Same live FolderItem as above, with the Windows 11
+                // fallback verb VARIANT alive until InvokeVerb returns.
                 unsafe {
                     item.InvokeVerb(&verb_variant).map_err(|e| {
                         WincentError::SystemError(format!("Failed to unpin folder item: {}", e))
@@ -2355,6 +2435,71 @@ mod tests {
     }
 
     #[test]
+    fn remove_recent_file_script_uses_caller_timeout() -> WincentResult<()> {
+        use std::os::windows::process::ExitStatusExt;
+        use std::process::Output;
+
+        let temp_file =
+            tempfile::NamedTempFile::new().map_err(|e| WincentError::SystemError(e.to_string()))?;
+        let file = temp_file.path().to_string_lossy().into_owned();
+        let expected_file = file.clone();
+        let expected_timeout = Duration::from_millis(1234);
+        let observed_timeout = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let observed_timeout_for_closure = std::rc::Rc::clone(&observed_timeout);
+
+        execute_remove_recent_file_script_with_timeout(
+            &file,
+            expected_timeout,
+            move |script, parameter, timeout| {
+                assert_eq!(script, PSScript::RemoveRecentFile);
+                assert_eq!(parameter, Some(expected_file.as_str()));
+                *observed_timeout_for_closure.borrow_mut() = Some(timeout);
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            },
+        )?;
+
+        assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
+        Ok(())
+    }
+
+    #[test]
+    fn pin_frequent_folder_script_uses_caller_timeout() -> WincentResult<()> {
+        use std::os::windows::process::ExitStatusExt;
+        use std::process::Output;
+
+        let temp_dir = tempfile::tempdir().map_err(|e| WincentError::SystemError(e.to_string()))?;
+        let folder = temp_dir.path().join("timeout-pin");
+        std::fs::create_dir(&folder).map_err(WincentError::Io)?;
+        let folder = folder.to_string_lossy().into_owned();
+        let expected_folder = folder.clone();
+        let expected_timeout = Duration::from_millis(1234);
+        let observed_timeout = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let observed_timeout_for_closure = std::rc::Rc::clone(&observed_timeout);
+
+        execute_pin_frequent_folder_script_with_timeout(
+            &folder,
+            expected_timeout,
+            move |script, parameter, timeout| {
+                assert_eq!(script, PSScript::PinToFrequentFolder);
+                assert_eq!(parameter, Some(expected_folder.as_str()));
+                *observed_timeout_for_closure.borrow_mut() = Some(timeout);
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            },
+        )?;
+
+        assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
+        Ok(())
+    }
+
+    #[test]
     fn unpin_frequent_folder_powershell_sentinel_maps_to_not_in_quick_access() {
         let error = WincentError::PowerShellExecution(Box::new(
             crate::error::PowerShellError::builder(
@@ -2547,6 +2692,7 @@ mod tests {
                 let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
                 let items = folder_items(&folder)?;
 
+                // SAFETY: `items` is a live FolderItems collection on the STA worker.
                 let count = unsafe {
                     items.Count().map_err(|e| {
                         WincentError::SystemError(format!("Failed to get item count: {}", e))
@@ -2555,6 +2701,8 @@ mod tests {
 
                 for index in 0..count {
                     let index_variant = VARIANT::from(index);
+                    // SAFETY: `items` is live for this loop and the VARIANT
+                    // index lives until Item returns. Per-item failures are skipped.
                     let item = unsafe {
                         match items.Item(&index_variant) {
                             Ok(item) => item,
@@ -2638,6 +2786,8 @@ mod tests {
         let test_file = create_test_file(&test_dir, "s_false_test.txt", "content")?;
         let test_path = path_to_str(&test_file)?;
 
+        // SAFETY: The test pairs each successful CoInitializeEx with
+        // CoUninitialize on the same thread.
         unsafe {
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             assert_eq!(hr.0, 0, "First CoInitializeEx should return S_OK");
@@ -2672,6 +2822,8 @@ mod tests {
         // Calling from an MTA thread must NOT return ComApartmentMismatch.
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
+        // SAFETY: The MTA initialization in this test is balanced by
+        // CoUninitialize before returning.
         unsafe {
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
             assert!(hr.is_ok() || hr.0 == 1, "MTA init should succeed");

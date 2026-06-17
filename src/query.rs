@@ -18,7 +18,7 @@
 
 #[cfg(test)]
 use crate::com::{ComGuard, ComInitStatus};
-use crate::{error::WincentError, QuickAccess, WincentResult};
+use crate::{error::WincentError, utils::paths_equal, QuickAccess, WincentResult};
 use std::time::Duration;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER};
 use windows::Win32::System::Variant::VARIANT;
@@ -94,6 +94,8 @@ fn query_namespace_for(qa_type: QuickAccess) -> (&'static str, QueryFilter) {
 /// This function calls unsafe COM methods (`IsFolder()`). The caller must ensure
 /// the FolderItem is valid and COM is properly initialized.
 fn should_keep_item(item: &FolderItem, filter: &QueryFilter) -> bool {
+    // SAFETY: Callers pass FolderItem values obtained from a live Shell COM
+    // collection while running on a COM-initialized thread.
     unsafe {
         match filter {
             QueryFilter::All => true,
@@ -122,6 +124,8 @@ fn should_keep_item(item: &FolderItem, filter: &QueryFilter) -> bool {
 /// This function calls unsafe COM methods (`Path()`). The caller must ensure
 /// the FolderItem is valid and COM is properly initialized.
 pub(crate) fn item_path(item: &FolderItem) -> Option<String> {
+    // SAFETY: Callers pass a live FolderItem interface obtained from Shell COM;
+    // Path returns a COM BSTR copied into an owned Rust String before returning.
     unsafe {
         item.Path().ok().and_then(|path| {
             let value = path.to_string();
@@ -152,6 +156,8 @@ pub(crate) fn item_path(item: &FolderItem) -> Option<String> {
 ///
 /// This function calls unsafe COM methods. The caller must ensure COM is properly initialized.
 pub(crate) fn folder_items(folder: &Folder) -> WincentResult<FolderItems> {
+    // SAFETY: `folder` is a live Shell Folder interface and COM is initialized
+    // by the caller's STA worker or test guard.
     unsafe {
         folder.Items().map_err(|e| {
             WincentError::SystemError(format!("Failed to enumerate Quick Access items: {}", e))
@@ -175,6 +181,8 @@ pub(crate) fn folder_items(folder: &Folder) -> WincentResult<FolderItems> {
 ///
 /// This function calls unsafe COM methods. The caller must ensure COM is properly initialized.
 pub(crate) fn shell_dispatch() -> WincentResult<IShellDispatch> {
+    // SAFETY: Called only after COM initialization. CoCreateInstance returns an
+    // interface pointer managed by the windows crate wrapper.
     unsafe {
         CoCreateInstance(&Shell, None, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER).map_err(|e| {
             WincentError::SystemError(format!("Failed to create Shell COM object: {}", e))
@@ -208,6 +216,8 @@ pub(crate) fn shell_folder(namespace: &str) -> WincentResult<Folder> {
     let shell = shell_dispatch()?;
     let variant = VARIANT::from(namespace);
 
+    // SAFETY: `shell` is a live IShellDispatch interface and `variant`
+    // contains a namespace string that lives until NameSpace returns.
     unsafe {
         shell.NameSpace(&variant).map_err(|e| {
             WincentError::SystemError(format!(
@@ -252,6 +262,8 @@ fn query_recent_native_single_current_sta(qa_type: QuickAccess) -> WincentResult
     let (namespace, filter) = query_namespace_for(qa_type);
     let folder = shell_folder(namespace)?;
     let items = folder_items(&folder)?;
+    // SAFETY: `items` is a live FolderItems collection obtained from the
+    // current STA thread; Count reads collection metadata only.
     let count = unsafe {
         items.Count().map_err(|e| {
             WincentError::SystemError(format!("Failed to read Quick Access item count: {}", e))
@@ -262,6 +274,8 @@ fn query_recent_native_single_current_sta(qa_type: QuickAccess) -> WincentResult
 
     for index in 0..count {
         let index_variant = VARIANT::from(index);
+        // SAFETY: `items` is live for this loop and the VARIANT index lives
+        // until Item returns. Individual COM failures are skipped.
         let item = unsafe {
             match items.Item(&index_variant) {
                 Ok(item) => item,
@@ -418,12 +432,39 @@ pub(crate) fn query_recent_with_timeout(
     qa_type: QuickAccess,
     timeout: Duration,
 ) -> WincentResult<Vec<String>> {
+    if qa_type == QuickAccess::All {
+        return query_recent_all_merged(timeout);
+    }
     // Try native COM first (fast path)
-    let qa_type_clone = qa_type;
     query_recent_native_with_timeout(qa_type, timeout).or_else(|_native_error| {
         // Fallback to PowerShell if COM fails (compatibility)
-        query_recent_powershell_with_timeout(qa_type_clone, timeout)
+        query_recent_powershell_with_timeout(qa_type, timeout)
     })
+}
+
+/// Queries both Recent Files and Frequent Folders and returns a merged,
+/// deduplicated list (recent items first, then frequent folders).
+fn query_recent_all_merged(timeout: Duration) -> WincentResult<Vec<String>> {
+    query_recent_all_merged_using(timeout, query_recent_with_timeout)
+}
+
+fn query_recent_all_merged_using<F>(timeout: Duration, mut query: F) -> WincentResult<Vec<String>>
+where
+    F: FnMut(QuickAccess, Duration) -> WincentResult<Vec<String>>,
+{
+    let recent = query(QuickAccess::RecentFiles, timeout)?;
+    let frequent = query(QuickAccess::FrequentFolders, timeout)?;
+
+    Ok(merge_quick_access_items(recent, frequent))
+}
+
+fn merge_quick_access_items(mut recent: Vec<String>, frequent: Vec<String>) -> Vec<String> {
+    for path in frequent {
+        if !recent.iter().any(|existing| paths_equal(existing, &path)) {
+            recent.push(path);
+        }
+    }
+    recent
 }
 
 /****************************************************** Query Quick Access ******************************************************/
@@ -905,21 +946,27 @@ mod tests {
     }
 
     #[test]
-    fn powershell_all_dispatches_directly_to_query_quick_access() -> WincentResult<()> {
+    fn all_query_dispatches_to_recent_and_frequent_with_same_timeout() -> WincentResult<()> {
         let mut calls = Vec::new();
         let timeout = Duration::from_secs(3);
 
-        let result =
-            query_recent_powershell_with_timeout_using(QuickAccess::All, timeout, |qa_type, t| {
-                calls.push((qa_type, t));
-                Ok(vec!["C:\\QuickAccessItem".to_string()])
-            })?;
+        let result = query_recent_all_merged_using(timeout, |qa_type, t| {
+            calls.push((qa_type, t));
+            match qa_type {
+                QuickAccess::RecentFiles => Ok(vec!["C:\\Recent.txt".to_string()]),
+                QuickAccess::FrequentFolders => Ok(vec!["C:\\Folder".to_string()]),
+                QuickAccess::All => unreachable!("All should be decomposed before querying"),
+            }
+        })?;
 
-        assert_eq!(result, vec!["C:\\QuickAccessItem".to_string()]);
+        assert_eq!(result, vec!["C:\\Recent.txt", "C:\\Folder"]);
         assert_eq!(
             calls,
-            vec![(QuickAccess::All, timeout)],
-            "PowerShell fallback for All should execute QueryQuickAccess once"
+            vec![
+                (QuickAccess::RecentFiles, timeout),
+                (QuickAccess::FrequentFolders, timeout)
+            ],
+            "All should query RecentFiles and FrequentFolders with the caller timeout"
         );
         Ok(())
     }
@@ -1275,6 +1322,8 @@ mod tests {
             CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
         };
 
+        // SAFETY: This test explicitly pairs each successful CoInitializeEx
+        // call with CoUninitialize on the same thread to verify reference balance.
         unsafe {
             // Cycle 1: User init -> library call -> user uninit
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -1344,6 +1393,8 @@ mod tests {
         // RPC_E_CHANGED_MODE when called from an MTA thread.
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
+        // SAFETY: The MTA initialization in this test is balanced by
+        // CoUninitialize before returning.
         unsafe {
             // Initialize as MTA (multi-threaded apartment)
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -1384,6 +1435,8 @@ mod tests {
         // so an MTA-initialized caller should not force RPC_E_CHANGED_MODE.
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 
+        // SAFETY: The MTA initialization in this test is balanced by
+        // CoUninitialize before returning.
         unsafe {
             // Initialize as MTA
             let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -1534,5 +1587,63 @@ mod tests {
         println!("\nOverall Speedup: {:.2}x", ps_avg / native_avg);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    fn merged(recent: &[&str], frequent: &[&str]) -> Vec<String> {
+        merge_quick_access_items(
+            recent.iter().map(|s| s.to_string()).collect(),
+            frequent.iter().map(|s| s.to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn all_merge_puts_recent_first_then_frequent() {
+        let result = merged(&["C:\\file.txt"], &["C:\\folder"]);
+        assert_eq!(result, vec!["C:\\file.txt", "C:\\folder"]);
+    }
+
+    #[test]
+    fn all_merge_deduplicates_case_insensitive() {
+        let result = merged(&["C:\\Projects"], &["c:\\projects"]);
+        assert_eq!(result.len(), 1, "duplicate path should be deduplicated");
+        assert_eq!(result[0], "C:\\Projects");
+    }
+
+    #[test]
+    fn all_merge_deduplicates_slash_variants() {
+        let result = merged(&["C:\\Projects\\foo"], &["C:/Projects/foo"]);
+        assert_eq!(
+            result.len(),
+            1,
+            "forward/back slash variants should be deduped"
+        );
+    }
+
+    #[test]
+    fn all_merge_keeps_distinct_paths() {
+        let result = merged(&["C:\\a.txt", "C:\\b.txt"], &["C:\\folder1", "C:\\folder2"]);
+        assert_eq!(result.len(), 4);
+        assert_eq!(
+            &result[..2],
+            &["C:\\a.txt", "C:\\b.txt"],
+            "recent items come first"
+        );
+        assert_eq!(
+            &result[2..],
+            &["C:\\folder1", "C:\\folder2"],
+            "frequent items come last"
+        );
+    }
+
+    #[test]
+    fn all_merge_empty_inputs() {
+        assert_eq!(merged(&[], &[]), Vec::<String>::new());
+        assert_eq!(merged(&["C:\\a"], &[]), vec!["C:\\a"]);
+        assert_eq!(merged(&[], &["C:\\b"]), vec!["C:\\b"]);
     }
 }
