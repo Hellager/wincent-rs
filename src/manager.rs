@@ -7,6 +7,10 @@ use crate::{
     empty::{self, EmptyOptions},
     error::{QuickAccessPostMutationStep, WincentError},
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
+    restore::{
+        self, FrequentRestoreReport, RecentRestoreReport, RestoreDefaultsOptions,
+        RestoreDefaultsReport,
+    },
     utils::paths_equal,
     QuickAccess, RetryPolicy, WincentResult,
 };
@@ -832,6 +836,35 @@ impl QuickAccessManager {
         empty::empty_items_with_backend(qa_type, options, self.timeout, self.backend.as_ref())
     }
 
+    /// Restores Quick Access categories to their system-default state.
+    ///
+    /// Restore progress and workflow failures are captured in the returned
+    /// report. The `Result` only represents API-level failures that prevent a
+    /// report from being produced.
+    pub fn restore_defaults(
+        &self,
+        qa_type: QuickAccess,
+        options: RestoreDefaultsOptions,
+    ) -> WincentResult<RestoreDefaultsReport> {
+        restore::restore_defaults(qa_type, options, self.backend.as_ref())
+    }
+
+    /// Restores Recent Files to its system-default state.
+    pub fn restore_recent_files_defaults(
+        &self,
+        options: RestoreDefaultsOptions,
+    ) -> WincentResult<RecentRestoreReport> {
+        restore::restore_recent_files_defaults(options, self.backend.as_ref())
+    }
+
+    /// Restores Frequent Folders to its system-default state.
+    pub fn restore_frequent_folders_defaults(
+        &self,
+        options: RestoreDefaultsOptions,
+    ) -> WincentResult<FrequentRestoreReport> {
+        restore::restore_frequent_folders_defaults(options, self.backend.as_ref())
+    }
+
     /// Checks whether a Quick Access section is visible in Explorer.
     ///
     /// # Errors
@@ -1196,11 +1229,14 @@ mod tests {
     struct FakeBackend {
         items: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
+        lnk_files: Mutex<Vec<PathBuf>>,
         get_item_timeouts: Mutex<Vec<Duration>>,
         validate_path_error: Mutex<Option<WincentError>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
         delete_recent_files_backing_data_error: Mutex<Option<WincentError>>,
         refresh_explorer_error: Mutex<Option<WincentError>>,
+        clear_recent_files_error: Mutex<Option<WincentError>>,
+        frequent_rebuild_entries: Mutex<Vec<crate::destlist::DestListEntry>>,
     }
 
     impl FakeBackend {
@@ -1208,11 +1244,14 @@ mod tests {
             Self {
                 items: Mutex::new(items),
                 calls: Mutex::new(Vec::new()),
+                lnk_files: Mutex::new(Vec::new()),
                 get_item_timeouts: Mutex::new(Vec::new()),
                 validate_path_error: Mutex::new(None),
                 add_frequent_folder_error: Mutex::new(None),
                 delete_recent_files_backing_data_error: Mutex::new(None),
                 refresh_explorer_error: Mutex::new(None),
+                clear_recent_files_error: Mutex::new(None),
+                frequent_rebuild_entries: Mutex::new(Vec::new()),
             }
         }
 
@@ -1242,6 +1281,14 @@ mod tests {
 
         fn fail_refresh_explorer_with(&self, error: WincentError) {
             *self.refresh_explorer_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_clear_recent_files_with(&self, error: WincentError) {
+            *self.clear_recent_files_error.lock().unwrap() = Some(error);
+        }
+
+        fn set_frequent_rebuild_entries(&self, entries: Vec<crate::destlist::DestListEntry>) {
+            *self.frequent_rebuild_entries.lock().unwrap() = entries;
         }
     }
 
@@ -1298,6 +1345,25 @@ mod tests {
             Ok(())
         }
 
+        fn list_recent_lnk_files(&self) -> WincentResult<Vec<PathBuf>> {
+            self.record("list_recent_lnk_files");
+            Ok(self.lnk_files.lock().unwrap().clone())
+        }
+
+        fn delete_lnk_file(&self, path: &Path) -> WincentResult<()> {
+            self.record(format!("delete_lnk_file:{}", path.display()));
+            Ok(())
+        }
+
+        fn resolve_lnk_with_type(
+            &self,
+            path: &Path,
+            _timeout: Duration,
+        ) -> WincentResult<Option<crate::recent_links::LnkResolution>> {
+            self.record(format!("resolve_lnk_with_type:{}", path.display()));
+            Ok(None)
+        }
+
         fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
             self.record("delete_recent_files_backing_data");
             if let Some(error) = self
@@ -1311,8 +1377,24 @@ mod tests {
             Ok(())
         }
 
+        fn delete_frequent_folders_backing_file(&self) -> WincentResult<()> {
+            self.record("delete_frequent_folders_backing_file");
+            Ok(())
+        }
+
+        fn wait_for_frequent_folders_rebuild(
+            &self,
+            _timeout: Duration,
+        ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
+            self.record("wait_for_frequent_folders_rebuild");
+            Ok(self.frequent_rebuild_entries.lock().unwrap().clone())
+        }
+
         fn clear_recent_files(&self, _timeout: Duration) -> WincentResult<()> {
             self.record("clear_recent_files");
+            if let Some(error) = self.clear_recent_files_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -1986,6 +2068,137 @@ mod tests {
             result.failed()[0].error(),
             WincentError::InvalidPath(_)
         ));
+    }
+
+    #[test]
+    fn restore_recent_files_defaults_returns_report_and_records_sequence() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let report = manager.restore_recent_files_defaults(RestoreDefaultsOptions::new())?;
+
+        assert!(report.success());
+        assert!(report.recent_files_cleared());
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "list_recent_lnk_files".to_string(),
+                "clear_recent_files".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_recent_files_failure_is_captured_in_report() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        backend.fail_clear_recent_files_with(WincentError::SystemError("clear failed".to_string()));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let report = manager.restore_recent_files_defaults(RestoreDefaultsOptions::new())?;
+
+        assert!(!report.success());
+        assert!(!report.recent_files_cleared());
+        assert!(matches!(
+            report.error(),
+            Some(WincentError::SystemError(message)) if message == "clear failed"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_frequent_folders_defaults_success_records_sequence() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        backend.set_frequent_rebuild_entries(vec![destlist_entry_for_test("knownfolder:{guid}")]);
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let report = manager.restore_frequent_folders_defaults(
+            RestoreDefaultsOptions::new().with_rebuild_delay(Duration::ZERO),
+        )?;
+
+        assert!(report.success());
+        assert!(report.backing_file_deleted());
+        assert!(report.rebuilt());
+        assert!(report.non_default_raw_paths().is_empty());
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "list_recent_lnk_files".to_string(),
+                "delete_frequent_folders_backing_file".to_string(),
+                "refresh_explorer".to_string(),
+                "wait_for_frequent_folders_rebuild".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_defaults_all_reports_recent_and_frequent_progress() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        backend.fail_refresh_explorer_with(WincentError::SystemError("refresh failed".to_string()));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let report = manager.restore_defaults(
+            QuickAccess::All,
+            RestoreDefaultsOptions::new()
+                .with_rebuild_delay(Duration::ZERO)
+                .with_rebuild_poll_timeout(Duration::ZERO),
+        )?;
+
+        assert!(report.recent_report().is_some_and(|report| report.success()));
+        assert!(report
+            .frequent_report()
+            .is_some_and(|report| !report.success()));
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "list_recent_lnk_files".to_string(),
+                "clear_recent_files".to_string(),
+                "list_recent_lnk_files".to_string(),
+                "delete_frequent_folders_backing_file".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    fn destlist_entry_for_test(raw_path: &str) -> crate::destlist::DestListEntry {
+        crate::destlist::DestListEntry {
+            entry_offset: 0,
+            entry_len: 0,
+            mru_position: 0,
+            checksum: 0,
+            entry_id: 0,
+            entry_number: 0,
+            entry_number_unknown: 0,
+            hostname: String::new(),
+            volume_droid: String::new(),
+            file_droid: String::new(),
+            volume_birth_droid: String::new(),
+            file_birth_droid: String::new(),
+            file_droid_mac: String::new(),
+            stream_name: String::new(),
+            raw_path: raw_path.to_string(),
+            path: raw_path.to_string(),
+            pin_status: -1,
+            pin_order: None,
+            rank: 0,
+            recent_rank: 0,
+            count: 0,
+            access_count: 0,
+            score: 0.0,
+            last_access_filetime: None,
+            last_interaction_filetime: None,
+            sps_size: None,
+            reserved_78: None,
+            reserved_7c: None,
+            path_sources: Vec::new(),
+            warnings: Vec::new(),
+        }
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {

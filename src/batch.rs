@@ -729,6 +729,22 @@ mod tests {
             Ok(())
         }
 
+        fn list_recent_lnk_files(&self) -> WincentResult<Vec<std::path::PathBuf>> {
+            Ok(Vec::new())
+        }
+
+        fn delete_lnk_file(&self, _path: &std::path::Path) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn resolve_lnk_with_type(
+            &self,
+            _path: &std::path::Path,
+            _timeout: Duration,
+        ) -> WincentResult<Option<crate::recent_links::LnkResolution>> {
+            Ok(None)
+        }
+
         fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
             self.calls
                 .lock()
@@ -743,6 +759,17 @@ mod tests {
                 return Err(error);
             }
             Ok(())
+        }
+
+        fn delete_frequent_folders_backing_file(&self) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn wait_for_frequent_folders_rebuild(
+            &self,
+            _timeout: Duration,
+        ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
+            Ok(Vec::new())
         }
 
         fn clear_recent_files(&self, _timeout: Duration) -> WincentResult<()> {

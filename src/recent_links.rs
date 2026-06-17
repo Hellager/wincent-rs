@@ -8,10 +8,18 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, WIN32_FIND_DATAW};
 use windows::Win32::System::Com::{
     CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER, STGM_READ,
 };
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink, SLGP_RAWPATH, SLR_NOUPDATE, SLR_NO_UI};
+
+/// Resolved shortcut target plus best-effort target type information.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LnkResolution {
+    pub(crate) path: String,
+    pub(crate) is_dir: Option<bool>,
+}
 
 /// Deletes Recent-folder `.lnk` files whose resolved target equals `target`.
 pub(crate) fn delete_recent_links_for_target(
@@ -79,6 +87,18 @@ pub(crate) fn resolve_lnk_target(
 }
 
 fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<Option<String>> {
+    Ok(resolve_lnk_with_type_on_sta(lnk_path)?.map(|resolution| resolution.path))
+}
+
+pub(crate) fn resolve_lnk_with_type(
+    lnk_path: &Path,
+    timeout: Duration,
+) -> WincentResult<Option<LnkResolution>> {
+    let path = lnk_path.to_path_buf();
+    crate::com_thread::run_on_sta_thread(move || resolve_lnk_with_type_on_sta(&path), timeout)
+}
+
+fn resolve_lnk_with_type_on_sta(lnk_path: &Path) -> WincentResult<Option<LnkResolution>> {
     let mut link_path = os_str_to_wide_null(lnk_path.as_os_str());
 
     let shell_link: IShellLinkW = unsafe {
@@ -108,9 +128,10 @@ fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<Option<String>> {
     }
 
     let mut target = vec![0u16; 32768];
+    let mut find_data = WIN32_FIND_DATAW::default();
     unsafe {
         if shell_link
-            .GetPath(&mut target, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32)
+            .GetPath(&mut target, &mut find_data, SLGP_RAWPATH.0 as u32)
             .is_err()
         {
             return Ok(None);
@@ -125,7 +146,27 @@ fn resolve_lnk_target_on_sta(lnk_path: &Path) -> WincentResult<Option<String>> {
         return Ok(None);
     }
 
-    Ok(Some(String::from_utf16_lossy(&target[..end])))
+    let path = String::from_utf16_lossy(&target[..end]);
+    let is_dir = lnk_target_is_dir(&path, &find_data);
+
+    Ok(Some(LnkResolution { path, is_dir }))
+}
+
+fn lnk_target_is_dir(path: &str, find_data: &WIN32_FIND_DATAW) -> Option<bool> {
+    let attributes = find_data.dwFileAttributes;
+    if attributes != 0 {
+        return Some((attributes & FILE_ATTRIBUTE_DIRECTORY.0) != 0);
+    }
+
+    // When Shell Link does not populate WIN32_FIND_DATAW (for example an
+    // unavailable UNC/network target), filesystem metadata may fail with
+    // access, connectivity, or other errors. Treat those as unknown so restore
+    // flows apply their "unknown target" deletion policy.
+    match fs::metadata(path) {
+        Ok(metadata) => Some(metadata.is_dir()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => None,
+    }
 }
 
 pub(crate) fn is_lnk_file(path: &Path) -> bool {

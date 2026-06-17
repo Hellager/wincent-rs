@@ -1146,7 +1146,7 @@ fn resolve_path(cfb: &CompoundFile, stream_name: &str, raw_path: &str) -> Resolv
     }
 }
 
-fn starts_with_knownfolder(raw_path: &str) -> bool {
+pub(crate) fn starts_with_knownfolder(raw_path: &str) -> bool {
     raw_path
         .get(..raw_path.len().min("knownfolder:".len()))
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("knownfolder:"))
