@@ -103,6 +103,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "classify" => cmd_classify(&args[1..]),
         "invalid-path" => cmd_invalid_path(&args[1..]),
         "visible" => cmd_visible(&manager, &args[1..]),
+        "restore" => cmd_restore(&manager, &args[1..]),
         "dest" => cmd_dest(&manager, &args[1..]),
         other => Err(WincentError::InvalidArgument(format!(
             "unknown command: {other}"
@@ -167,6 +168,7 @@ Core:
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
   empty <recent|frequent|all> [--pinned] [--refresh-explorer]
+  restore <recent|frequent|all> [--no-refresh-explorer] [--rebuild-delay-ms N] [--rebuild-poll-timeout-ms N] [--lnk-resolve-timeout-ms N] [--clear-timeout-ms N]
 Utility APIs:
   retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
   classify <stderr text>
@@ -412,6 +414,55 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
 
     manager.empty_items(qa_type, options)?;
     println!("cleared {}", category_name(qa_type));
+    Ok(())
+}
+
+fn cmd_restore(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 1, "restore <recent|frequent|all> [options]")?;
+    let qa_type = parse_category(&args[0], true)?;
+    let mut options = RestoreDefaultsOptions::new();
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--no-refresh-explorer" => options = options.with_refresh_explorer(false),
+            "--rebuild-delay-ms" => {
+                index += 1;
+                options = options.with_rebuild_delay(Duration::from_millis(parse_u64(
+                    required_arg(args.get(index), "rebuild-delay-ms")?,
+                    "rebuild-delay-ms",
+                )?));
+            }
+            "--rebuild-poll-timeout-ms" => {
+                index += 1;
+                options = options.with_rebuild_poll_timeout(Duration::from_millis(parse_u64(
+                    required_arg(args.get(index), "rebuild-poll-timeout-ms")?,
+                    "rebuild-poll-timeout-ms",
+                )?));
+            }
+            "--lnk-resolve-timeout-ms" => {
+                index += 1;
+                options = options.with_lnk_resolve_timeout(Duration::from_millis(parse_u64(
+                    required_arg(args.get(index), "lnk-resolve-timeout-ms")?,
+                    "lnk-resolve-timeout-ms",
+                )?));
+            }
+            "--clear-timeout-ms" => {
+                index += 1;
+                options = options.with_clear_timeout(Duration::from_millis(parse_u64(
+                    required_arg(args.get(index), "clear-timeout-ms")?,
+                    "clear-timeout-ms",
+                )?));
+            }
+            other => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown restore option: {other}"
+                )))
+            }
+        }
+        index += 1;
+    }
+    let report = manager.restore_defaults(qa_type, options)?;
+    print_restore_report(&report);
     Ok(())
 }
 
@@ -1013,6 +1064,50 @@ fn print_remove_report(report: &wincent::destlist::ExperimentalRemoveReport) {
         report.remaining_paths_after_rebuild(),
     );
     println!("success: {}", report.success());
+}
+
+fn print_restore_report(report: &RestoreDefaultsReport) {
+    println!("success: {}", report.success());
+    if let Some(r) = report.recent_report() {
+        println!("recent.success: {}", r.success());
+        println!("recent.cleared: {}", r.recent_files_cleared());
+        println!("recent.deleted_lnk_paths: {}", r.deleted_lnk_paths().len());
+        for p in r.deleted_lnk_paths() {
+            println!("  {}", p.display());
+        }
+        if let Some(e) = r.error() {
+            println!("recent.error: {e}");
+        }
+    }
+    if let Some(f) = report.frequent_report() {
+        println!("frequent.success: {}", f.success());
+        println!("frequent.backing_file_deleted: {}", f.backing_file_deleted());
+        println!("frequent.rebuilt: {}", f.rebuilt());
+        println!("frequent.deleted_lnk_paths: {}", f.deleted_lnk_paths().len());
+        for p in f.deleted_lnk_paths() {
+            println!("  {}", p.display());
+        }
+        print_strings("frequent.non_default_raw_paths", f.non_default_raw_paths());
+        if let Some(rr) = f.raw_path_remove_report() {
+            println!("frequent.raw_remove.success: {}", rr.success());
+            println!(
+                "frequent.raw_remove.backing_file_deleted: {}",
+                rr.backing_file_deleted()
+            );
+            println!("frequent.raw_remove.rebuilt: {}", rr.rebuilt());
+            print_strings("frequent.raw_remove.requested", rr.requested_raw_paths());
+            print_strings(
+                "frequent.raw_remove.remaining",
+                rr.remaining_non_default_raw_paths(),
+            );
+            if let Some(e) = rr.error() {
+                println!("frequent.raw_remove.error: {e}");
+            }
+        }
+        if let Some(e) = f.error() {
+            println!("frequent.error: {e}");
+        }
+    }
 }
 
 fn print_strings(label: &str, values: &[String]) {
