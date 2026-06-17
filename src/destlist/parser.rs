@@ -1775,41 +1775,55 @@ mod tests {
 
     fn build_minimal_cfb_with_dest_list(path: &str) -> Vec<u8> {
         let dest_list = build_dest_list(path);
+        let num_mini_sectors = (dest_list.len() + 63) / 64;
+        let mini_stream_size = num_mini_sectors * 64;
         let mut file = vec![0u8; 512 + 512 * 4];
 
         file[0..8].copy_from_slice(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+        write_u16(&mut file, 0x1a, 3);
+        write_u16(&mut file, 0x1c, 0xFFFE);
         write_u16(&mut file, 0x1e, 9);
         write_u16(&mut file, 0x20, 6);
         write_u32(&mut file, 0x30, 0);
-        write_u32(&mut file, 0x38, 0);
-        write_u32(&mut file, 0x3c, 0xFFFF_FFFF);
-        write_u32(&mut file, 0x40, 0);
+        write_u32(&mut file, 0x38, 0x1000);
+        write_u32(&mut file, 0x3c, 2); // mini FAT at sector 2
+        write_u32(&mut file, 0x40, 1);
         write_u32(&mut file, 0x44, 0xFFFF_FFFF);
         write_u32(&mut file, 0x48, 0);
         for index in 0..109 {
             write_u32(&mut file, 0x4c + index * 4, 0xFFFF_FFFF);
         }
-        write_u32(&mut file, 0x4c, 3);
+        write_u32(&mut file, 0x4c, 3); // regular FAT at sector 3
 
-        write_directory_entry(&mut file, 512, "Root Entry", 5, 1, 0);
-        write_directory_entry(
-            &mut file,
-            512 + 128,
-            "DestList",
-            2,
-            2,
-            dest_list.len() as u64,
-        );
-        file[512 + 512 * 2..512 + 512 * 2 + dest_list.len()].copy_from_slice(&dest_list);
+        // Directory at sector 0: Root Entry (mini stream container at sector 1), DestList in mini sector 0
+        write_directory_entry(&mut file, 512, "Root Entry", 5, 1, mini_stream_size as u64);
+        write_directory_entry(&mut file, 512 + 128, "DestList", 2, 0, dest_list.len() as u64);
 
+        // Mini stream container at sector 1
+        file[512 + 512..512 + 512 + dest_list.len()].copy_from_slice(&dest_list);
+
+        // Mini FAT at sector 2: chain num_mini_sectors mini sectors then END_OF_CHAIN
+        let mini_fat_offset = 512 + 512 * 2;
+        for i in 0..128usize {
+            let val = if i + 1 < num_mini_sectors {
+                i as u32 + 1
+            } else if i + 1 == num_mini_sectors {
+                0xFFFF_FFFE
+            } else {
+                0xFFFF_FFFF
+            };
+            write_u32(&mut file, mini_fat_offset + i * 4, val);
+        }
+
+        // Regular FAT at sector 3
         let fat_offset = 512 + 512 * 3;
         for index in 0..128 {
             write_u32(&mut file, fat_offset + index * 4, 0xFFFF_FFFF);
         }
-        write_u32(&mut file, fat_offset, 0xFFFF_FFFE);
-        write_u32(&mut file, fat_offset + 4, 0xFFFF_FFFE);
-        write_u32(&mut file, fat_offset + 8, 0xFFFF_FFFE);
-        write_u32(&mut file, fat_offset + 12, 0xFFFF_FFFD);
+        write_u32(&mut file, fat_offset, 0xFFFF_FFFE); // sector 0: directory
+        write_u32(&mut file, fat_offset + 4, 0xFFFF_FFFE); // sector 1: mini stream container
+        write_u32(&mut file, fat_offset + 8, 0xFFFF_FFFE); // sector 2: mini FAT
+        write_u32(&mut file, fat_offset + 12, 0xFFFF_FFFD); // sector 3: FAT sector
 
         file
     }

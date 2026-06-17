@@ -35,6 +35,13 @@ impl CompoundFile {
         if data.get(0..8) != Some(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
             return Err("not an OLE Compound File Binary".to_string());
         }
+        if read_u16(&data, 0x1c)? != 0xFFFE {
+            return Err("not a little-endian CFB file".to_string());
+        }
+        let major_version = read_u16(&data, 0x1a)?;
+        if major_version != 3 && major_version != 4 {
+            return Err(format!("unsupported CFB major version {major_version:#06x}"));
+        }
 
         let sector_size = 1usize
             .checked_shl(read_u16(&data, 0x1e)? as u32)
@@ -54,6 +61,11 @@ impl CompoundFile {
         }
         let first_dir_sector = read_u32(&data, 0x30)?;
         let mini_cutoff_size = read_u32(&data, 0x38)?;
+        if mini_cutoff_size != 0x1000 {
+            return Err(format!(
+                "invalid CFB mini stream cutoff size {mini_cutoff_size:#x}: expected 0x1000"
+            ));
+        }
         let first_mini_fat_sector = read_u32(&data, 0x3c)?;
         let num_mini_fat_sectors = read_u32(&data, 0x40)? as usize;
         let first_difat_sector = read_u32(&data, 0x44)?;
@@ -76,7 +88,9 @@ impl CompoundFile {
             root.stream_size as usize,
         )?;
 
-        let mini_fat = if first_mini_fat_sector == FREE_SECTOR || num_mini_fat_sectors == 0 {
+        let mini_fat = if first_mini_fat_sector == FREE_SECTOR
+            || first_mini_fat_sector == END_OF_CHAIN
+            || num_mini_fat_sectors == 0 {
             Vec::new()
         } else {
             let bytes = read_regular_stream_sized(
@@ -217,7 +231,7 @@ fn read_difat(
     let mut fat_sector_ids = Vec::new();
     for index in 0..109 {
         let sector_id = read_u32(data, 0x4c + index * 4)?;
-        if sector_id != FREE_SECTOR {
+        if sector_id != FREE_SECTOR && sector_id != END_OF_CHAIN {
             fat_sector_ids.push(sector_id);
         }
     }
@@ -236,7 +250,7 @@ fn read_difat(
                     .try_into()
                     .expect("4-byte chunk"),
             );
-            if sector_id != FREE_SECTOR {
+            if sector_id != FREE_SECTOR && sector_id != END_OF_CHAIN {
                 fat_sector_ids.push(sector_id);
             }
         }
@@ -425,6 +439,8 @@ mod tests {
     fn rejects_invalid_sector_size() {
         let mut data = vec![0u8; 512];
         data[0..8].copy_from_slice(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+        data[0x1a..0x1c].copy_from_slice(&3u16.to_le_bytes());
+        data[0x1c..0x1e].copy_from_slice(&0xFFFEu16.to_le_bytes());
         // Sector size shift of 1 → sector_size = 2, which is neither 512 nor 4096.
         data[0x1e..0x20].copy_from_slice(&1u16.to_le_bytes());
         data[0x20..0x22].copy_from_slice(&6u16.to_le_bytes()); // mini: 64
