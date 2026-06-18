@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::WincentError;
-use crate::utils::get_windows_recent_folder;
+use crate::utils::{get_windows_recent_folder, normalize_path_lightweight};
 use crate::WincentResult;
 
 use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, CompoundFile};
@@ -597,7 +597,7 @@ fn quick_access_entries_v6(
 
     let mut used_paths: HashSet<String> = pinned
         .iter()
-        .map(|entry| entry.path.to_ascii_lowercase())
+        .map(|entry| visible_entry_path_key(&entry.path))
         .collect();
 
     let mut normal: Vec<_> = entries
@@ -612,7 +612,7 @@ fn quick_access_entries_v6(
     // Mirrors the observed v6 ordering in the reference parser. Validate with
     // real Explorer v6 samples before changing this direction.
     normal.sort_by_key(|entry| std::cmp::Reverse(entry.recent_rank));
-    normal.retain(|entry| used_paths.insert(entry.path.to_ascii_lowercase()));
+    normal.retain(|entry| used_paths.insert(visible_entry_path_key(&entry.path)));
 
     pinned.extend(normal);
     pinned
@@ -636,7 +636,7 @@ fn frequent_folder_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
 
     let mut used_paths: HashSet<String> = pinned
         .iter()
-        .map(|entry| entry.path.to_ascii_lowercase())
+        .map(|entry| visible_entry_path_key(&entry.path))
         .collect();
 
     let mut frequent_candidates: Vec<_> = entries
@@ -656,7 +656,7 @@ fn frequent_folder_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
             })
             .then_with(|| right.entry_number.cmp(&left.entry_number))
     });
-    frequent_candidates.retain(|entry| used_paths.insert(entry.path.to_ascii_lowercase()));
+    frequent_candidates.retain(|entry| used_paths.insert(visible_entry_path_key(&entry.path)));
     frequent_candidates.truncate(4);
 
     pinned.extend(frequent_candidates);
@@ -678,7 +678,7 @@ fn recent_file_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
             continue;
         }
 
-        if used_paths.insert(entry.path.to_ascii_lowercase()) {
+        if used_paths.insert(visible_entry_path_key(&entry.path)) {
             visible.push(entry.clone());
         }
     }
@@ -692,7 +692,7 @@ fn recent_file_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
             })
             .then_with(|| left.entry_number.cmp(&right.entry_number))
     }) {
-        if used_paths.insert(best_backing_file.path.to_ascii_lowercase()) {
+        if used_paths.insert(visible_entry_path_key(&best_backing_file.path)) {
             visible.push(best_backing_file);
         }
     }
@@ -703,6 +703,10 @@ fn recent_file_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
 fn is_automatic_destinations_path(path: &str) -> bool {
     path.to_ascii_lowercase()
         .ends_with(".automaticdestinations-ms")
+}
+
+fn visible_entry_path_key(path: &str) -> String {
+    normalize_path_lightweight(path)
 }
 
 /// Returns the path to the Explorer recent-files `.automaticDestinations-ms` file.
@@ -1567,6 +1571,7 @@ mod tests {
         let entries = vec![
             destlist_entry_for_test("C:\\Pinned2", 2, 2, 5, 3, Some(1)),
             destlist_entry_for_test("C:\\Pinned1", 1, 1, 5, 3, Some(0)),
+            destlist_entry_for_test("c:/pinned1/", 7, 7, 0, 4, None),
             destlist_entry_for_test("C:\\FrequentA", 3, 3, 1, 2, None),
             destlist_entry_for_test("C:\\FrequentB", 4, 4, 0, 2, None),
             destlist_entry_for_test("C:\\FrequentA", 5, 5, 2, 4, None),
@@ -1596,6 +1601,8 @@ mod tests {
             destlist_entry_for_test("C:\\Hidden.txt", 1, 1, 0, 0, None),
             destlist_entry_for_test("C:\\Report.txt", 2, 2, 0, 1, None),
             destlist_entry_for_test("c:\\report.txt", 3, 3, 0, 5, None),
+            destlist_entry_for_test("C:/Folder/İtem.txt/", 5, 5, 0, 3, None),
+            destlist_entry_for_test("c:\\folder\\i\u{307}tem.txt", 6, 6, 0, 4, None),
             destlist_entry_for_test("C:\\Other.txt", 4, 4, 0, 1, None),
         ];
         let dest = dest_list_for_test(4, entries);
@@ -1605,7 +1612,10 @@ mod tests {
             .map(|entry| entry.path().to_string())
             .collect();
 
-        assert_eq!(visible, vec!["C:\\Report.txt", "C:\\Other.txt"]);
+        assert_eq!(
+            visible,
+            vec!["C:\\Report.txt", "C:/Folder/İtem.txt/", "C:\\Other.txt"]
+        );
     }
 
     #[test]
@@ -1615,6 +1625,7 @@ mod tests {
             destlist_entry_for_test("C:\\Normal3", 2, 2, 3, 1, None),
             destlist_entry_for_test("C:\\Normal4", 3, 3, 4, 1, None),
             destlist_entry_for_test("C:\\Pinned", 4, 4, 0, 1, Some(0)),
+            destlist_entry_for_test("c:/pinned/", 5, 5, 2, 1, None),
         ];
         let dest = dest_list_for_test(6, entries);
 
