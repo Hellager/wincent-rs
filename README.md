@@ -21,8 +21,8 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 - Check item existence by exact path or keyword
 - Batch add/remove with per-item error collection
 - Caller-side timeout protection for Shell and PowerShell operations
-- Built-in visibility control for Quick Access sections
-- Built-in DestList metadata access
+- Visibility control for Quick Access sections
+- DestList metadata access
 
 ## Installation
 
@@ -30,10 +30,8 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wincent = "0.2.3"
+wincent = "0.2.4"
 ```
-
-Visibility and DestList parser APIs are included by default; no extra feature flags are needed.
 
 ## Quick Start
 
