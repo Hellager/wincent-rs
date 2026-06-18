@@ -1,3 +1,30 @@
+## [0.2.4] - 2026-06-18
+
+### Added
+- `RestoreDefaultsOptions::deep_lnk_cleanup()` for opt-in deletion of unresolved or unknown-type `.lnk` files during restore cleanup
+- `EmptyOptions::with_pinned_folders_timeout()` and `pinned_folders_timeout()` for explicit pinned-folder snapshot/unpin timeout control
+- Example CLI support for `empty --pinned-timeout-ms N`
+
+### Changed
+- DestList visible-entry deduplication now uses Windows-style path keys, covering slash variants, trailing separators, and Unicode case folding
+- Dynamic PowerShell script cache files are process-isolated with `{script}_{version}_{pid}_{hash}.ps1` names to avoid cross-process cleanup races
+- `.lnk` target type resolution only timeout-protects network-target metadata probes when shell link attributes are unavailable
+- PowerShell unpin scripts keep the Windows 11 `pintohome` toggle fallback while separating normalize, find, wait, and invoke helpers
+- Test utilities now create process-unique temporary directories instead of relying on the cargo working directory
+
+### Fixed
+- Prevented frequent-folder pin timeout fallback from toggling a folder back off after a late native COM success
+- Mapped PowerShell pin "already exists" sentinel output back to `AlreadyExists`
+- Preserved existing frequent-folder pin errors for timeouts and already-existing folders without invoking unsafe fallback paths
+- Avoided deleting current-process dynamic PowerShell scripts during cache cleanup while still allowing expired orphan scripts to age out
+- Rejected zero pinned-folder cleanup timeouts at execution time
+- Added an internal debug assertion and documentation for validating custom `RetryPolicy` values before execution
+
+### Documentation
+- Normalized repository documentation and comments to UTF-8-friendly wording
+- Clarified experimental DestList remove stability expectations, including backing-file rebuilds and possible `.lnk` deletion
+- Updated README files and the example CLI help to match the current built-in visibility/DestList APIs and cleanup timeout behavior
+
 ## [0.2.3] - 2026-05-27
 
 ### Added
