@@ -32,11 +32,16 @@
 use crate::{WincentError, WincentResult};
 use std::time::Duration;
 
-/// Retry policy configuration
+/// Retry policy configuration.
 ///
 /// Defines how retries should be performed when transient errors occur.
 /// Only errors identified as transient (via `PowerShellError::is_transient()`)
 /// will be retried.
+///
+/// Builder-style `with_*` methods may create invalid intermediate policies.
+/// Call [`RetryPolicy::validate`], [`RetryPolicy::validated`], or build a
+/// [`crate::manager::QuickAccessManager`] through its checked builder before
+/// executing operations with a custom policy.
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
     /// Maximum number of retry attempts (not including the initial attempt)

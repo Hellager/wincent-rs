@@ -52,6 +52,36 @@ impl ScriptStorage {
             .map(|s| s.to_string())
     }
 
+    fn current_process_token() -> String {
+        std::process::id().to_string()
+    }
+
+    fn is_current_process_dynamic_script(file_name: &str) -> bool {
+        let Some(base_name) = file_name.strip_suffix(".ps1") else {
+            return false;
+        };
+        let mut parts = base_name.rsplitn(4, '_');
+        let Some(hash) = parts.next() else {
+            return false;
+        };
+        let Some(pid) = parts.next() else {
+            return false;
+        };
+        let Some(version) = parts.next() else {
+            return false;
+        };
+        let Some(script_name) = parts.next() else {
+            return false;
+        };
+
+        !script_name.is_empty()
+            && version.contains('.')
+            && pid == Self::current_process_token()
+            && pid.chars().all(|c| c.is_ascii_digit())
+            && !hash.is_empty()
+            && hash.chars().all(|c| c.is_ascii_hexdigit())
+    }
+
     /// Cleans up expired scripts (older than 24 hours)
     fn cleanup_expired_scripts(dir: &Path) -> WincentResult<()> {
         let expiry_duration = Duration::from_secs(24 * 60 * 60); // 24 hours
@@ -63,6 +93,14 @@ impl ScriptStorage {
                 let path = entry.path();
 
                 if path.is_file() && path.extension().is_some_and(|e| e == "ps1") {
+                    if path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(Self::is_current_process_dynamic_script)
+                    {
+                        continue;
+                    }
+
                     let mut should_remove = false;
                     if let Some(file_version) = path
                         .file_name()
@@ -157,10 +195,12 @@ impl ScriptStorage {
     ) -> WincentResult<PathBuf> {
         let dynamic_dir = Self::get_dynamic_scripts_dir()?;
         let param_hash = Self::hash_parameter(parameter);
+        let process_token = Self::current_process_token();
         let script_name = format!(
-            "{:?}_{}_{}.ps1",
+            "{:?}_{}_{}_{}.ps1",
             script_type,
             Self::SCRIPT_VERSION,
+            process_token,
             param_hash
         );
         let script_path = dynamic_dir.join(script_name);
@@ -216,6 +256,11 @@ mod tests {
             Some("0.5.2".into())
         );
 
+        assert_eq!(
+            ScriptStorage::parse_script_version("PinToFrequent_0.5.2_12345_abcd1234.ps1"),
+            Some("0.5.2".into())
+        );
+
         assert_eq!(ScriptStorage::parse_script_version("InvalidName.ps1"), None);
     }
 
@@ -257,6 +302,9 @@ mod tests {
         let path = result.unwrap();
         assert!(path.exists());
         assert!(path.to_string_lossy().contains("PinToFrequentFolder"));
+        assert!(path
+            .to_string_lossy()
+            .contains(&format!("_{}_", ScriptStorage::current_process_token())));
 
         let expected_pattern = format!("PinToFrequentFolder_{}_", current_version());
         assert!(
@@ -266,8 +314,9 @@ mod tests {
             expected_pattern
         );
 
-        // Clean up test files
-        let _ = fs::remove_file(path);
+        let second =
+            ScriptStorage::get_dynamic_script_path(PSScript::PinToFrequentFolder, param).unwrap();
+        assert_eq!(path, second, "same process and parameter should reuse path");
     }
 
     #[test]
@@ -338,6 +387,50 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_preserves_current_process_dynamic_scripts() -> WincentResult<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let current_pid = ScriptStorage::current_process_token();
+        let file = temp_dir.path().join(format!(
+            "PinToFrequentFolder_{}_{}_abcd1234.ps1",
+            env!("CARGO_PKG_VERSION"),
+            current_pid
+        ));
+        File::create(&file)?;
+        let expired_time = SystemTime::now() - Duration::from_secs(25 * 3600);
+        set_file_mtime(&file, FileTime::from_system_time(expired_time))?;
+
+        ScriptStorage::cleanup_expired_scripts(temp_dir.path())?;
+
+        assert!(
+            file.exists(),
+            "Current process dynamic script should be preserved even when expired"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_removes_expired_orphan_dynamic_scripts() -> WincentResult<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let other_pid = std::process::id().saturating_add(1);
+        let file = temp_dir.path().join(format!(
+            "PinToFrequentFolder_{}_{}_abcd1234.ps1",
+            env!("CARGO_PKG_VERSION"),
+            other_pid
+        ));
+        File::create(&file)?;
+        let expired_time = SystemTime::now() - Duration::from_secs(25 * 3600);
+        set_file_mtime(&file, FileTime::from_system_time(expired_time))?;
+
+        ScriptStorage::cleanup_expired_scripts(temp_dir.path())?;
+
+        assert!(
+            !file.exists(),
+            "Expired orphan dynamic scripts should be removed by normal cleanup"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_static_script_overwrites_stale_content() -> WincentResult<()> {
         // get_script_path must overwrite an existing file whose content differs from
         // the freshly generated script (e.g. after a format/escaping fix in a new build
@@ -350,7 +443,7 @@ mod tests {
         assert_eq!(result, result2);
         let on_disk = ScriptStorage::read_script_content(&result2)
             .expect("should be able to read regenerated script");
-        // The regenerated content must exactly match what the strategy produces —
+        // The regenerated content must exactly match what the strategy produces,
         // not just contain a keyword. This catches the case where stale content
         // happens to include the substring but is otherwise wrong.
         let expected =

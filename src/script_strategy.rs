@@ -279,20 +279,28 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
         return ($exists -eq $expected)
     }}
 
+    function Invoke-WincentUnpinFromHome($item) {{
+        try {{
+            $item.InvokeVerb('unpinfromhome');
+        }} catch {{}}
+    }}
+
+    function Invoke-WincentPinToHomeToggle {{
+        $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')
+    }}
+
     $target = Find-WincentFrequentFolder;
     if ($null -eq $target) {{
         Write-Output 'WINCENT_NOT_IN_QUICK_ACCESS';
         exit 1;
     }}
 
-    try {{
-        $target.InvokeVerb('unpinfromhome');
-    }} catch {{}}
+    Invoke-WincentUnpinFromHome $target;
     if (Wait-WincentFrequentFolderPresence $false) {{
         return
     }}
 
-    $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome');
+    Invoke-WincentPinToHomeToggle;
     if (Wait-WincentFrequentFolderPresence $false) {{
         return
     }}
@@ -305,13 +313,11 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
     $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
     if ($isWin11)
     {{
-        $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')
+        Invoke-WincentPinToHomeToggle
     }}
     else
     {{
-        try {{
-            $target.InvokeVerb('unpinfromhome');
-        }} catch {{}}
+        Invoke-WincentUnpinFromHome $target;
     }}
 
     if (Wait-WincentFrequentFolderPresence $false) {{
@@ -499,8 +505,21 @@ mod tests {
         assert!(script.contains("WINCENT_NOT_IN_QUICK_ACCESS"));
         assert!(script.contains("Failed to remove frequent folder"));
         assert!(script.contains("$target = Find-WincentFrequentFolder"));
+        assert!(script.contains("function Invoke-WincentUnpinFromHome($item)"));
+        assert!(script.contains("try {"));
+        assert!(script.contains("$item.InvokeVerb('unpinfromhome');"));
+        assert!(script.contains("} catch {}"));
+        assert!(script.contains("function Invoke-WincentPinToHomeToggle"));
         assert!(script.contains("$shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')"));
-        assert!(script.contains("$target.InvokeVerb('unpinfromhome')"));
+        assert_eq!(
+            script
+                .matches("Invoke-WincentUnpinFromHome $target")
+                .count(),
+            2
+        );
+        assert!(script.matches("Invoke-WincentPinToHomeToggle").count() >= 3);
+        assert!(!script.contains("try {\n        Invoke-WincentPinToHomeToggle"));
+        assert!(!script.contains("try {\r\n        Invoke-WincentPinToHomeToggle"));
         assert!(
             !script.contains("{path}"),
             "Win11 unpin branch must not contain an unsubstituted path placeholder"

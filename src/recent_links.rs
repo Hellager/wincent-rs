@@ -5,6 +5,8 @@ use crate::utils::{get_windows_recent_folder, paths_equal};
 use crate::WincentResult;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
@@ -36,6 +38,7 @@ struct ShellLinkSummary {
     target_path: Option<String>,
     file_attributes: u32,
     relative_path: Option<String>,
+    target_is_network: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,7 +121,7 @@ pub(crate) fn resolve_lnk_target(
 
 pub(crate) fn resolve_lnk_with_type(
     lnk_path: &Path,
-    _timeout: Duration,
+    timeout: Duration,
 ) -> WincentResult<Option<LnkResolution>> {
     let data = match fs::read(lnk_path) {
         Ok(data) => data,
@@ -131,12 +134,22 @@ pub(crate) fn resolve_lnk_with_type(
     let Some(path) = summary.target_path.or(summary.relative_path) else {
         return Ok(None);
     };
-    let is_dir = lnk_target_is_dir(&path, summary.file_attributes);
+    let is_dir = lnk_target_is_dir(
+        &path,
+        summary.file_attributes,
+        summary.target_is_network,
+        timeout,
+    );
 
     Ok(Some(LnkResolution { path, is_dir }))
 }
 
-fn lnk_target_is_dir(path: &str, attributes: u32) -> Option<bool> {
+fn lnk_target_is_dir(
+    path: &str,
+    attributes: u32,
+    target_is_network: bool,
+    timeout: Duration,
+) -> Option<bool> {
     if attributes != 0 {
         return Some((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
     }
@@ -144,10 +157,48 @@ fn lnk_target_is_dir(path: &str, attributes: u32) -> Option<bool> {
     // Some shortcuts do not carry useful file attributes. Metadata may fail for
     // missing, unavailable network, or access-denied targets; restore flows
     // intentionally treat that as unknown.
+    if should_timeout_protect_metadata(path, target_is_network) {
+        return metadata_is_dir_with_timeout(path.to_string(), timeout);
+    }
+
     match fs::metadata(path) {
         Ok(metadata) => Some(metadata.is_dir()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => None,
+    }
+}
+
+fn should_timeout_protect_metadata(path: &str, target_is_network: bool) -> bool {
+    target_is_network || looks_like_unc_path(path)
+}
+
+fn metadata_is_dir_with_timeout(path: String, timeout: Duration) -> Option<bool> {
+    metadata_is_dir_with_timeout_using(path, timeout, |path| {
+        fs::metadata(path).map(|metadata| metadata.is_dir())
+    })
+}
+
+fn metadata_is_dir_with_timeout_using<F>(
+    path: String,
+    timeout: Duration,
+    metadata_is_dir: F,
+) -> Option<bool>
+where
+    F: FnOnce(&str) -> std::io::Result<bool> + Send + 'static,
+{
+    if timeout.is_zero() {
+        return None;
+    }
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = metadata_is_dir(&path);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(is_dir)) => Some(is_dir),
+        Ok(Err(_)) | Err(_) => None,
     }
 }
 
@@ -209,10 +260,17 @@ fn parse_shell_link_summary(data: &[u8]) -> Option<ShellLinkSummary> {
             .or_else(|| info.common_path_suffix.clone())
     });
 
+    let target_is_network = link_info
+        .as_ref()
+        .is_some_and(|info| info.network_path.is_some())
+        || target_path.as_deref().is_some_and(looks_like_unc_path)
+        || relative_path.as_deref().is_some_and(looks_like_unc_path);
+
     Some(ShellLinkSummary {
         target_path,
         file_attributes,
         relative_path,
+        target_is_network,
     })
 }
 
@@ -549,6 +607,55 @@ mod tests {
 
         assert_eq!(resolution.path, "relative-target");
         assert_eq!(resolution.is_dir, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn lnk_target_type_uses_attributes_without_metadata_probe() {
+        assert_eq!(
+            lnk_target_is_dir(
+                "\\\\server\\share\\folder",
+                FILE_ATTRIBUTE_DIRECTORY,
+                true,
+                Duration::ZERO,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            lnk_target_is_dir(
+                "\\\\server\\share\\file.txt",
+                FILE_ATTRIBUTE_ARCHIVE_FOR_TEST,
+                true,
+                Duration::ZERO,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn network_metadata_timeout_returns_unknown_target_type() {
+        let result = metadata_is_dir_with_timeout_using(
+            "\\\\server\\share\\slow".to_string(),
+            Duration::from_millis(1),
+            |_| {
+                std::thread::sleep(Duration::from_millis(50));
+                Ok(true)
+            },
+        );
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn local_target_type_uses_synchronous_metadata() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let folder = dir.path().join("folder");
+        fs::create_dir(&folder).map_err(WincentError::Io)?;
+
+        assert_eq!(
+            lnk_target_is_dir(&folder.to_string_lossy(), 0, false, Duration::ZERO),
+            Some(true)
+        );
         Ok(())
     }
 

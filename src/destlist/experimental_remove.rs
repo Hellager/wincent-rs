@@ -10,8 +10,10 @@
 //!
 //! This touches Shell-maintained files directly. Windows may change this behavior,
 //! Explorer may rebuild asynchronously, and deleting the backing file can temporarily
-//! affect Quick Access state. Callers should treat this as best-effort experimental
-//! functionality and keep their own backups when the data matters. The operation is
+//! affect Quick Access state. It may also delete matching `.lnk` files from the
+//! Windows Recent folder. Callers should treat this as best-effort experimental
+//! functionality with a weaker compatibility contract than the stable parser and
+//! query APIs, and keep their own backups when the data matters. The operation is
 //! not transactional; if the process is interrupted after deletion starts, no rollback
 //! is attempted.
 

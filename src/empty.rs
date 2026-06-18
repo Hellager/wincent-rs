@@ -37,6 +37,8 @@ const EMPTY_PINNED_FOLDERS_TIMEOUT: Duration = Duration::from_secs(10);
 /// By default, wincent does not additionally invoke Explorer's unpin verb for
 /// visible pinned folders. Use [`EmptyOptions::remove_pinned_folders`] when the
 /// caller explicitly wants that extra unpin step too.
+/// [`EmptyOptions::with_pinned_folders_timeout`] can override the timeout used
+/// for that explicit snapshot and unpin sequence.
 ///
 /// # Examples
 ///
@@ -56,6 +58,8 @@ pub struct EmptyOptions {
     also_pinned_folders: bool,
     /// Refresh open Explorer windows after a successful clear.
     refresh_explorer: bool,
+    /// Override timeout for explicit pinned-folder snapshot and unpin operations.
+    pinned_folders_timeout: Option<Duration>,
 }
 
 impl EmptyOptions {
@@ -82,6 +86,23 @@ impl EmptyOptions {
     #[must_use]
     pub fn remove_pinned_folders(self) -> Self {
         self.with_also_pinned_folders(true)
+    }
+
+    /// Timeout override for explicit pinned-folder snapshot and unpin operations.
+    #[must_use]
+    pub fn pinned_folders_timeout(&self) -> Option<Duration> {
+        self.pinned_folders_timeout
+    }
+
+    /// Sets the timeout used when explicitly snapshotting and unpinning visible folders.
+    ///
+    /// A zero duration is accepted by the builder so options can be assembled
+    /// incrementally, but execution rejects it with
+    /// [`WincentError::InvalidArgument`].
+    #[must_use]
+    pub fn with_pinned_folders_timeout(mut self, timeout: Duration) -> Self {
+        self.pinned_folders_timeout = Some(timeout);
+        self
     }
 
     /// Whether open Explorer windows should be refreshed after a successful clear.
@@ -179,16 +200,24 @@ pub(crate) fn empty_pinned_folders() -> WincentResult<()> {
 #[allow(dead_code)]
 pub(crate) fn empty_frequent_folders(also_pinned_folders: bool) -> WincentResult<()> {
     let backend = SystemQuickAccessBackend;
-    empty_frequent_folders_with_backend(also_pinned_folders, EMPTY_PINNED_FOLDERS_TIMEOUT, &backend)
+    let options = EmptyOptions::new().with_also_pinned_folders(also_pinned_folders);
+    empty_frequent_folders_with_backend(options, EMPTY_PINNED_FOLDERS_TIMEOUT, &backend)
 }
 
 fn empty_frequent_folders_with_backend(
-    also_pinned_folders: bool,
+    options: EmptyOptions,
     timeout: Duration,
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
-    let pinned_snapshot = if also_pinned_folders {
-        Some(backend.get_items(QuickAccess::FrequentFolders, timeout)?)
+    let pinned_timeout = options.pinned_folders_timeout().unwrap_or(timeout);
+    if options.also_pinned_folders() && pinned_timeout.is_zero() {
+        return Err(WincentError::InvalidArgument(
+            "pinned folders timeout must be greater than zero".to_string(),
+        ));
+    }
+
+    let pinned_snapshot = if options.also_pinned_folders() {
+        Some(backend.get_items(QuickAccess::FrequentFolders, pinned_timeout)?)
     } else {
         None
     };
@@ -196,7 +225,7 @@ fn empty_frequent_folders_with_backend(
     backend.clear_frequent_folders_jumplist()?;
     if let Some(paths) = pinned_snapshot {
         if let Err(source) = empty_pinned_folders_from_snapshot(&paths, |path| {
-            backend.remove_frequent_folder(path, timeout)
+            backend.remove_frequent_folder(path, pinned_timeout)
         }) {
             return Err(partial_frequent_folders_error(source));
         }
@@ -279,7 +308,7 @@ fn empty_all_items_with_backend(
         Err(source) => first_error = Some(source),
     }
 
-    match empty_frequent_folders_with_backend(options.also_pinned_folders(), timeout, backend) {
+    match empty_frequent_folders_with_backend(options, timeout, backend) {
         Ok(()) => {
             frequent_folders_cleared = true;
         }
@@ -346,7 +375,7 @@ pub(crate) fn empty_items_with_backend(
     let result = match qa_type {
         QuickAccess::RecentFiles => backend.clear_recent_files(timeout),
         QuickAccess::FrequentFolders => {
-            empty_frequent_folders_with_backend(options.also_pinned_folders(), timeout, backend)
+            empty_frequent_folders_with_backend(options, timeout, backend)
         }
         QuickAccess::All => empty_all_items_with_backend(options, timeout, backend),
     };
@@ -440,12 +469,8 @@ mod tests {
             Ok(())
         }
 
-        fn get_items(
-            &self,
-            qa_type: QuickAccess,
-            _timeout: Duration,
-        ) -> WincentResult<Vec<String>> {
-            self.record(format!("get_items:{qa_type:?}"));
+        fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>> {
+            self.record(format!("get_items:{qa_type:?}:{}", timeout.as_secs()));
             Ok(self.items.clone())
         }
 
@@ -719,7 +744,7 @@ mod tests {
             backend.calls(),
             vec![
                 "clear_recent_files".to_string(),
-                "get_items:FrequentFolders".to_string(),
+                "get_items:FrequentFolders:3".to_string(),
                 "clear_frequent_folders_jumplist".to_string(),
                 "remove_frequent_folder:C:\\FolderA:3".to_string(),
             ]
@@ -816,13 +841,55 @@ mod tests {
         assert_eq!(
             backend.calls(),
             vec![
-                "get_items:FrequentFolders".to_string(),
+                "get_items:FrequentFolders:3".to_string(),
                 "clear_frequent_folders_jumplist".to_string(),
                 "remove_frequent_folder:C:\\FolderA:3".to_string(),
                 "remove_frequent_folder:C:\\FolderB:3".to_string(),
             ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn empty_pinned_folder_timeout_overrides_operation_timeout() -> WincentResult<()> {
+        let backend = FakeEmptyBackend::new(vec!["C:\\FolderA".to_string()]);
+
+        empty_items_with_backend(
+            QuickAccess::FrequentFolders,
+            EmptyOptions::new()
+                .remove_pinned_folders()
+                .with_pinned_folders_timeout(Duration::from_secs(7)),
+            Duration::from_secs(3),
+            &backend,
+        )?;
+
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "get_items:FrequentFolders:7".to_string(),
+                "clear_frequent_folders_jumplist".to_string(),
+                "remove_frequent_folder:C:\\FolderA:7".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_pinned_folder_zero_timeout_is_invalid() {
+        let backend = FakeEmptyBackend::new(vec!["C:\\FolderA".to_string()]);
+
+        let error = empty_items_with_backend(
+            QuickAccess::FrequentFolders,
+            EmptyOptions::new()
+                .remove_pinned_folders()
+                .with_pinned_folders_timeout(Duration::ZERO),
+            Duration::from_secs(3),
+            &backend,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, WincentError::InvalidArgument(_)));
+        assert!(backend.calls().is_empty());
     }
 
     #[test]

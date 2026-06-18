@@ -1134,6 +1134,8 @@ impl QuickAccessManager {
     where
         F: FnMut() -> WincentResult<T>,
     {
+        debug_assert!(self.retry_policy.validate().is_ok());
+
         for retry_attempt in 0.. {
             match action() {
                 Ok(value) => return Ok(value),
@@ -1346,8 +1348,11 @@ mod tests {
             Ok(())
         }
 
-        fn remove_frequent_folder(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
-            self.record(format!("remove_frequent_folder:{path}"));
+        fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
+            self.record(format!(
+                "remove_frequent_folder:{path}:{}",
+                timeout.as_secs()
+            ));
             Ok(())
         }
 
@@ -1522,6 +1527,52 @@ mod tests {
         let _ = manager.get_items(QuickAccess::RecentFiles)?;
 
         assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(7)]);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_pinned_folders_uses_manager_timeout_by_default() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(9), backend.clone());
+
+        manager.empty_items(
+            QuickAccess::FrequentFolders,
+            EmptyOptions::new().remove_pinned_folders(),
+        )?;
+
+        assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(9)]);
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "clear_frequent_folders_jumplist".to_string(),
+                "remove_frequent_folder:C:\\Projects:9".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_pinned_folders_option_overrides_manager_timeout() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(9), backend.clone());
+
+        manager.empty_items(
+            QuickAccess::FrequentFolders,
+            EmptyOptions::new()
+                .remove_pinned_folders()
+                .with_pinned_folders_timeout(Duration::from_secs(4)),
+        )?;
+
+        assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(4)]);
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "clear_frequent_folders_jumplist".to_string(),
+                "remove_frequent_folder:C:\\Projects:4".to_string(),
+            ]
+        );
         Ok(())
     }
 
@@ -1941,7 +1992,7 @@ mod tests {
         assert_eq!(
             backend.calls(),
             vec![
-                "remove_frequent_folder:C:\\Projects".to_string(),
+                "remove_frequent_folder:C:\\Projects:10".to_string(),
                 "refresh_explorer".to_string(),
             ]
         );
