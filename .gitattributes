@@ -1,7 +1,7 @@
-# Enforce LF line endings for all text files regardless of platform autocrlf setting.
-* text=auto eol=lf
+# Enforce UTF-8 text with LF line endings regardless of platform autocrlf setting.
+* text=auto working-tree-encoding=UTF-8 eol=lf
 
-# Binary files — no line ending conversion.
+# Binary files: no line ending conversion.
 *.png binary
 *.jpg binary
 *.jpeg binary
