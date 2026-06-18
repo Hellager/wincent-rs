@@ -916,9 +916,16 @@ fn pin_frequent_folder_powershell(path: &str) -> WincentResult<()> {
 }
 
 fn pin_frequent_folder_powershell_with_timeout(path: &str, timeout: Duration) -> WincentResult<()> {
-    execute_pin_frequent_folder_script_with_timeout(path, timeout, |script, parameter, timeout| {
-        ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
-    })
+    match execute_pin_frequent_folder_script_with_timeout(
+        path,
+        timeout,
+        |script, parameter, timeout| {
+            ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
+        },
+    ) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(map_pin_frequent_folder_powershell_error(path, error)),
+    }
 }
 
 fn execute_pin_frequent_folder_script_with_timeout<F>(
@@ -945,7 +952,26 @@ where
     match native() {
         Ok(()) => Ok(()),
         Err(e @ WincentError::AlreadyExists { .. }) => Err(e),
+        // A timed-out STA worker keeps running and may still complete the
+        // `pintohome` call later. On Windows 11 that verb can behave like a
+        // toggle, so running the fallback could undo a successful late pin.
+        Err(e @ WincentError::Timeout(_)) => Err(e),
         Err(_) => powershell(),
+    }
+}
+
+fn map_pin_frequent_folder_powershell_error(path: &str, error: WincentError) -> WincentError {
+    const ALREADY_EXISTS_SENTINEL: &str = "WINCENT_ALREADY_EXISTS";
+
+    match error {
+        WincentError::PowerShellExecution(ref powershell_error)
+            if powershell_error
+                .raw_stdout()
+                .contains(ALREADY_EXISTS_SENTINEL) =>
+        {
+            WincentError::already_exists(path, QuickAccess::FrequentFolders)
+        }
+        other => other,
     }
 }
 
@@ -1858,6 +1884,29 @@ mod tests {
     }
 
     #[test]
+    fn test_pin_fallback_preserves_timeout_without_powershell() {
+        let fallback_called = std::rc::Rc::new(std::cell::RefCell::new(false));
+        let fallback_called_for_closure = std::rc::Rc::clone(&fallback_called);
+
+        let result = pin_frequent_folder_with_fallback(
+            || Err(WincentError::Timeout("native timed out".to_string())),
+            move || {
+                *fallback_called_for_closure.borrow_mut() = true;
+                Ok(())
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(WincentError::Timeout(ref message)) if message == "native timed out"
+        ));
+        assert!(
+            !*fallback_called.borrow(),
+            "PowerShell fallback must not run after native timeout"
+        );
+    }
+
+    #[test]
     fn test_unpin_state_machine_does_not_trust_unpinfromhome_success() -> WincentResult<()> {
         let present = std::rc::Rc::new(std::cell::RefCell::new(true));
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
@@ -2497,6 +2546,54 @@ mod tests {
 
         assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
         Ok(())
+    }
+
+    #[test]
+    fn pin_frequent_folder_powershell_sentinel_maps_to_already_exists() {
+        let error = WincentError::PowerShellExecution(Box::new(
+            crate::error::PowerShellError::builder(
+                crate::error::PowerShellOperation::PinFrequentFolder,
+            )
+            .stdout("WINCENT_ALREADY_EXISTS")
+            .stderr("")
+            .parameters("C:\\Folder")
+            .build(),
+        ));
+
+        let mapped = map_pin_frequent_folder_powershell_error("C:\\Folder", error);
+
+        assert!(
+            matches!(
+                mapped,
+                WincentError::AlreadyExists {
+                    ref path,
+                    qa_type: QuickAccess::FrequentFolders,
+                } if path == "C:\\Folder"
+            ),
+            "sentinel should map to AlreadyExists, got: {:?}",
+            mapped
+        );
+    }
+
+    #[test]
+    fn pin_frequent_folder_powershell_keeps_non_sentinel_error() {
+        let error = WincentError::PowerShellExecution(Box::new(
+            crate::error::PowerShellError::builder(
+                crate::error::PowerShellOperation::PinFrequentFolder,
+            )
+            .stdout("ordinary output")
+            .stderr("ordinary failure")
+            .parameters("C:\\Folder")
+            .build(),
+        ));
+
+        let mapped = map_pin_frequent_folder_powershell_error("C:\\Folder", error);
+
+        assert!(
+            matches!(mapped, WincentError::PowerShellExecution(_)),
+            "ordinary PowerShell failures should remain PowerShellExecution, got: {:?}",
+            mapped
+        );
     }
 
     #[test]

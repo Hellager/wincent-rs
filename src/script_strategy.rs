@@ -194,13 +194,33 @@ impl ScriptStrategy for PinToFrequentFolderStrategy {
         let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
         Ok(format!(
             r#"
-    {}
-    {}
-    $shell.Namespace('{}').Self.InvokeVerb('pintohome');
+    {header}
+    {shell}
+
+    function Normalize-WincentPath($p) {{
+        if ($null -eq $p) {{
+            return ''
+        }}
+        $n = $p.ToLower().Replace('/', '\')
+        if ($n.Length -gt 3 -and $n.EndsWith('\')) {{
+            $n = $n.TrimEnd('\')
+        }}
+        return $n
+    }}
+
+    $requestedPath = '{path}';
+    $folders = $shell.Namespace('{frequent_folders}').Items() | where {{$_.IsFolder -eq $true}};
+    $target = $folders | Where-Object {{ (Normalize-WincentPath $_.Path) -eq (Normalize-WincentPath $requestedPath) }} | Select-Object -First 1;
+    if ($null -ne $target) {{
+        Write-Output 'WINCENT_ALREADY_EXISTS';
+        exit 1;
+    }}
+    $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome');
 "#,
-            BaseScriptStrategy::utf8_header(),
-            BaseScriptStrategy::shell_com_object(),
-            path
+            header = BaseScriptStrategy::utf8_header(),
+            shell = BaseScriptStrategy::shell_com_object(),
+            path = path,
+            frequent_folders = ShellNamespaces::FREQUENT_FOLDERS,
         ))
     }
 }
@@ -458,6 +478,10 @@ mod tests {
         assert!(script.contains("pintohome"));
         assert!(script.contains(path));
         assert!(script.contains(BaseScriptStrategy::shell_com_object()));
+        assert!(script.contains(ShellNamespaces::FREQUENT_FOLDERS));
+        assert!(script.contains("Normalize-WincentPath"));
+        assert!(script.contains("WINCENT_ALREADY_EXISTS"));
+        assert!(script.contains("$shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')"));
     }
 
     #[test]
@@ -660,10 +684,7 @@ mod tests {
             ),
             (
                 PSScript::PinToFrequentFolder,
-                format!(
-                    "$shell.Namespace('{}').Self.InvokeVerb('pintohome')",
-                    escaped_path
-                ),
+                format!("$requestedPath = '{}'", escaped_path),
             ),
             (
                 PSScript::UnpinFromFrequentFolder,
