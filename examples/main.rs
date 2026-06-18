@@ -167,7 +167,7 @@ Core:
   batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
-  empty <recent|frequent|all> [--pinned] [--refresh-explorer]
+  empty <recent|frequent|all> [--pinned] [--pinned-timeout-ms N] [--refresh-explorer]
   restore <recent|frequent|all> [--deep] [--no-refresh-explorer] [--rebuild-delay-ms N] [--rebuild-poll-timeout-ms N] [--lnk-resolve-timeout-ms N] [--clear-timeout-ms N]
 Utility APIs:
   retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
@@ -190,6 +190,8 @@ DestList APIs:
   dest filetime <value>
   dest remove <recent|frequent> [--delay-ms N] <path>...
   dest remove-entries <recent|frequent> [--delay-ms N] <path>...
+
+Experimental DestList remove APIs rebuild Explorer backing files and may delete matching .lnk files.
 "#
     );
 }
@@ -395,14 +397,29 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
     require_len(
         args,
         1,
-        "empty <recent|frequent|all> [--pinned] [--refresh-explorer]",
+        "empty <recent|frequent|all> [--pinned] [--pinned-timeout-ms N] [--refresh-explorer]",
     )?;
     let qa_type = parse_category(&args[0], true)?;
-    let mut options = EmptyOptions::new();
+    let options = parse_empty_options(&args[1..])?;
 
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
+    manager.empty_items(qa_type, options)?;
+    println!("cleared {}", category_name(qa_type));
+    Ok(())
+}
+
+fn parse_empty_options(args: &[String]) -> WincentResult<EmptyOptions> {
+    let mut options = EmptyOptions::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
             "--pinned" => options = options.remove_pinned_folders(),
+            "--pinned-timeout-ms" => {
+                index += 1;
+                options = options.with_pinned_folders_timeout(Duration::from_millis(parse_u64(
+                    required_arg(args.get(index), "pinned-timeout-ms")?,
+                    "pinned-timeout-ms",
+                )?));
+            }
             "--refresh-explorer" => options = options.refresh_explorer(),
             other => {
                 return Err(WincentError::InvalidArgument(format!(
@@ -410,11 +427,10 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
                 )))
             }
         }
+        index += 1;
     }
 
-    manager.empty_items(qa_type, options)?;
-    println!("cleared {}", category_name(qa_type));
-    Ok(())
+    Ok(options)
 }
 
 fn cmd_restore(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
@@ -1281,6 +1297,33 @@ mod tests {
 
         assert!(
             matches!(error, WincentError::InvalidArgument(message) if message == "unterminated quote: \"")
+        );
+    }
+
+    #[test]
+    fn parse_empty_options_accepts_pinned_timeout() {
+        let options = parse_empty_options(&[
+            "--pinned".to_string(),
+            "--pinned-timeout-ms".to_string(),
+            "2500".to_string(),
+            "--refresh-explorer".to_string(),
+        ])
+        .unwrap();
+
+        assert!(options.also_pinned_folders());
+        assert_eq!(
+            options.pinned_folders_timeout(),
+            Some(Duration::from_millis(2500))
+        );
+        assert!(options.refresh_explorer_enabled());
+    }
+
+    #[test]
+    fn parse_empty_options_requires_pinned_timeout_value() {
+        let error = parse_empty_options(&["--pinned-timeout-ms".to_string()]).unwrap_err();
+
+        assert!(
+            matches!(error, WincentError::InvalidArgument(message) if message == "pinned-timeout-ms requires a value")
         );
     }
 }

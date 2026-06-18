@@ -21,8 +21,8 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 - Check item existence by exact path or keyword
 - Batch add/remove with per-item error collection
 - Caller-side timeout protection for Shell and PowerShell operations
-- Visibility control for Quick Access sections
-- DestList metadata access
+- Built-in visibility control for Quick Access sections
+- Built-in DestList metadata access
 
 ## Installation
 
@@ -32,6 +32,8 @@ Add the following to your `Cargo.toml`:
 [dependencies]
 wincent = "0.2.3"
 ```
+
+Visibility and DestList parser APIs are included by default; no extra feature flags are needed.
 
 ## Quick Start
 
@@ -84,7 +86,9 @@ fn main() -> WincentResult<()> {
 - **Rust**: 1.85.0 or later.
 - **Consistency**: Quick Access state is maintained by Windows Explorer. Results may lag behind mutations by a short interval, and Explorer may rebuild state asynchronously across versions.
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
+- **Pinned-folder cleanup timeout**: when explicitly removing visible pinned folders during an `empty` operation, `EmptyOptions::with_pinned_folders_timeout()` can override the snapshot/unpin timeout. If unset, the operation uses the manager timeout.
 - **Restore cleanup**: default restore cleanup deletes only `.lnk` files whose target type is resolved as the requested file or folder category. Use `RestoreDefaultsOptions::deep_lnk_cleanup()` or CLI `restore --deep` to also delete unresolved or unknown-type `.lnk` files.
+- **Experimental DestList removal**: experimental remove APIs rebuild Explorer backing files directly and may delete matching Recent-folder `.lnk` files. Treat them as less stable than parser/query APIs.
 
 ## Contributing
 

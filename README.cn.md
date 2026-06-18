@@ -21,8 +21,8 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 - 精确路径或关键词检查项目是否存在
 - 批量添加/删除，逐项收集错误
 - Shell 和 PowerShell 操作具备调用方等待超时保护
-- 可选的快速访问分区可见性控制（`visible` feature）
-- 可选的 DestList 元数据访问（`destlist` feature）
+- 内置的快速访问分区可见性控制
+- 内置的 DestList 元数据访问
 
 ## 安装
 
@@ -33,12 +33,7 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 wincent = "0.2.3"
 ```
 
-启用可选 feature：
-
-```toml
-[dependencies]
-wincent = { version = "0.2.3", features = ["visible", "destlist"] }
-```
+快速访问分区可见性控制和 DestList 解析 API 默认内置，无需额外启用 feature。
 
 ## 快速开始
 
@@ -53,7 +48,9 @@ fn main() -> WincentResult<()> {
     manager.add_item(
         "C:\\Projects\\report.docx",
         QuickAccess::RecentFiles,
-        AddOptions::new().refresh_recent_files(),
+        AddOptions::new()
+            .force_recent_files_rebuild()
+            .refresh_explorer(),
     )?;
 
     // 固定文件夹到常用文件夹。
@@ -89,7 +86,9 @@ fn main() -> WincentResult<()> {
 - **Rust**：1.85.0 或更高版本。
 - **状态一致性**：快速访问状态由 Windows Explorer 维护，修改操作后结果可能有短暂延迟，Explorer 也可能在不同版本间以异步方式重建状态。
 - **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
+- **固定文件夹清理超时**：在 `empty` 操作中显式移除可见固定文件夹时，可用 `EmptyOptions::with_pinned_folders_timeout()` 覆盖 snapshot/unpin 超时。未设置时使用 manager timeout。
 - **恢复清理**：默认恢复清理只删除目标类型可解析为对应文件或文件夹分类的 `.lnk` 文件。使用 `RestoreDefaultsOptions::deep_lnk_cleanup()` 或 CLI `restore --deep` 时，也会删除无法解析或目标类型未知的 `.lnk` 文件。
+- **实验性 DestList 删除**：experimental remove API 会直接重建 Explorer backing file，并可能删除 Recent 文件夹中匹配的 `.lnk` 文件；其稳定性合同弱于 parser/query API。
 
 ## 贡献指南
 
