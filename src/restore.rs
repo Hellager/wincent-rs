@@ -17,9 +17,14 @@ const DEFAULT_REBUILD_DELAY: Duration = Duration::from_millis(500);
 const DEFAULT_REBUILD_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Options for restoring Quick Access categories to their system defaults.
+///
+/// Restore cleanup deletes only `.lnk` files whose target type can be resolved
+/// as the requested file or folder category. Enable deep link cleanup to also
+/// delete `.lnk` files that cannot be resolved or whose target type is unknown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestoreDefaultsOptions {
     refresh_explorer: bool,
+    deep_lnk_cleanup: bool,
     lnk_resolve_timeout: Duration,
     clear_timeout: Duration,
     rebuild_delay: Duration,
@@ -30,6 +35,7 @@ impl Default for RestoreDefaultsOptions {
     fn default() -> Self {
         Self {
             refresh_explorer: true,
+            deep_lnk_cleanup: false,
             lnk_resolve_timeout: DEFAULT_LNK_RESOLVE_TIMEOUT,
             clear_timeout: DEFAULT_CLEAR_TIMEOUT,
             rebuild_delay: DEFAULT_REBUILD_DELAY,
@@ -62,6 +68,25 @@ impl RestoreDefaultsOptions {
     #[must_use]
     pub fn refresh_explorer(self) -> Self {
         self.with_refresh_explorer(true)
+    }
+
+    /// Whether unresolved or unknown-type `.lnk` files are deleted during restore cleanup.
+    #[must_use]
+    pub fn deep_lnk_cleanup_enabled(&self) -> bool {
+        self.deep_lnk_cleanup
+    }
+
+    /// Sets whether unresolved or unknown-type `.lnk` files are deleted.
+    #[must_use]
+    pub fn with_deep_lnk_cleanup(mut self, enabled: bool) -> Self {
+        self.deep_lnk_cleanup = enabled;
+        self
+    }
+
+    /// Deletes unresolved or unknown-type `.lnk` files during restore cleanup.
+    #[must_use]
+    pub fn deep_lnk_cleanup(self) -> Self {
+        self.with_deep_lnk_cleanup(true)
     }
 
     /// Timeout for resolving `.lnk` shortcut targets.
@@ -444,6 +469,7 @@ where
     let lnk_cleanup = delete_matching_lnk_files(
         RestoreTarget::RecentFiles,
         options.lnk_resolve_timeout(),
+        options.deep_lnk_cleanup_enabled(),
         list_lnk_files,
         resolve_lnk,
         delete_lnk,
@@ -498,6 +524,7 @@ where
     let lnk_cleanup = delete_matching_lnk_files(
         RestoreTarget::FrequentFolders,
         options.lnk_resolve_timeout(),
+        options.deep_lnk_cleanup_enabled(),
         list_lnk_files,
         resolve_lnk,
         delete_lnk,
@@ -657,6 +684,7 @@ struct LnkCleanup {
 fn delete_matching_lnk_files<FList, FResolve, FDelete>(
     target: RestoreTarget,
     timeout: Duration,
+    deep: bool,
     list_lnk_files: FList,
     mut resolve_lnk: FResolve,
     mut delete_lnk: FDelete,
@@ -688,7 +716,7 @@ where
                 };
             }
         };
-        if should_delete_lnk_for_restore(&target, resolution.as_ref()) {
+        if should_delete_lnk_for_restore(&target, resolution.as_ref(), deep) {
             if let Err(error) = delete_lnk(&lnk_path) {
                 return LnkCleanup {
                     deleted_lnk_paths: deleted,
@@ -708,11 +736,14 @@ where
 fn should_delete_lnk_for_restore(
     target: &RestoreTarget,
     resolution: Option<&LnkResolution>,
+    deep: bool,
 ) -> bool {
-    !matches!(
-        (target, resolution.and_then(|resolution| resolution.is_dir)),
-        (RestoreTarget::RecentFiles, Some(true)) | (RestoreTarget::FrequentFolders, Some(false))
-    )
+    match (target, resolution.and_then(|resolution| resolution.is_dir)) {
+        (RestoreTarget::RecentFiles, Some(false))
+        | (RestoreTarget::FrequentFolders, Some(true)) => true,
+        (_, None) => deep,
+        _ => false,
+    }
 }
 
 fn non_default_raw_paths(entries: &[DestListEntry]) -> Vec<String> {
@@ -772,8 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_restore_deletes_files_unknown_missing_and_unresolved_but_keeps_dirs(
-    ) -> WincentResult<()> {
+    fn recent_restore_default_deletes_only_files_and_keeps_unknown_links() -> WincentResult<()> {
         let paths = vec![
             PathBuf::from("file.lnk"),
             PathBuf::from("dir.lnk"),
@@ -784,6 +814,43 @@ mod tests {
 
         let report = restore_recent_files_defaults_with(
             RestoreDefaultsOptions::new(),
+            || Ok(paths.clone()),
+            |path, _| {
+                Ok(match path.to_string_lossy().as_ref() {
+                    "file.lnk" => Some(lnk("C:\\file.txt", Some(false))),
+                    "dir.lnk" => Some(lnk("C:\\dir", Some(true))),
+                    "unknown.lnk" => Some(lnk("C:\\missing", None)),
+                    _ => None,
+                })
+            },
+            |path| {
+                deleted.borrow_mut().push(path.to_path_buf());
+                Ok(())
+            },
+            |timeout| {
+                assert_eq!(timeout, Duration::from_secs(10));
+                Ok(())
+            },
+        )?;
+
+        assert!(report.success());
+        assert_eq!(deleted.into_inner(), vec![PathBuf::from("file.lnk")]);
+        Ok(())
+    }
+
+    #[test]
+    fn recent_restore_deep_deletes_files_unknown_and_unresolved_but_keeps_dirs() -> WincentResult<()>
+    {
+        let paths = vec![
+            PathBuf::from("file.lnk"),
+            PathBuf::from("dir.lnk"),
+            PathBuf::from("unknown.lnk"),
+            PathBuf::from("unresolved.lnk"),
+        ];
+        let deleted = RefCell::new(Vec::new());
+
+        let report = restore_recent_files_defaults_with(
+            RestoreDefaultsOptions::new().deep_lnk_cleanup(),
             || Ok(paths.clone()),
             |path, _| {
                 Ok(match path.to_string_lossy().as_ref() {
@@ -816,8 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn frequent_restore_deletes_dirs_unknown_missing_and_unresolved_but_keeps_files(
-    ) -> WincentResult<()> {
+    fn frequent_restore_default_deletes_only_dirs_and_keeps_unknown_links() -> WincentResult<()> {
         let paths = vec![
             PathBuf::from("file.lnk"),
             PathBuf::from("dir.lnk"),
@@ -828,6 +894,44 @@ mod tests {
 
         let report = restore_frequent_folders_defaults_with(
             RestoreDefaultsOptions::new().with_rebuild_delay(Duration::ZERO),
+            || Ok(paths.clone()),
+            |path, _| {
+                Ok(match path.to_string_lossy().as_ref() {
+                    "file.lnk" => Some(lnk("C:\\file.txt", Some(false))),
+                    "dir.lnk" => Some(lnk("C:\\dir", Some(true))),
+                    "unknown.lnk" => Some(lnk("C:\\missing", None)),
+                    _ => None,
+                })
+            },
+            |path| {
+                deleted.borrow_mut().push(path.to_path_buf());
+                Ok(())
+            },
+            || Ok(()),
+            |_| Ok(()),
+            |_| Ok(vec![entry("knownfolder:{guid}")]),
+        )?;
+
+        assert!(report.success());
+        assert_eq!(deleted.into_inner(), vec![PathBuf::from("dir.lnk")]);
+        Ok(())
+    }
+
+    #[test]
+    fn frequent_restore_deep_deletes_dirs_unknown_and_unresolved_but_keeps_files(
+    ) -> WincentResult<()> {
+        let paths = vec![
+            PathBuf::from("file.lnk"),
+            PathBuf::from("dir.lnk"),
+            PathBuf::from("unknown.lnk"),
+            PathBuf::from("unresolved.lnk"),
+        ];
+        let deleted = RefCell::new(Vec::new());
+
+        let report = restore_frequent_folders_defaults_with(
+            RestoreDefaultsOptions::new()
+                .deep_lnk_cleanup()
+                .with_rebuild_delay(Duration::ZERO),
             || Ok(paths.clone()),
             |path, _| {
                 Ok(match path.to_string_lossy().as_ref() {

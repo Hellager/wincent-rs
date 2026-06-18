@@ -841,6 +841,11 @@ impl QuickAccessManager {
     /// Restore progress and workflow failures are captured in the returned
     /// report. The `Result` only represents API-level failures that prevent a
     /// report from being produced.
+    ///
+    /// By default, `.lnk` cleanup deletes only shortcuts whose target type can
+    /// be resolved as the requested file or folder category. Use
+    /// [`RestoreDefaultsOptions::deep_lnk_cleanup`] to also delete shortcuts
+    /// that cannot be resolved or whose target type is unknown.
     pub fn restore_defaults(
         &self,
         qa_type: QuickAccess,
@@ -850,6 +855,9 @@ impl QuickAccessManager {
     }
 
     /// Restores Recent Files to its system-default state.
+    ///
+    /// Default `.lnk` cleanup deletes only shortcuts resolved as file targets.
+    /// Deep cleanup also deletes unresolved or unknown-type shortcuts.
     pub fn restore_recent_files_defaults(
         &self,
         options: RestoreDefaultsOptions,
@@ -858,6 +866,9 @@ impl QuickAccessManager {
     }
 
     /// Restores Frequent Folders to its system-default state.
+    ///
+    /// Default `.lnk` cleanup deletes only shortcuts resolved as folder targets.
+    /// Deep cleanup also deletes unresolved or unknown-type shortcuts.
     pub fn restore_frequent_folders_defaults(
         &self,
         options: RestoreDefaultsOptions,

@@ -17,6 +17,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 - Query recent files and frequent folders
 - Add and remove items with duplicate detection
 - Clear categories with optional explicit pinned-folder cleanup
+- Restore default Quick Access state with conservative `.lnk` cleanup and opt-in deep cleanup
 - Check item existence by exact path or keyword
 - Batch add/remove with per-item error collection
 - Caller-side timeout protection for Shell and PowerShell operations
@@ -83,6 +84,7 @@ fn main() -> WincentResult<()> {
 - **Rust**: 1.85.0 or later.
 - **Consistency**: Quick Access state is maintained by Windows Explorer. Results may lag behind mutations by a short interval, and Explorer may rebuild state asynchronously across versions.
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
+- **Restore cleanup**: default restore cleanup deletes only `.lnk` files whose target type is resolved as the requested file or folder category. Use `RestoreDefaultsOptions::deep_lnk_cleanup()` or CLI `restore --deep` to also delete unresolved or unknown-type `.lnk` files.
 
 ## Contributing
 

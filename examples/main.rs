@@ -168,7 +168,7 @@ Core:
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
   empty <recent|frequent|all> [--pinned] [--refresh-explorer]
-  restore <recent|frequent|all> [--no-refresh-explorer] [--rebuild-delay-ms N] [--rebuild-poll-timeout-ms N] [--lnk-resolve-timeout-ms N] [--clear-timeout-ms N]
+  restore <recent|frequent|all> [--deep] [--no-refresh-explorer] [--rebuild-delay-ms N] [--rebuild-poll-timeout-ms N] [--lnk-resolve-timeout-ms N] [--clear-timeout-ms N]
 Utility APIs:
   retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
   classify <stderr text>
@@ -424,6 +424,7 @@ fn cmd_restore(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
+            "--deep" => options = options.deep_lnk_cleanup(),
             "--no-refresh-explorer" => options = options.with_refresh_explorer(false),
             "--rebuild-delay-ms" => {
                 index += 1;
