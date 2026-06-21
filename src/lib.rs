@@ -110,10 +110,13 @@ pub mod prelude {
     };
 
     pub use crate::visible::{
-        is_frequent_folders_visible, is_recent_files_visible, is_visible,
-        set_frequent_folders_visible, set_frequent_folders_visible_with_options,
-        set_recent_files_visible, set_recent_files_visible_with_options, set_visible,
-        set_visible_with_options, VisibilityOptions,
+        hide_start_recommended_section, hide_start_recommended_section_with_options,
+        is_frequent_folders_visible, is_recent_files_visible, is_start_recommended_section_visible,
+        is_visible, set_frequent_folders_visible, set_frequent_folders_visible_with_options,
+        set_recent_files_visible, set_recent_files_visible_with_options,
+        set_start_recommended_section_visible, set_start_recommended_section_visible_with_options,
+        set_visible, set_visible_with_options, show_start_recommended_section,
+        show_start_recommended_section_with_options, VisibilityOptions,
     };
 
     pub use crate::{

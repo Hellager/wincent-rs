@@ -181,6 +181,11 @@ Visibility APIs:
   visible hide <recent|frequent|all> [--refresh-explorer]
   visible get-recent | get-frequent
   visible set-recent <true|false> [--refresh-explorer] | set-frequent <true|false> [--refresh-explorer]
+  visible get-start-recommended
+  visible set-start-recommended <true|false> [--refresh-explorer]
+  visible show-start-recommended [--refresh-explorer]
+  visible hide-start-recommended [--refresh-explorer]
+  Start Recommended commands use the current-user Explorer Advanced setting, not Quick Access visibility.
 
 DestList APIs:
   dest path <recent|frequent>
@@ -670,6 +675,33 @@ fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
                 parse_visibility_options(&args[2..])?,
             )?;
             println!("updated frequent visibility");
+        }
+        "get-start-recommended" => {
+            println!("{}", manager.is_start_recommended_section_visible()?);
+        }
+        "set-start-recommended" => {
+            require_len(
+                &args[1..],
+                1,
+                "visible set-start-recommended <true|false> [--refresh-explorer]",
+            )?;
+            manager.set_start_recommended_section_visible_with_options(
+                parse_bool(&args[1])?,
+                parse_visibility_options(&args[2..])?,
+            )?;
+            println!("updated Start Recommended visibility");
+        }
+        "show-start-recommended" => {
+            manager.show_start_recommended_section_with_options(parse_visibility_options(
+                &args[1..],
+            )?)?;
+            println!("shown Start Recommended section");
+        }
+        "hide-start-recommended" => {
+            manager.hide_start_recommended_section_with_options(parse_visibility_options(
+                &args[1..],
+            )?)?;
+            println!("hidden Start Recommended section");
         }
         other => {
             return Err(WincentError::InvalidArgument(format!(
@@ -1324,6 +1356,29 @@ mod tests {
 
         assert!(
             matches!(error, WincentError::InvalidArgument(message) if message == "pinned-timeout-ms requires a value")
+        );
+    }
+
+    #[test]
+    fn parse_start_recommended_visibility_options_accepts_refresh() {
+        let visible = parse_bool("false").unwrap();
+        let options = parse_visibility_options(&["--refresh-explorer".to_string()]).unwrap();
+
+        assert!(!visible);
+        assert!(options.refresh_explorer_enabled());
+    }
+
+    #[test]
+    fn visible_set_start_recommended_requires_bool_argument() {
+        let error = require_len(
+            &[] as &[String],
+            1,
+            "visible set-start-recommended <true|false> [--refresh-explorer]",
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, WincentError::InvalidArgument(message) if message == "usage: visible set-start-recommended <true|false> [--refresh-explorer]")
         );
     }
 }

@@ -22,6 +22,7 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 - 批量添加/删除，逐项收集错误
 - Shell 和 PowerShell 操作具备调用方等待超时保护
 - 快速访问分区可见性控制
+- Windows 11 开始菜单“推荐项目”分区可见性控制
 - DestList 元数据访问
 
 ## 安装
@@ -86,6 +87,7 @@ fn main() -> WincentResult<()> {
 - **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
 - **固定文件夹清理超时**：在 `empty` 操作中显式移除可见固定文件夹时，可用 `EmptyOptions::with_pinned_folders_timeout()` 覆盖 snapshot/unpin 超时。未设置时使用 manager timeout。
 - **恢复清理**：默认恢复清理只删除目标类型可解析为对应文件或文件夹分类的 `.lnk` 文件。使用 `RestoreDefaultsOptions::deep_lnk_cleanup()` 或 CLI `restore --deep` 时，也会删除无法解析或目标类型未知的 `.lnk` 文件。
+- **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。
 - **实验性 DestList 删除**：experimental remove API 会直接重建 Explorer backing file，并可能删除 Recent 文件夹中匹配的 `.lnk` 文件；其稳定性弱于 parser/query API。
 
 ## 贡献指南
@@ -126,6 +128,7 @@ cargo test -- --ignored
 - [libyal](https://github.com/libyal/dtformats/blob/main/documentation/Jump%20lists%20format.asciidoc)
 - [Eric Zimmerman](https://github.com/EricZimmerman/JumpList)
 - [kacos2000](https://github.com/kacos2000/Jumplist-Browser)
+- [Grant Funtila](https://www.ninjaone.com/blog/clear-the-recommended-section-in-the-start-menu-in-windows-11/)
 
 ## 许可证
 

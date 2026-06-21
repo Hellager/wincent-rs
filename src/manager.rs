@@ -1061,6 +1061,99 @@ impl QuickAccessManager {
         visible::set_frequent_folders_visible_with_options(visible, options)
     }
 
+    /// Checks whether the Windows 11 Start menu Recommended section is visible.
+    ///
+    /// This reads the current-user `Start_TrackDocs` Explorer Advanced value
+    /// used by the Start menu Recommended section. Policy values, MDM settings,
+    /// Windows edition, or Explorer version can override the effective UI state.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current-user Explorer Advanced key
+    /// cannot be read.
+    pub fn is_start_recommended_section_visible(&self) -> WincentResult<bool> {
+        visible::is_start_recommended_section_visible()
+    }
+
+    /// Sets whether the Windows 11 Start menu Recommended section is visible.
+    ///
+    /// Passing `true` writes `Start_TrackDocs = 1`; passing `false` writes
+    /// `Start_TrackDocs = 0` under the current-user Explorer Advanced key.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current-user Explorer Advanced key
+    /// cannot be created or updated.
+    pub fn set_start_recommended_section_visible(&self, visible: bool) -> WincentResult<()> {
+        visible::set_start_recommended_section_visible(visible)
+    }
+
+    /// Shows the Windows 11 Start menu Recommended section.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current-user Explorer Advanced key
+    /// cannot be created or updated.
+    pub fn show_start_recommended_section(&self) -> WincentResult<()> {
+        self.set_start_recommended_section_visible(true)
+    }
+
+    /// Hides the Windows 11 Start menu Recommended section.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current-user Explorer Advanced key
+    /// cannot be created or updated.
+    pub fn hide_start_recommended_section(&self) -> WincentResult<()> {
+        self.set_start_recommended_section_visible(false)
+    }
+
+    /// Sets whether the Windows 11 Start menu Recommended section is visible,
+    /// with optional Explorer refresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current-user Explorer Advanced key
+    /// cannot be created or updated. If `options` requests Explorer refresh,
+    /// refresh errors are also returned after the registry write.
+    pub fn set_start_recommended_section_visible_with_options(
+        &self,
+        visible: bool,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        visible::set_start_recommended_section_visible_with_options(visible, options)
+    }
+
+    /// Shows the Windows 11 Start menu Recommended section, with optional
+    /// Explorer refresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current-user Explorer Advanced key
+    /// cannot be created or updated. If `options` requests Explorer refresh,
+    /// refresh errors are also returned after the registry write.
+    pub fn show_start_recommended_section_with_options(
+        &self,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        self.set_start_recommended_section_visible_with_options(true, options)
+    }
+
+    /// Hides the Windows 11 Start menu Recommended section, with optional
+    /// Explorer refresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns registry I/O errors when the current-user Explorer Advanced key
+    /// cannot be created or updated. If `options` requests Explorer refresh,
+    /// refresh errors are also returned after the registry write.
+    pub fn hide_start_recommended_section_with_options(
+        &self,
+        options: visible::VisibilityOptions,
+    ) -> WincentResult<()> {
+        self.set_start_recommended_section_visible_with_options(false, options)
+    }
+
     fn convert_batch_items(
         &self,
         items: &[QuickAccessItem],

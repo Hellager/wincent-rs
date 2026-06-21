@@ -19,13 +19,22 @@
 //! - Setting Recent Files hidden through this module hides recently used files.
 //! - Changing Recent Files visibility through Explorer's Folder Options UI can
 //!   clear all recent file entries.
+//!
+//! The Start menu Recommended section on Windows 11 can be controlled with the
+//! current user's Start document-tracking value. This module exposes it as a
+//! distinct API instead of mixing it with Quick Access categories. MDM settings,
+//! policy values, Windows edition, and Explorer version can override or delay
+//! the visible effect of the current-user value.
 
 use crate::{QuickAccess, WincentResult};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const EXPLORER_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer";
+const EXPLORER_ADVANCED_KEY: &str =
+    "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced";
 const SHOW_FREQUENT_VALUE: &str = "ShowFrequent";
 const SHOW_RECENT_VALUE: &str = "ShowRecent";
+const START_TRACK_DOCS_VALUE: &str = "Start_TrackDocs";
 const VISIBLE_DWORD: u32 = 1;
 const HIDDEN_DWORD: u32 = 0;
 
@@ -42,6 +51,22 @@ fn open_quick_access_reg_key() -> WincentResult<Option<RegKey>> {
 fn create_quick_access_reg_key() -> WincentResult<RegKey> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(EXPLORER_KEY)?;
+    Ok(key)
+}
+
+fn open_start_recommended_reg_key() -> WincentResult<Option<RegKey>> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+
+    match hkcu.open_subkey(EXPLORER_ADVANCED_KEY) {
+        Ok(key) => Ok(Some(key)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn create_start_recommended_reg_key() -> WincentResult<RegKey> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(EXPLORER_ADVANCED_KEY)?;
     Ok(key)
 }
 
@@ -65,6 +90,33 @@ fn write_visibility_value(reg_key: &RegKey, value_name: &str, visible: bool) -> 
     let value = if visible { VISIBLE_DWORD } else { HIDDEN_DWORD };
 
     reg_key.set_value(value_name, &value)?;
+    Ok(())
+}
+
+fn read_start_recommended_visibility_value(value: Option<u32>) -> bool {
+    value != Some(HIDDEN_DWORD)
+}
+
+fn read_start_recommended_visibility(reg_key: &RegKey) -> WincentResult<bool> {
+    match reg_key.get_value::<u32, _>(START_TRACK_DOCS_VALUE) {
+        Ok(value) => Ok(read_start_recommended_visibility_value(Some(value))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn start_track_docs_value_for_visible(visible: bool) -> u32 {
+    if visible {
+        VISIBLE_DWORD
+    } else {
+        HIDDEN_DWORD
+    }
+}
+
+fn write_start_recommended_visibility(reg_key: &RegKey, visible: bool) -> WincentResult<()> {
+    let value = start_track_docs_value_for_visible(visible);
+
+    reg_key.set_value(START_TRACK_DOCS_VALUE, &value)?;
     Ok(())
 }
 
@@ -174,6 +226,66 @@ pub fn set_frequent_folders_visible(visible: bool) -> WincentResult<()> {
     set_visible(QuickAccess::FrequentFolders, visible)
 }
 
+/// Checks whether the Windows 11 Start menu Recommended section is visible.
+///
+/// This reads the current-user value
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_TrackDocs`.
+/// Missing values are treated as visible. MDM settings, policy values, Windows
+/// edition, or Explorer version can override the effective UI state.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
+/// be read.
+pub fn is_start_recommended_section_visible() -> WincentResult<bool> {
+    let Some(reg_key) = open_start_recommended_reg_key()? else {
+        return Ok(true);
+    };
+
+    read_start_recommended_visibility(&reg_key)
+}
+
+/// Sets whether the Windows 11 Start menu Recommended section is visible.
+///
+/// This writes the current-user value
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_TrackDocs`.
+/// Passing `true` writes `1`; passing `false` writes `0`. The value is not
+/// removed so repeated calls are deterministic. This matches the Registry
+/// Editor method that disables Start document tracking to clear the Recommended
+/// section.
+///
+/// Explorer may require a refresh, restart, sign-out, or supported Windows 11
+/// edition/build before the UI reflects the change.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
+/// be created or updated.
+pub fn set_start_recommended_section_visible(visible: bool) -> WincentResult<()> {
+    let reg_key = create_start_recommended_reg_key()?;
+    write_start_recommended_visibility(&reg_key, visible)
+}
+
+/// Shows the Windows 11 Start menu Recommended section.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
+/// be created or updated.
+pub fn show_start_recommended_section() -> WincentResult<()> {
+    set_start_recommended_section_visible(true)
+}
+
+/// Hides the Windows 11 Start menu Recommended section.
+///
+/// # Errors
+///
+/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
+/// be created or updated.
+pub fn hide_start_recommended_section() -> WincentResult<()> {
+    set_start_recommended_section_visible(false)
+}
+
 /// Options for visibility write operations.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VisibilityOptions {
@@ -262,6 +374,51 @@ pub fn set_frequent_folders_visible_with_options(
     set_visible_with_options(QuickAccess::FrequentFolders, visible, options)
 }
 
+/// Sets whether the Windows 11 Start menu Recommended section is visible, with
+/// optional Explorer refresh.
+///
+/// If `options.refresh_explorer_enabled()` is true, calls
+/// `refresh_explorer_window()` after the registry write. Registry write is NOT
+/// rolled back if refresh fails.
+pub fn set_start_recommended_section_visible_with_options(
+    visible: bool,
+    options: VisibilityOptions,
+) -> WincentResult<()> {
+    set_start_recommended_section_visible_with_options_inner(
+        visible,
+        options,
+        set_start_recommended_section_visible,
+        crate::utils::refresh_explorer_window,
+    )
+}
+
+fn set_start_recommended_section_visible_with_options_inner(
+    visible: bool,
+    options: VisibilityOptions,
+    write: impl FnOnce(bool) -> WincentResult<()>,
+    refresh: impl FnOnce() -> WincentResult<()>,
+) -> WincentResult<()> {
+    write(visible)?;
+    if options.refresh_explorer_enabled() {
+        refresh()?;
+    }
+    Ok(())
+}
+
+/// Shows the Windows 11 Start menu Recommended section, with optional Explorer refresh.
+pub fn show_start_recommended_section_with_options(
+    options: VisibilityOptions,
+) -> WincentResult<()> {
+    set_start_recommended_section_visible_with_options(true, options)
+}
+
+/// Hides the Windows 11 Start menu Recommended section, with optional Explorer refresh.
+pub fn hide_start_recommended_section_with_options(
+    options: VisibilityOptions,
+) -> WincentResult<()> {
+    set_start_recommended_section_visible_with_options(false, options)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +434,36 @@ mod tests {
             Some(SHOW_FREQUENT_VALUE)
         );
         assert_eq!(registry_value_for(QuickAccess::All), None);
+    }
+
+    #[test]
+    fn start_recommended_registry_names_match_explorer_advanced_setting() {
+        assert_eq!(
+            EXPLORER_ADVANCED_KEY,
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced"
+        );
+        assert_eq!(START_TRACK_DOCS_VALUE, "Start_TrackDocs");
+    }
+
+    #[test]
+    fn missing_start_track_docs_value_is_visible() {
+        assert!(read_start_recommended_visibility_value(None));
+    }
+
+    #[test]
+    fn enabled_start_track_docs_value_is_visible() {
+        assert!(read_start_recommended_visibility_value(Some(1)));
+    }
+
+    #[test]
+    fn disabled_start_track_docs_value_is_hidden() {
+        assert!(!read_start_recommended_visibility_value(Some(0)));
+    }
+
+    #[test]
+    fn start_recommended_visibility_writes_start_track_docs_values() {
+        assert_eq!(start_track_docs_value_for_visible(true), 1);
+        assert_eq!(start_track_docs_value_for_visible(false), 0);
     }
 
     #[test]
@@ -427,6 +614,109 @@ mod tests {
             true,
             VisibilityOptions::new().refresh_explorer(),
             |_, _| Err(expected),
+            || {
+                refresh_called.set(true);
+                Ok(())
+            },
+        );
+
+        match result {
+            Err(WincentError::SystemError(message)) => assert_eq!(message, "write sentinel"),
+            other => panic!("expected writer sentinel error, got {other:?}"),
+        }
+        assert!(
+            !refresh_called.get(),
+            "refresh must not be called when registry writer fails"
+        );
+    }
+
+    #[test]
+    fn set_start_recommended_inner_no_refresh_does_not_call_refresh() {
+        use std::cell::Cell;
+
+        let write_called = Cell::new(false);
+        let refresh_called = Cell::new(false);
+
+        let result = set_start_recommended_section_visible_with_options_inner(
+            true,
+            VisibilityOptions::new(),
+            |visible| {
+                assert!(visible);
+                write_called.set(true);
+                Ok(())
+            },
+            || {
+                refresh_called.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(write_called.get(), "registry writer must be called");
+        assert!(
+            !refresh_called.get(),
+            "refresh must not be called when option is disabled"
+        );
+    }
+
+    #[test]
+    fn set_start_recommended_inner_with_refresh_calls_refresh() {
+        use std::cell::Cell;
+
+        let write_called = Cell::new(false);
+        let refresh_called = Cell::new(false);
+
+        let result = set_start_recommended_section_visible_with_options_inner(
+            false,
+            VisibilityOptions::new().refresh_explorer(),
+            |visible| {
+                assert!(!visible);
+                write_called.set(true);
+                Ok(())
+            },
+            || {
+                refresh_called.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(write_called.get(), "registry writer must be called");
+        assert!(
+            refresh_called.get(),
+            "refresh must be called when option is enabled"
+        );
+    }
+
+    #[test]
+    fn set_start_recommended_inner_refresh_error_propagates() {
+        use crate::error::WincentError;
+
+        let expected = WincentError::SystemError("sentinel".into());
+        let result = set_start_recommended_section_visible_with_options_inner(
+            true,
+            VisibilityOptions::new().refresh_explorer(),
+            |_| Ok(()),
+            || Err(expected),
+        );
+
+        match result {
+            Err(WincentError::SystemError(message)) => assert_eq!(message, "sentinel"),
+            other => panic!("expected refresh sentinel error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_start_recommended_inner_write_error_skips_refresh() {
+        use crate::error::WincentError;
+        use std::cell::Cell;
+
+        let refresh_called = Cell::new(false);
+        let expected = WincentError::SystemError("write sentinel".into());
+        let result = set_start_recommended_section_visible_with_options_inner(
+            true,
+            VisibilityOptions::new().refresh_explorer(),
+            |_| Err(expected),
             || {
                 refresh_called.set(true);
                 Ok(())
