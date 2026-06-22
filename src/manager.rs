@@ -1061,11 +1061,12 @@ impl QuickAccessManager {
         visible::set_frequent_folders_visible_with_options(visible, options)
     }
 
-    /// Checks whether the Windows 11 Start menu Recommended section is visible.
+    /// Checks whether recently used files appear in Windows Recommended items.
     ///
     /// This reads the current-user `Start_TrackDocs` Explorer Advanced value
-    /// used by the Start menu Recommended section. Policy values, MDM settings,
-    /// Windows edition, or Explorer version can override the effective UI state.
+    /// used by the Windows Recommended recent-files setting. Policy values,
+    /// MDM settings, Windows edition, or Explorer version can override the
+    /// effective UI state.
     ///
     /// # Errors
     ///
@@ -1075,10 +1076,12 @@ impl QuickAccessManager {
         visible::is_start_recommended_section_visible()
     }
 
-    /// Sets whether the Windows 11 Start menu Recommended section is visible.
+    /// Sets whether recently used files appear in Windows Recommended items.
     ///
     /// Passing `true` writes `Start_TrackDocs = 1`; passing `false` writes
     /// `Start_TrackDocs = 0` under the current-user Explorer Advanced key.
+    /// This controls whether recently used files appear in Windows Recommended
+    /// items.
     ///
     /// # Errors
     ///
@@ -1088,7 +1091,7 @@ impl QuickAccessManager {
         visible::set_start_recommended_section_visible(visible)
     }
 
-    /// Shows the Windows 11 Start menu Recommended section.
+    /// Shows recently used files in Windows Recommended items.
     ///
     /// # Errors
     ///
@@ -1098,7 +1101,7 @@ impl QuickAccessManager {
         self.set_start_recommended_section_visible(true)
     }
 
-    /// Hides the Windows 11 Start menu Recommended section.
+    /// Hides recently used files in Windows Recommended items.
     ///
     /// # Errors
     ///
@@ -1108,7 +1111,7 @@ impl QuickAccessManager {
         self.set_start_recommended_section_visible(false)
     }
 
-    /// Sets whether the Windows 11 Start menu Recommended section is visible,
+    /// Sets whether recently used files appear in Windows Recommended items,
     /// with optional Explorer refresh.
     ///
     /// # Errors
@@ -1124,7 +1127,7 @@ impl QuickAccessManager {
         visible::set_start_recommended_section_visible_with_options(visible, options)
     }
 
-    /// Shows the Windows 11 Start menu Recommended section, with optional
+    /// Shows recently used files in Windows Recommended items, with optional
     /// Explorer refresh.
     ///
     /// # Errors
@@ -1139,7 +1142,7 @@ impl QuickAccessManager {
         self.set_start_recommended_section_visible_with_options(true, options)
     }
 
-    /// Hides the Windows 11 Start menu Recommended section, with optional
+    /// Hides recently used files in Windows Recommended items, with optional
     /// Explorer refresh.
     ///
     /// # Errors

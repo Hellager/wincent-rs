@@ -22,7 +22,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 - Batch add/remove with per-item error collection
 - Caller-side timeout protection for Shell and PowerShell operations
 - Visibility control for Quick Access sections
-- Windows 11 Start menu Recommended section visibility control
+- Recent files visibility control in Windows Recommended items
 - DestList metadata access
 
 ## Installation
@@ -87,7 +87,7 @@ fn main() -> WincentResult<()> {
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
 - **Pinned-folder cleanup timeout**: when explicitly removing visible pinned folders during an `empty` operation, `EmptyOptions::with_pinned_folders_timeout()` can override the snapshot/unpin timeout. If unset, the operation uses the manager timeout.
 - **Restore cleanup**: default restore cleanup deletes only `.lnk` files whose target type is resolved as the requested file or folder category. Use `RestoreDefaultsOptions::deep_lnk_cleanup()` or CLI `restore --deep` to also delete unresolved or unknown-type `.lnk` files.
-- **Start menu Recommended visibility**: the Start Recommended APIs target the Windows 11 Start menu. They write the current user's `Explorer\Advanced\Start_TrackDocs` value and are not blocked on Windows 10, where the setting may have no visible Start menu effect.
+- **Recommended recent files visibility**: the Start Recommended-named APIs write the current user's `Explorer\Advanced\Start_TrackDocs` value, which controls whether recently used files appear in Windows Recommended items. Policy values, MDM settings, Windows edition, or Explorer version may override or delay the visible effect.
 - **Experimental DestList removal**: experimental remove APIs rebuild Explorer backing files directly and may delete matching Recent-folder `.lnk` files. Treat them as less stable than parser/query APIs.
 
 ## Contributing

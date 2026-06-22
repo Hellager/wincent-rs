@@ -185,7 +185,7 @@ Visibility APIs:
   visible set-start-recommended <true|false> [--refresh-explorer]
   visible show-start-recommended [--refresh-explorer]
   visible hide-start-recommended [--refresh-explorer]
-  Start Recommended commands use the current-user Explorer Advanced setting, not Quick Access visibility.
+  Start Recommended commands control recent files in Windows Recommended items.
 
 DestList APIs:
   dest path <recent|frequent>
@@ -689,19 +689,19 @@ fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
                 parse_bool(&args[1])?,
                 parse_visibility_options(&args[2..])?,
             )?;
-            println!("updated Start Recommended visibility");
+            println!("updated recommended recent files visibility");
         }
         "show-start-recommended" => {
             manager.show_start_recommended_section_with_options(parse_visibility_options(
                 &args[1..],
             )?)?;
-            println!("shown Start Recommended section");
+            println!("shown recommended recent files");
         }
         "hide-start-recommended" => {
             manager.hide_start_recommended_section_with_options(parse_visibility_options(
                 &args[1..],
             )?)?;
-            println!("hidden Start Recommended section");
+            println!("hidden recommended recent files");
         }
         other => {
             return Err(WincentError::InvalidArgument(format!(
