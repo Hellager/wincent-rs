@@ -747,15 +747,21 @@ fn cmd_dest_parse(args: &[String]) -> WincentResult<()> {
         1,
         "dest parse <recent|frequent|file> [path] [--limit N]",
     )?;
-    let limit = parse_limit(args, 20)?;
-    let parsed = match args[0].as_str() {
-        "recent" => parse_dest_file(recent_files_dest_path()?)?,
-        "frequent" => parse_dest_file(frequent_folders_dest_path()?)?,
+    let (parsed, limit) = match args[0].as_str() {
+        "recent" => (
+            parse_dest_file(recent_files_dest_path()?)?,
+            parse_limit(&args[1..], 20)?,
+        ),
+        "frequent" => (
+            parse_dest_file(frequent_folders_dest_path()?)?,
+            parse_limit(&args[1..], 20)?,
+        ),
         "file" => {
             let path = args.get(1).ok_or_else(|| {
                 WincentError::InvalidArgument("dest parse file requires a path".to_string())
             })?;
-            parse_dest_file(path)?
+            let trailing = if args.len() > 2 { &args[2..] } else { &[] };
+            (parse_dest_file(path)?, parse_limit(trailing, 20)?)
         }
         other => {
             return Err(WincentError::InvalidArgument(format!(
@@ -769,7 +775,7 @@ fn cmd_dest_parse(args: &[String]) -> WincentResult<()> {
 
 fn cmd_dest_parse_bytes(args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "dest parse-bytes <path> [--limit N]")?;
-    let limit = parse_limit(args, 20)?;
+    let limit = parse_limit(&args[1..], 20)?;
     let data = std::fs::read(&args[0]).map_err(WincentError::Io)?;
     let parsed = parse_dest_bytes(data)?;
     print_dest(&parsed, limit);
@@ -778,7 +784,7 @@ fn cmd_dest_parse_bytes(args: &[String]) -> WincentResult<()> {
 
 fn cmd_dest_manager(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "dest manager <recent|frequent> [--limit N]")?;
-    let limit = parse_limit(args, 20)?;
+    let limit = parse_limit(&args[1..], 20)?;
     let entries = match args[0].as_str() {
         "recent" => manager.get_recent_files_metadata()?,
         "frequent" => manager.get_frequent_folders_metadata()?,
@@ -833,9 +839,18 @@ fn cmd_dest_remove(use_entries: bool, args: &[String]) -> WincentResult<()> {
             .dest_list()
             .entries()
             .iter()
-            .filter(|entry| requested.iter().any(|path| entry.path() == path))
+            .filter(|entry| {
+                requested
+                    .iter()
+                    .any(|path| windows_path_eq_lightweight(entry.path(), path))
+            })
             .cloned()
             .collect();
+        if matching.is_empty() {
+            return Err(WincentError::InvalidArgument(
+                "dest remove-entries found no matching DestList entries".to_string(),
+            ));
+        }
         experimental_remove_entries_by_rebuild(kind, &matching, options)?
     } else {
         experimental_remove_entry_paths_by_rebuild(kind, &paths, options)?
@@ -1238,16 +1253,35 @@ fn parse_limit(args: &[String], default: usize) -> WincentResult<usize> {
     let mut limit = default;
     let mut index = 0;
     while index < args.len() {
-        if args[index] == "--limit" {
-            index += 1;
-            let value = required_arg(args.get(index), "limit")?;
-            limit = value
-                .parse::<usize>()
-                .map_err(|_| WincentError::InvalidArgument("invalid limit".to_string()))?;
+        match args[index].as_str() {
+            "--limit" => {
+                index += 1;
+                let value = required_arg(args.get(index), "limit")?;
+                limit = value
+                    .parse::<usize>()
+                    .map_err(|_| WincentError::InvalidArgument("invalid limit".to_string()))?;
+            }
+            other => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown limit option: {other}"
+                )))
+            }
         }
         index += 1;
     }
     Ok(limit)
+}
+
+fn windows_path_eq_lightweight(a: &str, b: &str) -> bool {
+    normalize_windows_path_lightweight(a) == normalize_windows_path_lightweight(b)
+}
+
+fn normalize_windows_path_lightweight(path: &str) -> String {
+    let mut normalized = path.replace('/', "\\").to_lowercase();
+    while normalized.len() > 3 && normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    normalized
 }
 
 fn parse_bool(value: &str) -> WincentResult<bool> {
@@ -1367,6 +1401,34 @@ mod tests {
 
         assert!(!visible);
         assert!(options.refresh_explorer_enabled());
+    }
+
+    #[test]
+    fn parse_limit_rejects_unknown_options() {
+        let error = parse_limit(&["--limti".to_string(), "3".to_string()], 20).unwrap_err();
+
+        assert!(
+            matches!(error, WincentError::InvalidArgument(message) if message == "unknown limit option: --limti")
+        );
+    }
+
+    #[test]
+    fn parse_limit_accepts_limit_after_file_path_is_removed_by_caller() {
+        let limit = parse_limit(&["--limit".to_string(), "3".to_string()], 20).unwrap();
+
+        assert_eq!(limit, 3);
+    }
+
+    #[test]
+    fn windows_path_eq_lightweight_matches_case_slash_and_trailing_separator() {
+        assert!(windows_path_eq_lightweight(
+            r#"C:\Projects\Report.docx"#,
+            r#"c:/projects/report.docx"#
+        ));
+        assert!(windows_path_eq_lightweight(
+            r#"C:\Projects\"#,
+            r#"c:/projects"#
+        ));
     }
 
     #[test]
