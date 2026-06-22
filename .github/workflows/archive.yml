@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
           fetch-depth: 0
@@ -50,7 +50,7 @@ jobs:
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
           draft: true
