@@ -782,7 +782,10 @@ impl QuickAccessManager {
     /// Locks Explorer's Recent Files and Frequent Folders automatic destination files.
     ///
     /// The returned guard holds OS file handles until it is dropped or explicitly
-    /// unlocked. Use [`QuickAccessLock::unlock`] with
+    /// unlocked. While held, Explorer cannot add or remove items in the locked
+    /// Quick Access categories because the backing files are not writable.
+    ///
+    /// Use [`QuickAccessLock::unlock`] with
     /// [`crate::QuickAccessUnlockOptions::cleanup_new_recent_links`] to delete
     /// `.lnk` files that appeared in the Windows Recent folder while locked.
     pub fn lock_quick_access(&self) -> WincentResult<QuickAccessLock> {
@@ -790,11 +793,17 @@ impl QuickAccessManager {
     }
 
     /// Locks Explorer's Recent Files automatic destination file.
+    ///
+    /// While held, Explorer cannot add or remove Recent Files entries because
+    /// the Recent Files backing file is not writable.
     pub fn lock_recent_files(&self) -> WincentResult<QuickAccessLock> {
         QuickAccessLock::lock_target(QuickAccessLockTarget::RecentFiles)
     }
 
     /// Locks Explorer's Frequent Folders automatic destination file.
+    ///
+    /// While held, Explorer cannot add or remove Frequent Folders entries
+    /// because the Frequent Folders backing file is not writable.
     pub fn lock_frequent_folders(&self) -> WincentResult<QuickAccessLock> {
         QuickAccessLock::lock_target(QuickAccessLockTarget::FrequentFolders)
     }

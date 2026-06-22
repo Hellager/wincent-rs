@@ -1,4 +1,11 @@
 //! Locks Explorer Quick Access backing files and optionally cleans new shortcuts.
+//!
+//! While a target is locked, Explorer cannot write the corresponding automatic
+//! destination file, so adding or removing items in that Quick Access category
+//! is blocked or fails until the [`QuickAccessLock`] is dropped or unlocked.
+//! Windows may still create Recent-folder `.lnk` shortcuts during the lock;
+//! [`QuickAccessUnlockOptions::cleanup_new_recent_links`] can delete those on
+//! unlock.
 
 use crate::error::WincentError;
 use crate::recent_links::recent_lnk_paths;
@@ -18,14 +25,23 @@ pub(crate) const FREQUENT_FOLDERS_AUTOMATIC_DESTINATION: &str =
     "f01b4d95cf55d32a.automaticDestinations-ms";
 
 /// Quick Access backing file set to lock.
+///
+/// Locking a target prevents Explorer from adding or removing items in the
+/// corresponding Quick Access category while the lock is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuickAccessLockTarget {
     /// Lock the Recent Files automatic destination file.
+    ///
+    /// Recent Files additions and removals are blocked while this lock is held.
     RecentFiles,
     /// Lock the Frequent Folders automatic destination file.
+    ///
+    /// Frequent Folders additions and removals are blocked while this lock is held.
     FrequentFolders,
     /// Lock both Recent Files and Frequent Folders automatic destination files.
+    ///
+    /// Additions and removals in both categories are blocked while this lock is held.
     All,
 }
 
@@ -131,6 +147,11 @@ impl QuickAccessUnlockReport {
 }
 
 /// Guard that holds locks on Explorer Quick Access backing files.
+///
+/// While this guard is alive, Explorer cannot update the locked automatic
+/// destination files. Add or remove operations for the locked target are
+/// expected to fail or be ignored by Explorer until the guard is dropped or
+/// [`QuickAccessLock::unlock`] is called.
 pub struct QuickAccessLock {
     target: QuickAccessLockTarget,
     recent_folder: PathBuf,

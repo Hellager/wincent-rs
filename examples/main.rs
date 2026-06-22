@@ -167,6 +167,7 @@ Core:
   batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
+    Locked targets block Explorer from adding or removing matching Quick Access items.
   empty <recent|frequent|all> [--pinned] [--pinned-timeout-ms N] [--refresh-explorer]
   restore <recent|frequent|all> [--deep] [--no-refresh-explorer] [--rebuild-delay-ms N] [--rebuild-poll-timeout-ms N] [--lnk-resolve-timeout-ms N] [--clear-timeout-ms N]
 Utility APIs:
