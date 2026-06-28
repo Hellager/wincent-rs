@@ -1080,6 +1080,11 @@ impl QuickAccessManager {
     /// Passing `true` writes `Start_TrackDocs = 1`; passing `false` writes
     /// `Start_TrackDocs = 0` under the current-user Explorer Advanced key.
     ///
+    /// On some Windows 11 builds, setting this to `false` can also make
+    /// Explorer Recent Files invisible. In that state, make Start Recommended
+    /// visible again before relying on `ShowRecent` to control Recent Files
+    /// visibility.
+    ///
     /// # Errors
     ///
     /// Returns registry I/O errors when the current-user Explorer Advanced key
@@ -1110,6 +1115,11 @@ impl QuickAccessManager {
 
     /// Sets whether the Windows 11 Start menu Recommended section is visible,
     /// with optional Explorer refresh.
+    ///
+    /// On some Windows 11 builds, hiding Start Recommended can also make
+    /// Explorer Recent Files invisible. If that happens, set Start Recommended
+    /// visible again before relying on `ShowRecent` to control Recent Files
+    /// visibility.
     ///
     /// # Errors
     ///

@@ -25,6 +25,12 @@
 //! distinct API instead of mixing it with Quick Access categories. MDM settings,
 //! policy values, Windows edition, and Explorer version can override or delay
 //! the visible effect of the current-user value.
+//!
+//! On some Windows 11 builds, hiding Start Recommended by setting
+//! `Start_TrackDocs = 0` can also make Explorer Recent Files invisible. In that
+//! state, setting `ShowRecent = 1` alone may not make Recent Files visible
+//! again; restore Start Recommended first, then use `ShowRecent` for Recent
+//! Files visibility.
 
 use crate::{QuickAccess, WincentResult};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
@@ -254,6 +260,11 @@ pub fn is_start_recommended_section_visible() -> WincentResult<bool> {
 /// Editor method that disables Start document tracking to clear the Recommended
 /// section.
 ///
+/// On some Windows 11 builds, setting this to `false` can also make Explorer
+/// Recent Files invisible. In that state, setting `ShowRecent = 1` alone may
+/// not make Recent Files visible again; set Start Recommended visible first,
+/// then control Recent Files with `ShowRecent`.
+///
 /// Explorer may require a refresh, restart, sign-out, or supported Windows 11
 /// edition/build before the UI reflects the change.
 ///
@@ -376,6 +387,10 @@ pub fn set_frequent_folders_visible_with_options(
 
 /// Sets whether the Windows 11 Start menu Recommended section is visible, with
 /// optional Explorer refresh.
+///
+/// On some Windows 11 builds, hiding Start Recommended can also make Explorer
+/// Recent Files invisible. If that happens, set Start Recommended visible again
+/// before relying on `ShowRecent` to control Recent Files visibility.
 ///
 /// If `options.refresh_explorer_enabled()` is true, calls
 /// `refresh_explorer_window()` after the registry write. Registry write is NOT

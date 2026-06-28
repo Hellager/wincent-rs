@@ -87,7 +87,7 @@ fn main() -> WincentResult<()> {
 - **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
 - **固定文件夹清理超时**：在 `empty` 操作中显式移除可见固定文件夹时，可用 `EmptyOptions::with_pinned_folders_timeout()` 覆盖 snapshot/unpin 超时。未设置时使用 manager timeout。
 - **恢复清理**：默认恢复清理只删除目标类型可解析为对应文件或文件夹分类的 `.lnk` 文件。使用 `RestoreDefaultsOptions::deep_lnk_cleanup()` 或 CLI `restore --deep` 时，也会删除无法解析或目标类型未知的 `.lnk` 文件。
-- **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。
+- **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复最近文件可见性，请先显示开始菜单推荐项目，再用 `ShowRecent` 控制最近文件可见性。
 - **实验性 DestList 删除**：experimental remove API 会直接重建 Explorer backing file，并可能删除 Recent 文件夹中匹配的 `.lnk` 文件；其稳定性弱于 parser/query API。
 
 ## 贡献指南
