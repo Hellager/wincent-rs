@@ -1,3 +1,24 @@
+## [0.2.5] - 2026-06-22
+
+### Added
+- Start Recommended visibility APIs for controlling whether recently used files appear in Windows Recommended items
+- Example CLI commands for reading, setting, showing, and hiding the Recommended recent-files visibility setting
+
+### Changed
+- Release workflow no longer passes feature flags now that former optional features are built in
+- GitHub Actions workflows now use Node 24-compatible action versions
+- Example CLI DestList `remove-entries` matching now uses Windows-style lightweight path comparison
+
+### Fixed
+- Example CLI now rejects unknown `--limit` options instead of silently ignoring misspelled arguments
+- Example CLI now reports a clear error when `dest remove-entries` finds no matching DestList entries
+
+### Documentation
+- Clarified that Start Recommended APIs control recently used files in Windows Recommended items
+- Clarified that Quick Access locks block add/remove mutations for the locked category while held
+- Fixed stale rustdoc examples and cross-references that pointed at private or removed APIs
+- Corrected PowerShell execution safety notes to describe path escaping and argument passing accurately
+
 ## [0.2.4] - 2026-06-18
 
 ### Added

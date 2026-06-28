@@ -22,7 +22,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 - Batch add/remove with per-item error collection
 - Caller-side timeout protection for Shell and PowerShell operations
 - Visibility control for Quick Access sections
-- Windows 11 Start menu Recommended section visibility control
+- Recent files visibility control in Windows Recommended items
 - DestList metadata access
 
 ## Installation
@@ -31,7 +31,7 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wincent = "0.2.4"
+wincent = "0.2.5"
 ```
 
 ## Quick Start

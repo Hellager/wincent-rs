@@ -22,7 +22,7 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 - 批量添加/删除，逐项收集错误
 - Shell 和 PowerShell 操作具备调用方等待超时保护
 - 快速访问分区可见性控制
-- Windows 11 开始菜单“推荐项目”分区可见性控制
+- Windows 推荐的项目中最近使用文件可见性控制
 - DestList 元数据访问
 
 ## 安装
@@ -31,7 +31,7 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 
 ```toml
 [dependencies]
-wincent = "0.2.4"
+wincent = "0.2.5"
 ```
 
 ## 快速开始

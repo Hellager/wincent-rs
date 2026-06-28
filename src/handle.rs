@@ -249,7 +249,7 @@ where
 ///
 /// # See Also
 ///
-/// - [`pin_frequent_folder()`] - Public wrapper with PowerShell fallback
+/// - [`pin_frequent_folder()`] - Higher-level internal wrapper with PowerShell fallback
 /// - [`invoke_verb_on_self_current_sta()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     // Check and invoke in one STA worker to narrow the TOCTOU window.
@@ -516,7 +516,7 @@ where
 ///
 /// # See Also
 ///
-/// - [`unpin_frequent_folder()`] - Public wrapper with PowerShell fallback
+/// - [`unpin_frequent_folder()`] - Higher-level internal wrapper with PowerShell fallback
 fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     let path = path.to_owned();
     crate::com_thread::run_on_sta_thread(
@@ -571,9 +571,10 @@ fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Win
 ///
 /// # Safety
 ///
-/// - Path validation prevents injection attacks
-/// - Scripts are stored in a secure location and validated before execution
-/// - PowerShell execution is sandboxed by the OS
+/// - Paths are validated before script generation
+/// - Path parameters are embedded only after PowerShell single-quote escaping
+/// - Scripts are executed with `Command::args`, avoiding shell command-line interpolation
+/// - Generated scripts are stored under wincent's temp-script directory and refreshed when stale
 ///
 /// # See Also
 ///
@@ -742,7 +743,7 @@ pub(crate) fn add_file_to_recent_native(path: &str, timeout: Duration) -> Wincen
 /// # See Also
 ///
 /// - [`remove_recent_file_powershell()`] - PowerShell fallback implementation
-/// - [`remove_from_recent_files()`] - Public wrapper with fallback strategy
+/// - [`crate::manager::QuickAccessManager::remove_item`] - Public removal API
 fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     let path = path.to_owned();
     crate::com_thread::run_on_sta_thread(
@@ -832,7 +833,7 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
 /// # See Also
 ///
 /// - [`remove_recent_file_native()`] - Native COM implementation (fast path)
-/// - [`remove_from_recent_files()`] - Public wrapper with fallback strategy
+/// - [`crate::manager::QuickAccessManager::remove_item`] - Public removal API
 #[allow(dead_code)]
 pub(crate) fn remove_recent_file_powershell(path: &str) -> WincentResult<()> {
     remove_recent_file_powershell_with_timeout(path, DEFAULT_COM_TIMEOUT)
@@ -1079,7 +1080,7 @@ fn map_unpin_frequent_folder_powershell_error(path: &str, error: WincentError) -
 ///
 /// # See Also
 ///
-/// - [`add_to_frequent_folders()`] - Public API wrapper
+/// - [`crate::manager::QuickAccessManager::add_item`] - Public mutation API
 /// - [`pin_frequent_folder_native()`] - Native COM implementation
 /// - [`pin_frequent_folder_powershell()`] - PowerShell fallback
 pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
@@ -1139,7 +1140,7 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
 ///
 /// # See Also
 ///
-/// - [`remove_from_frequent_folders()`] - Public API wrapper
+/// - [`crate::manager::QuickAccessManager::remove_item`] - Public mutation API
 /// - [`unpin_frequent_folder_native()`] - Native COM implementation
 /// - [`unpin_frequent_folder_powershell()`] - PowerShell fallback
 pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
@@ -1161,115 +1162,9 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
 
 /****************************************************** Handle Quick Access ******************************************************/
 
-/// Adds a file to Windows Recent Files.
+/// Test-only wrapper for removing a file from Windows Recent Files.
 ///
-/// # Threading and Timeout
-///
-/// Recent Files add operations run on a dedicated STA thread through the
-/// backend timeout path. The configured timeout limits how long the caller
-/// waits; the underlying Shell operation may still complete later.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the file to be added
-///
-/// # Errors
-///
-/// Returns validation, timeout, or Shell operation errors from the backend.
-///
-/// # Windows Behavior Notes
-///
-/// - **Deduplication**: Windows may ignore repeated additions of the same file
-///   within a short time window. This is intentional behavior to prevent spam.
-/// - **Asynchronous Processing**: The file may not appear immediately in the
-///   Recent Items list. Windows Shell processes these updates asynchronously.
-/// - **File Must Exist**: The file must exist on disk for Windows to add it.
-///
-/// # Example
-///
-/// ```ignore
-/// use wincent::{handle::add_to_recent_files, error::WincentError};
-///
-/// fn main() -> Result<(), WincentError> {
-///     add_file_to_recent_native("C:\\Documents\\report.docx", std::time::Duration::from_secs(10))?;
-///     Ok(())
-/// }
-/// ```
-/// Removes a file from Windows Recent Files.
-///
-/// This function uses a **two-tier fallback strategy** to maximize compatibility
-/// across different Windows versions and system configurations:
-///
-/// 1. **Native COM API** (fast path, 10-50ms): Uses Shell namespace to find and remove the file
-/// 2. **PowerShell fallback** (slow path, 200-500ms): Uses PowerShell script if COM fails
-///
-/// The native approach is significantly faster but may fail in certain scenarios
-/// (e.g., permission issues, COM initialization failures). The PowerShell fallback
-/// provides broader compatibility at the cost of performance.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the file to be removed. Must be an existing file path.
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the file was successfully removed from Recent Files.
-///
-/// # Errors
-///
-/// This function returns an error if:
-/// - **Path validation fails**: The path is empty, invalid, or points to a directory
-/// - **File not found**: The file is not in the Recent Files list (both strategies fail)
-/// - **Permission denied**: Insufficient permissions to modify Recent Files
-/// - **COM failure**: Both native COM and PowerShell fallback fail
-///
-/// # Windows Behavior Notes
-///
-/// - **Asynchronous Processing**: The file may not disappear immediately from the
-///   Recent Items list. Windows Shell processes these updates asynchronously.
-/// - **File Must Exist**: The file must exist on disk for Windows to locate it in
-///   the Recent Items namespace.
-/// - **Case Insensitive**: Path matching is case-insensitive on Windows.
-///
-/// # Performance
-///
-/// - Native COM: ~10-50ms (typical case)
-/// - PowerShell fallback: ~200-500ms (when COM fails)
-///
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```ignore
-/// use wincent::handle::remove_from_recent_files;
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     remove_from_recent_files("C:\\Documents\\report.docx")?;
-///     println!("File removed from Recent Files");
-///     Ok(())
-/// }
-/// ```
-///
-/// Error handling:
-///
-/// ```ignore
-/// use wincent::{handle::remove_from_recent_files, error::WincentError};
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     match remove_from_recent_files("C:\\Documents\\report.docx") {
-///         Ok(()) => println!("Successfully removed"),
-///         Err(WincentError::NotInQuickAccess(_)) => println!("File not in Recent Files"),
-///         Err(e) => eprintln!("Error: {}", e),
-///     }
-///     Ok(())
-/// }
-/// ```
-///
-/// # See Also
-///
-/// - [`add_file_to_recent_native()`] - Add a file to Recent Files
-/// - [`crate::query::get_recent_files()`] - Query all recent files
-/// - [`crate::query::is_recent_file_exact()`] - Check if a file is in Recent Files
+/// Production callers should use [`crate::manager::QuickAccessManager::remove_item`].
 #[cfg(test)]
 pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
@@ -1283,239 +1178,18 @@ pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
     }
 }
 
-/// Pins a folder to Windows Quick Access (Frequent Folders).
-///
-/// This function uses a **two-tier fallback strategy** to maximize compatibility
-/// across different Windows versions (Windows 10, Windows 11) and system configurations:
-///
-/// 1. **Native COM API** (fast path, 10-50ms): Uses Shell verb "pintohome" on the folder
-/// 2. **PowerShell fallback** (slow path, 200-500ms): Uses PowerShell script if COM fails
-///
-/// The native approach is significantly faster but may fail in certain scenarios
-/// (e.g., permission issues, COM initialization failures, Windows 11 deadlock without
-/// message pump). The PowerShell fallback provides broader compatibility at the cost
-/// of performance.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be pinned. Must be an existing directory.
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was successfully pinned to Frequent Folders.
-///
-/// # Errors
-///
-/// This function returns an error if:
-/// - **Path validation fails**: The path is empty, invalid, or points to a file
-/// - **Folder doesn't exist**: The folder must exist on disk
-/// - **Permission denied**: Insufficient permissions to modify Quick Access
-/// - **COM failure**: Both native COM and PowerShell fallback fail
-///
-/// # Windows Version Compatibility
-///
-/// - **Windows 10**: Uses "pintohome" verb to pin folders
-/// - **Windows 11**: Uses "pintohome" verb (same as Windows 10)
-/// - Both versions supported through the two-tier strategy
-///
-/// # Windows Behavior Notes
-///
-/// - **Asynchronous Processing**: The folder may not appear immediately in Quick Access.
-///   Windows Shell processes these updates asynchronously.
-/// - **Deduplication**: Pinning an already-pinned folder is a guaranteed no-op; an
-///   explicit pre-check queries the Frequent Folders namespace before invoking the Shell
-///   verb, preventing the Windows 11 `pintohome`-toggle problem where calling the verb
-///   on an already-pinned folder would silently unpin it.
-/// - **Case Insensitive**: Path matching is case-insensitive on Windows.
-/// - **Automatic Tracking**: Windows automatically tracks folder access frequency.
-///   Pinning a folder makes it permanently visible in Quick Access.
-///
-/// # Performance
-///
-/// - Native COM: ~10-50ms (typical case)
-/// - PowerShell fallback: ~200-500ms (when COM fails)
-///
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```ignore
-/// use wincent::handle::add_to_frequent_folders;
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     add_to_frequent_folders("C:\\Projects\\my-project")?;
-///     println!("Folder pinned to Quick Access");
-///     Ok(())
-/// }
-/// ```
-///
-/// Pin multiple folders:
-///
-/// ```ignore
-/// use wincent::handle::add_to_frequent_folders;
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let folders = vec![
-///         "C:\\Projects\\project-a",
-///         "C:\\Projects\\project-b",
-///         "C:\\Documents\\Work",
-///     ];
-///
-///     for folder in folders {
-///         add_to_frequent_folders(folder)?;
-///     }
-///
-///     println!("All folders pinned successfully");
-///     Ok(())
-/// }
-/// ```
-///
-/// Error handling:
-///
-/// ```ignore
-/// use wincent::{handle::add_to_frequent_folders, error::WincentError};
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     match add_to_frequent_folders("C:\\Projects\\my-project") {
-///         Ok(()) => println!("Successfully pinned"),
-///         Err(WincentError::InvalidPath(_)) => println!("Invalid folder path"),
-///         Err(e) => eprintln!("Error: {}", e),
-///     }
-///     Ok(())
-/// }
-/// ```
-///
-/// # See Also
-///
-/// - [`remove_from_frequent_folders()`] - Unpin a folder from Quick Access
-/// - [`crate::query::get_frequent_folders()`] - Query all frequent folders
-/// - [`crate::query::is_frequent_folder_exact()`] - Check if a folder is pinned
-///
-/// Unpins or removes a folder from Windows Quick Access (Frequent Folders).
-///
-/// This function uses a **two-tier fallback strategy** to maximize compatibility
-/// across different Windows versions (Windows 10, Windows 11) and system configurations:
-///
-/// 1. **Native COM API** (fast path, 10-50ms): Uses Shell verbs with Windows version detection
-///    - Windows 10: Uses "unpinfromhome" verb when folder is in Frequent Folders
-///    - Windows 11: Uses "pintohome" toggle (acts as unpin when already pinned)
-/// 2. **PowerShell fallback** (slow path, 200-500ms): Uses PowerShell script if COM fails
-///
-/// The native approach is significantly faster but may fail in certain scenarios
-/// (e.g., permission issues, COM initialization failures, Windows 11 deadlock without
-/// message pump). The PowerShell fallback provides broader compatibility at the cost
-/// of performance.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be unpinned. Must be an existing directory.
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was successfully unpinned from Frequent Folders.
-///
-/// # Errors
-///
-/// This function returns an error if:
-/// - **Path validation fails**: The path is empty, invalid, or points to a file
-/// - **Folder doesn't exist**: The folder must exist on disk
-/// - **Folder not pinned**: The folder is not in Frequent Folders (native COM detects this)
-/// - **Both strategies fail**: Native COM and PowerShell both fail to unpin the folder
-/// - **Permission denied**: Insufficient permissions to modify Quick Access
-///
-/// Note: When the folder is not pinned, this function returns `NotInQuickAccess`
-/// immediately without attempting the PowerShell fallback, ensuring the
-/// caller receives accurate error information.
-///
-/// # Windows Version Compatibility
-///
-/// - **Windows 10**: Uses "unpinfromhome" verb to unpin folders
-/// - **Windows 11**: Uses "pintohome" toggle (same verb as pin, but acts as unpin when already pinned)
-/// - The function automatically detects the appropriate strategy without explicit version checking
-///
-/// # Windows Behavior Notes
-///
-/// - **Asynchronous Processing**: The folder may not disappear immediately from Quick Access.
-///   Windows Shell processes these updates asynchronously.
-/// - **Not Pinned**: The native COM implementation checks if the folder is pinned before
-///   attempting to unpin. If not pinned, it returns `NotInQuickAccess` immediately without
-///   falling back to PowerShell.
-/// - **Case Insensitive**: Path matching is case-insensitive on Windows.
-/// - **Automatic Tracking**: Unpinning removes the folder from the permanent Quick Access list,
-///   but Windows may still show it temporarily if it's frequently accessed.
-///
-/// # Performance
-///
-/// - Native COM: ~10-50ms (typical case)
-/// - PowerShell fallback: ~200-500ms (when COM fails)
-///
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```ignore
-/// use wincent::handle::remove_from_frequent_folders;
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     remove_from_frequent_folders("C:\\Projects\\old-project")?;
-///     println!("Folder unpinned from Quick Access");
-///     Ok(())
-/// }
-/// ```
-///
-/// Unpin multiple folders:
-///
-/// ```ignore
-/// use wincent::handle::remove_from_frequent_folders;
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let folders = vec![
-///         "C:\\Projects\\archived-a",
-///         "C:\\Projects\\archived-b",
-///         "C:\\Temp\\old-work",
-///     ];
-///
-///     for folder in folders {
-///         match remove_from_frequent_folders(folder) {
-///             Ok(()) => println!("Unpinned: {}", folder),
-///             Err(e) => eprintln!("Failed to unpin {}: {}", folder, e),
-///         }
-///     }
-///
-///     Ok(())
-/// }
-/// ```
-///
-/// Error handling:
-///
-/// ```ignore
-/// use wincent::handle::remove_from_frequent_folders;
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     match remove_from_frequent_folders("C:\\Projects\\old-project") {
-///         Ok(()) => println!("Successfully unpinned"),
-///         Err(e) => eprintln!("Failed to unpin: {}", e),
-///     }
-///     Ok(())
-/// }
-/// ```
-///
-/// # See Also
-///
-/// - [`add_to_frequent_folders()`] - Pin a folder to Quick Access
-/// - [`crate::query::get_frequent_folders()`] - Query all frequent folders
-/// - [`crate::query::is_frequent_folder_exact()`] - Check if a folder is pinned
-///
 /// Removes a file from Windows Recent Files with a custom COM STA thread timeout.
 ///
-/// Identical to [`remove_from_recent_files()`] but allows specifying the timeout
-/// for the native COM STA thread operation.
+/// Internal timeout-aware variant used by [`crate::manager::QuickAccessManager::remove_item`].
+/// It tries native COM first and falls back to PowerShell only for system-level
+/// native failures.
 ///
 /// # Arguments
 ///
 /// * `path` - The full path to the file to be removed
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
-///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
+///   passing [`std::time::Duration::ZERO`] returns
+///   [`WincentError::InvalidArgument`] immediately without attempting any operation.
 pub(crate) fn remove_from_recent_files_with_timeout(
     path: &str,
     timeout: std::time::Duration,
@@ -1536,14 +1210,16 @@ pub(crate) fn remove_from_recent_files_with_timeout(
 
 /// Pins a folder to Windows Quick Access with a custom COM STA thread timeout.
 ///
-/// Identical to [`add_to_frequent_folders()`] but allows specifying the timeout
-/// for the native COM STA thread operation.
+/// Internal timeout-aware variant used by [`crate::manager::QuickAccessManager::add_item`].
+/// It uses native COM with a PowerShell fallback and rejects zero timeouts before
+/// attempting any mutation.
 ///
 /// # Arguments
 ///
 /// * `path` - The full path to the folder to be pinned. Must be an existing directory.
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
-///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
+///   passing [`std::time::Duration::ZERO`] returns
+///   [`WincentError::InvalidArgument`] immediately without attempting any operation.
 pub(crate) fn add_to_frequent_folders_with_timeout(
     path: &str,
     timeout: std::time::Duration,
@@ -1558,14 +1234,16 @@ pub(crate) fn add_to_frequent_folders_with_timeout(
 
 /// Unpins a folder from Windows Quick Access with a custom COM STA thread timeout.
 ///
-/// Identical to [`remove_from_frequent_folders()`] but allows specifying the timeout
-/// for the native COM STA thread operation.
+/// Internal timeout-aware variant used by [`crate::manager::QuickAccessManager::remove_item`].
+/// It uses native COM with a PowerShell fallback and rejects zero timeouts before
+/// attempting any mutation.
 ///
 /// # Arguments
 ///
 /// * `path` - The full path to the folder to be unpinned. Must be an existing directory.
 /// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
-///   passing [`std::time::Duration::ZERO`] returns [`WincentError::InvalidArgument`] immediately without attempting any operation.
+///   passing [`std::time::Duration::ZERO`] returns
+///   [`WincentError::InvalidArgument`] immediately without attempting any operation.
 pub(crate) fn remove_from_frequent_folders_with_timeout(
     path: &str,
     timeout: std::time::Duration,

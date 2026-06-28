@@ -278,21 +278,23 @@ fn frequent_folders_cleared_from_error(error: &WincentError) -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use wincent::{empty::empty_quick_access, error::WincentError};
+/// ```rust,no_run
+/// use wincent::prelude::*;
 ///
-/// fn main() -> Result<(), WincentError> {
+/// # fn main() -> WincentResult<()> {
+///     let manager = QuickAccessManager::new();
+///
 ///     // Clear recent files and delete the Frequent Folders backing file.
-///     empty_items(QuickAccess::All, EmptyOptions::new())?;
+///     manager.empty_items(QuickAccess::All, EmptyOptions::new())?;
 ///
 ///     // Also explicitly unpin visible Frequent Folders items.
-///     empty_items(
+///     manager.empty_items(
 ///         QuickAccess::All,
-///         EmptyOptions::new().with_also_pinned_folders(true),
+///         EmptyOptions::new().remove_pinned_folders(),
 ///     )?;
 ///
 ///     Ok(())
-/// }
+/// # }
 /// ```
 fn empty_all_items_with_backend(
     options: EmptyOptions,

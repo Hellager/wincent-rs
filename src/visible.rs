@@ -232,12 +232,14 @@ pub fn set_frequent_folders_visible(visible: bool) -> WincentResult<()> {
     set_visible(QuickAccess::FrequentFolders, visible)
 }
 
-/// Checks whether the Windows 11 Start menu Recommended section is visible.
+/// Checks whether recently used files appear in Windows Recommended items.
 ///
 /// This reads the current-user value
 /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_TrackDocs`.
-/// Missing values are treated as visible. MDM settings, policy values, Windows
-/// edition, or Explorer version can override the effective UI state.
+/// This value controls whether recently used files appear in Windows
+/// Recommended items. Missing values are treated as visible. MDM settings,
+/// policy values, Windows edition, or Explorer version can override the
+/// effective UI state.
 ///
 /// # Errors
 ///
@@ -251,14 +253,13 @@ pub fn is_start_recommended_section_visible() -> WincentResult<bool> {
     read_start_recommended_visibility(&reg_key)
 }
 
-/// Sets whether the Windows 11 Start menu Recommended section is visible.
+/// Sets whether recently used files appear in Windows Recommended items.
 ///
 /// This writes the current-user value
 /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_TrackDocs`.
 /// Passing `true` writes `1`; passing `false` writes `0`. The value is not
-/// removed so repeated calls are deterministic. This matches the Registry
-/// Editor method that disables Start document tracking to clear the Recommended
-/// section.
+/// removed so repeated calls are deterministic. The value controls whether
+/// recently used files appear in Windows Recommended items.
 ///
 /// On some Windows 11 builds, setting this to `false` can also make Explorer
 /// Recent Files invisible. In that state, setting `ShowRecent = 1` alone may
@@ -277,7 +278,7 @@ pub fn set_start_recommended_section_visible(visible: bool) -> WincentResult<()>
     write_start_recommended_visibility(&reg_key, visible)
 }
 
-/// Shows the Windows 11 Start menu Recommended section.
+/// Shows recently used files in Windows Recommended items.
 ///
 /// # Errors
 ///
@@ -287,7 +288,7 @@ pub fn show_start_recommended_section() -> WincentResult<()> {
     set_start_recommended_section_visible(true)
 }
 
-/// Hides the Windows 11 Start menu Recommended section.
+/// Hides recently used files in Windows Recommended items.
 ///
 /// # Errors
 ///
@@ -385,7 +386,7 @@ pub fn set_frequent_folders_visible_with_options(
     set_visible_with_options(QuickAccess::FrequentFolders, visible, options)
 }
 
-/// Sets whether the Windows 11 Start menu Recommended section is visible, with
+/// Sets whether recently used files appear in Windows Recommended items, with
 /// optional Explorer refresh.
 ///
 /// On some Windows 11 builds, hiding Start Recommended can also make Explorer
@@ -420,14 +421,14 @@ fn set_start_recommended_section_visible_with_options_inner(
     Ok(())
 }
 
-/// Shows the Windows 11 Start menu Recommended section, with optional Explorer refresh.
+/// Shows recently used files in Windows Recommended items, with optional Explorer refresh.
 pub fn show_start_recommended_section_with_options(
     options: VisibilityOptions,
 ) -> WincentResult<()> {
     set_start_recommended_section_visible_with_options(true, options)
 }
 
-/// Hides the Windows 11 Start menu Recommended section, with optional Explorer refresh.
+/// Hides recently used files in Windows Recommended items, with optional Explorer refresh.
 pub fn hide_start_recommended_section_with_options(
     options: VisibilityOptions,
 ) -> WincentResult<()> {
