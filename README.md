@@ -15,7 +15,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 ## Features
 
 - Query recent files and frequent folders
-- Add and remove items with duplicate detection
+- Add and remove items with duplicate detection, including pinned and unpinned frequent folders
 - Clear categories with optional explicit pinned-folder cleanup
 - Restore default Quick Access state with conservative `.lnk` cleanup and opt-in deep cleanup
 - Check item existence by exact path or keyword
@@ -85,10 +85,11 @@ fn main() -> WincentResult<()> {
 - **Rust**: 1.85.0 or later.
 - **Consistency**: Quick Access state is maintained by Windows Explorer. Results may lag behind mutations by a short interval, and Explorer may rebuild state asynchronously across versions.
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
+- **Frequent Folders removal**: `remove_item(..., QuickAccess::FrequentFolders)` removes pinned folders by unpinning them. For unpinned frequent entries, it pins first and then unpins through Explorer Shell verbs; if the second step fails, the folder may remain pinned.
 - **Pinned-folder cleanup timeout**: when explicitly removing visible pinned folders during an `empty` operation, `EmptyOptions::with_pinned_folders_timeout()` can override the snapshot/unpin timeout. If unset, the operation uses the manager timeout.
 - **Restore cleanup**: default restore cleanup deletes only `.lnk` files whose target type is resolved as the requested file or folder category. Use `RestoreDefaultsOptions::deep_lnk_cleanup()` or CLI `restore --deep` to also delete unresolved or unknown-type `.lnk` files.
 - **Start menu Recommended visibility**: the Start Recommended APIs target the Windows 11 Start menu. They write the current user's `Explorer\Advanced\Start_TrackDocs` value and are not blocked on Windows 10, where the setting may have no visible Start menu effect. On some Windows 11 builds, hiding Start Recommended can also make Explorer Recent Files invisible; if `ShowRecent` alone does not restore Recent Files visibility, show Start Recommended first and then control Recent Files with `ShowRecent`.
-- **Experimental DestList removal**: experimental remove APIs rebuild Explorer backing files directly and may delete matching Recent-folder `.lnk` files. Treat them as less stable than parser/query APIs.
+- **Experimental DestList removal**: experimental remove APIs rebuild Explorer backing files directly and may delete matching Recent-folder `.lnk` files. Treat them as destructive low-level APIs, not the default item removal path.
 
 ## Contributing
 

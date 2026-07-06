@@ -612,6 +612,11 @@ impl QuickAccessManager {
 
     /// Removes an item from Recent Files or Frequent Folders.
     ///
+    /// For [`QuickAccess::FrequentFolders`], pinned folders are unpinned through
+    /// Explorer shell verbs. Unpinned frequent entries are first pinned, then
+    /// unpinned, so this method removes either visible Frequent Folders state
+    /// without rebuilding Explorer's DestList file.
+    ///
     /// `QuickAccess::All` is not a valid target for mutation. Use
     /// [`QuickAccessManager::empty_items`] when the goal is to clear a whole
     /// category.
@@ -623,7 +628,9 @@ impl QuickAccessManager {
     /// the item; [`WincentError::UnsupportedOperation`] for `QuickAccess::All`;
     /// [`WincentError::PostMutationFailure`] when remove succeeded but an
     /// explicitly requested Explorer refresh failed; or a Shell/PowerShell error
-    /// if the underlying operation fails.
+    /// if the underlying operation fails. If an unpinned frequent entry is
+    /// pinned successfully but the later unpin fails, the original unpin error is
+    /// returned and the folder may remain pinned.
     ///
     /// # Examples
     ///
@@ -641,6 +648,9 @@ impl QuickAccessManager {
     }
 
     /// Removes an item from Quick Access with additional cleanup options.
+    ///
+    /// Frequent Folders use the same pinned/unpinned behavior as
+    /// [`QuickAccessManager::remove_item`].
     ///
     /// [`RemoveOptions::deep_clean_recent_links`] applies to both
     /// [`QuickAccess::RecentFiles`] and [`QuickAccess::FrequentFolders`].

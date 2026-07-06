@@ -164,6 +164,7 @@ Core:
   contains <recent|frequent|all> <keyword>
   add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
+    frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
   batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
@@ -198,6 +199,7 @@ DestList APIs:
   dest remove-entries <recent|frequent> [--delay-ms N] <path>...
 
 Experimental DestList remove APIs rebuild Explorer backing files and may delete matching .lnk files.
+Use them as low-level destructive tools, not the default item removal path.
 "#
     );
 }

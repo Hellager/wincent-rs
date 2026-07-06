@@ -417,10 +417,7 @@ where
     }
 
     if matches!(pinned_status, PinnedStatus::Unpinned) {
-        return Err(WincentError::not_in_quick_access(
-            path,
-            QuickAccess::FrequentFolders,
-        ));
+        invoke_on_self(path, "pintohome")?;
     }
 
     let _ = invoke_on_namespace(path, "unpinfromhome");
@@ -473,10 +470,10 @@ where
 ///
 /// This function implements a **safe Windows version-aware strategy**:
 ///
-/// 1. **Check if folder is pinned**
-///    - Query the Frequent Folders namespace to verify the folder is pinned
-///    - If not pinned, return `NotInQuickAccess` error immediately
-///    - This prevents accidentally pinning an unpinned folder
+/// 1. **Check if folder is present**
+///    - Query the Frequent Folders namespace to verify the folder is visible
+///    - If absent, return `NotInQuickAccess` error immediately
+///    - If present but unpinned, pin it first so the normal unpin verbs can remove it
 ///
 /// 2. **Try "unpinfromhome" verb first** (Windows 10 style)
 ///    - Works when the folder is in the Frequent Folders namespace
@@ -489,7 +486,8 @@ where
 ///
 /// This approach is more robust than explicit Windows version detection because
 /// it adapts to the actual Shell verb availability on the system, while ensuring
-/// we never accidentally pin an unpinned folder.
+/// unpinned frequent entries are only pinned intentionally as the first half of
+/// a pin-then-unpin removal.
 ///
 /// # Threading Model
 ///
@@ -506,7 +504,7 @@ where
 ///
 /// # Errors
 ///
-/// - `NotInQuickAccess`: The folder is not in Frequent Folders (not pinned)
+/// - `NotInQuickAccess`: The folder is not in Frequent Folders
 /// - `SystemError`: COM operation failed (e.g., permission denied, COM error)
 ///
 /// # Windows Version Compatibility
@@ -993,7 +991,7 @@ fn map_pin_frequent_folder_powershell_error(path: &str, error: WincentError) -> 
 /// # Errors
 ///
 /// - `InvalidPath`: Path validation failed (not a directory, doesn't exist)
-/// - `PowerShellExecution`: Script execution failed (e.g., folder not pinned)
+/// - `PowerShellExecution`: Script execution failed (e.g., folder could not be removed)
 ///
 /// # Performance
 ///
@@ -1095,13 +1093,14 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
     )
 }
 
-/// Unpins a folder from the Windows Quick Access Frequent Folders list
+/// Removes a folder from the Windows Quick Access Frequent Folders list
 ///
 /// This is the internal implementation that uses a **two-tier fallback strategy**:
 ///
 /// 1. **Native COM API** (fast path, 10-50ms): Uses [`unpin_frequent_folder_native()`]
 ///    - Windows 10: Uses "unpinfromhome" verb
 ///    - Windows 11: Uses "pintohome" toggle
+///    - Unpinned frequent entries are first pinned, then unpinned
 ///    - Runs on dedicated STA thread to avoid Windows 11 deadlock
 ///
 /// 2. **PowerShell fallback** (slow path, 200-500ms): Uses [`unpin_frequent_folder_powershell()`]
@@ -1110,11 +1109,11 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
 ///
 /// # Arguments
 ///
-/// * `path` - The full path to the folder to be unpinned. Must be an existing directory.
+/// * `path` - The full path to the folder to be removed. Must be an existing directory.
 ///
 /// # Returns
 ///
-/// Returns `Ok(())` if the folder was successfully unpinned (by either strategy).
+/// Returns `Ok(())` if the folder was successfully removed (by either strategy).
 ///
 /// # Errors
 ///
@@ -1122,10 +1121,10 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
 /// - `NotInQuickAccess`: Folder not in Frequent Folders (returned immediately, no PowerShell fallback)
 /// - `SystemError` or `PowerShellExecution`: Both native COM and PowerShell strategies failed
 ///
-/// Note: When the folder is not pinned, this function returns `NotInQuickAccess` immediately
-/// without attempting the PowerShell fallback, ensuring the caller receives accurate
-/// error information. Similarly, `InvalidPath` errors are returned directly without
-/// fallback, as the path is definitively wrong.
+/// Note: When removing an unpinned frequent entry, the native path first pins it
+/// and then unpins it. If the second step fails, the original error is returned
+/// and the folder may remain pinned. `InvalidPath` errors are returned directly
+/// without fallback, as the path is definitively wrong.
 ///
 /// # Windows Version Compatibility
 ///
@@ -1149,7 +1148,7 @@ pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) ->
     // Try native COM first (fast path)
     match unpin_frequent_folder_native(path, timeout) {
         Ok(()) => Ok(()),
-        // NotInQuickAccess means the folder is not pinned - this is a semantic error,
+        // NotInQuickAccess means the folder is absent - this is a semantic error,
         // not a system failure. Falling back to PowerShell would not help and
         // could mask the real cause from the caller.
         // InvalidPath should also not fallback as the path is definitively wrong.
@@ -1419,9 +1418,59 @@ mod tests {
     }
 
     #[test]
-    fn test_unpin_state_machine_rejects_unpinned_present_without_invoking() {
+    fn test_unpin_state_machine_removes_unpinned_present_by_pin_then_unpin() -> WincentResult<()> {
+        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-        let action_log = std::rc::Rc::clone(&actions);
+        let self_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+        run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            PinnedStatus::Unpinned,
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            {
+                let present = std::rc::Rc::clone(&present);
+                move |_| Ok(*present.borrow())
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    Ok(true)
+                }
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                let present = std::rc::Rc::clone(&present);
+                let self_calls = std::rc::Rc::clone(&self_calls);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    let mut calls = self_calls.borrow_mut();
+                    *calls += 1;
+                    if *calls == 2 {
+                        *present.borrow_mut() = false;
+                    }
+                    Ok(())
+                }
+            },
+            || Ok(true),
+            |_| {},
+        )?;
+
+        assert_eq!(
+            actions.borrow().as_slice(),
+            [
+                "self:pintohome",
+                "namespace:unpinfromhome",
+                "self:pintohome"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unpin_state_machine_returns_unpinned_pin_error() {
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
 
         let result = run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
@@ -1429,15 +1478,18 @@ mod tests {
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             |_| Ok(true),
-            move |_, verb| {
-                action_log.borrow_mut().push(format!("namespace:{verb}"));
-                Ok(true)
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    Ok(true)
+                }
             },
             {
                 let actions = std::rc::Rc::clone(&actions);
                 move |_, verb| {
                     actions.borrow_mut().push(format!("self:{verb}"));
-                    Ok(())
+                    Err(WincentError::SystemError("pin failed".to_string()))
                 }
             },
             || Ok(true),
@@ -1445,13 +1497,61 @@ mod tests {
         );
 
         assert!(
-            matches!(result, Err(WincentError::NotInQuickAccess { .. })),
-            "unpinned frequent folder should be NotInQuickAccess for unpin, got: {:?}",
+            matches!(result, Err(WincentError::SystemError(ref message)) if message == "pin failed"),
+            "pin failure should be returned directly, got: {:?}",
             result
         );
+        assert_eq!(actions.borrow().as_slice(), ["self:pintohome"]);
+    }
+
+    #[test]
+    fn test_unpin_state_machine_returns_unpin_error_after_unpinned_pin() {
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let self_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+        let result = run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            PinnedStatus::Unpinned,
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            |_| Ok(true),
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    Ok(true)
+                }
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                let self_calls = std::rc::Rc::clone(&self_calls);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    let mut calls = self_calls.borrow_mut();
+                    *calls += 1;
+                    if *calls == 1 {
+                        Ok(())
+                    } else {
+                        Err(WincentError::SystemError("unpin failed".to_string()))
+                    }
+                }
+            },
+            || Ok(true),
+            |_| {},
+        );
+
         assert!(
-            actions.borrow().is_empty(),
-            "no verbs should be invoked for an unpinned frequent folder"
+            matches!(result, Err(WincentError::SystemError(ref message)) if message == "unpin failed"),
+            "unpin failure should be returned directly, got: {:?}",
+            result
+        );
+        assert_eq!(
+            actions.borrow().as_slice(),
+            [
+                "self:pintohome",
+                "namespace:unpinfromhome",
+                "self:pintohome"
+            ]
         );
     }
 
@@ -1914,20 +2014,19 @@ mod tests {
     #[ignore = "Modifies system state - run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
     fn test_unpin_native_error_classification() -> WincentResult<()> {
         // Tests the critical error classification logic in unpin_frequent_folder_native()
-        // After fix: The function now checks if folder is pinned BEFORE attempting to unpin
-        // This prevents accidentally pinning an unpinned folder via pintohome toggle
+        // The function checks namespace presence before any Shell verb and handles
+        // unpinned entries with an explicit pin-then-unpin flow.
         //
         // Key logic:
-        // 1. Check if folder is pinned (is_frequent_folder_exact)
-        // 2. If not pinned, return NotInQuickAccess immediately
-        // 3. If pinned, try unpinfromhome first, then fallback to pintohome
+        // 1. Check if folder is present in Frequent Folders
+        // 2. If absent, return NotInQuickAccess immediately
+        // 3. If present, remove via unpinfromhome/pintohome Shell verbs
 
         let test_dir = setup_test_env()?;
         let test_path = path_to_str(&test_dir)?;
 
         // Scenario 1: Unpin a folder that is NOT in frequent folders
-        // Expected: Should return NotInQuickAccess error immediately (after fix)
-        // This prevents accidentally pinning the folder
+        // Expected: Should return NotInQuickAccess error immediately
         let result = unpin_frequent_folder_native(test_path, DEFAULT_COM_TIMEOUT);
 
         assert!(
