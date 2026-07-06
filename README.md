@@ -19,6 +19,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. It pr
 - Clear categories with optional explicit pinned-folder cleanup
 - Restore default Quick Access state with conservative `.lnk` cleanup and opt-in deep cleanup
 - Check item existence by exact path or keyword
+- Query whether a frequent folder is pinned, unpinned, or absent
 - Batch add/remove with per-item error collection
 - Caller-side timeout protection for Shell and PowerShell operations
 - Visibility control for Quick Access sections
@@ -70,6 +71,10 @@ fn main() -> WincentResult<()> {
     // Fuzzy check: any item whose path string contains the keyword.
     let any_match = manager.contains_item("Projects", QuickAccess::All)?;
     println!("Any Quick Access item contains 'Projects': {any_match}");
+
+    // Check whether a Frequent Folders path is pinned, unpinned, or absent.
+    let pin_status = manager.frequent_folder_pin_status("C:\\Projects")?;
+    println!("Projects Frequent Folders pin status: {pin_status:?}");
 
     // --- Remove ---
     // Remove a file. Returns Err(NotInQuickAccess) if not present.

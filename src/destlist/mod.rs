@@ -38,9 +38,10 @@ pub use experimental_remove::{
     experimental_remove_entries_by_rebuild, experimental_remove_entry_paths_by_rebuild,
     AutomaticDestinationsKind, ExperimentalRemoveOptions, ExperimentalRemoveReport,
 };
+pub(crate) use parser::frequent_folder_pin_status;
 pub use parser::{
     entries, frequent_folders_dest_path, parse_bytes, parse_file, quick_access_entries,
     recent_files_dest_path, visible_entries, AutomaticDestinations, CfbDirectoryEntry, CfbInfo,
-    DestList, DestListEntry, Diagnostic, DiagnosticSeverity, PathSource,
+    DestList, DestListEntry, Diagnostic, DiagnosticSeverity, FrequentFolderPinStatus, PathSource,
 };
 pub use time::filetime_to_system_time;

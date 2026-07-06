@@ -18,6 +18,7 @@
 //! 4. Clean error propagation
 
 use crate::{
+    destlist::FrequentFolderPinStatus,
     error::WincentError,
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
     script_executor::ScriptExecutor,
@@ -341,59 +342,14 @@ where
     Ok(contains(path)? == expected)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PinnedStatus {
-    Pinned,
-    Unpinned,
-    Unknown,
-}
-
-fn frequent_folder_pinned_status(path: &str) -> PinnedStatus {
-    frequent_folder_pinned_status_impl(path)
-}
-
-fn frequent_folder_pinned_status_impl(path: &str) -> PinnedStatus {
-    match frequent_folder_pinned_status_from_destlist(path) {
-        Ok(status) => status,
-        Err(_) => PinnedStatus::Unknown,
-    }
-}
-
-fn frequent_folder_pinned_status_from_destlist(path: &str) -> WincentResult<PinnedStatus> {
-    let parsed = crate::destlist::parse_file(crate::destlist::frequent_folders_dest_path()?)?;
-    Ok(frequent_folder_pinned_status_from_entries(
-        path,
-        parsed.dest_list().entries(),
-    ))
-}
-
-fn frequent_folder_pinned_status_from_entries(
-    path: &str,
-    entries: &[crate::destlist::DestListEntry],
-) -> PinnedStatus {
-    let mut matched = false;
-
-    for entry in entries
-        .iter()
-        .filter(|entry| paths_equal(entry.path(), path))
-    {
-        matched = true;
-        if entry.is_pinned() {
-            return PinnedStatus::Pinned;
-        }
-    }
-
-    if matched {
-        PinnedStatus::Unpinned
-    } else {
-        PinnedStatus::Unknown
-    }
+fn frequent_folder_pinned_status(path: &str) -> FrequentFolderPinStatus {
+    crate::destlist::frequent_folder_pin_status(path).unwrap_or(FrequentFolderPinStatus::NotFound)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_unpin_frequent_folder_state_machine<C, N, S, W, Sleep>(
     path: &str,
-    pinned_status: PinnedStatus,
+    pinned_status: FrequentFolderPinStatus,
     verification_timeout: Duration,
     poll_interval: Duration,
     mut contains: C,
@@ -416,7 +372,7 @@ where
         ));
     }
 
-    if matches!(pinned_status, PinnedStatus::Unpinned) {
+    if matches!(pinned_status, FrequentFolderPinStatus::Unpinned) {
         invoke_on_self(path, "pintohome")?;
     }
 
@@ -1387,7 +1343,7 @@ mod tests {
 
         let result = run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unknown,
+            FrequentFolderPinStatus::NotFound,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             |_| Ok(false),
@@ -1425,7 +1381,7 @@ mod tests {
 
         run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unpinned,
+            FrequentFolderPinStatus::Unpinned,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             {
@@ -1474,7 +1430,7 @@ mod tests {
 
         let result = run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unpinned,
+            FrequentFolderPinStatus::Unpinned,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             |_| Ok(true),
@@ -1511,7 +1467,7 @@ mod tests {
 
         let result = run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unpinned,
+            FrequentFolderPinStatus::Unpinned,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             |_| Ok(true),
@@ -1691,7 +1647,7 @@ mod tests {
 
         run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unknown,
+            FrequentFolderPinStatus::NotFound,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             {
@@ -1732,7 +1688,7 @@ mod tests {
 
         run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Pinned,
+            FrequentFolderPinStatus::Pinned,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             {
@@ -1774,7 +1730,7 @@ mod tests {
 
         run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unknown,
+            FrequentFolderPinStatus::NotFound,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             {
@@ -1825,7 +1781,7 @@ mod tests {
 
         run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unknown,
+            FrequentFolderPinStatus::NotFound,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             {
@@ -1872,7 +1828,7 @@ mod tests {
     fn test_unpin_state_machine_errors_when_folder_remains_present() {
         let result = run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
-            PinnedStatus::Unknown,
+            FrequentFolderPinStatus::NotFound,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             |_| Ok(true),
@@ -1886,84 +1842,6 @@ mod tests {
             matches!(result, Err(WincentError::SystemError(ref message)) if message.contains("Failed to remove frequent folder")),
             "persistent presence should be SystemError, got: {:?}",
             result
-        );
-    }
-
-    fn destlist_entry_for_test(path: &str, pin_status: i32) -> crate::destlist::DestListEntry {
-        crate::destlist::DestListEntry {
-            entry_offset: 0,
-            entry_len: 0,
-            mru_position: 0,
-            checksum: 0,
-            entry_id: 1,
-            entry_number: 1,
-            entry_number_unknown: 0,
-            hostname: String::new(),
-            volume_droid: String::new(),
-            file_droid: String::new(),
-            volume_birth_droid: String::new(),
-            file_birth_droid: String::new(),
-            file_droid_mac: String::new(),
-            stream_name: "1".to_string(),
-            raw_path: path.to_string(),
-            path: path.to_string(),
-            pin_status,
-            pin_order: (pin_status >= 0).then_some(pin_status),
-            rank: 0,
-            recent_rank: 0,
-            count: 1,
-            access_count: 1,
-            score: 0.0,
-            last_access_filetime: None,
-            last_interaction_filetime: None,
-            sps_size: None,
-            reserved_78: None,
-            reserved_7c: None,
-            path_sources: Vec::new(),
-            warnings: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn frequent_folder_pinned_status_from_entries_detects_pinned_entry() {
-        let entries = vec![destlist_entry_for_test("C:\\Folder", 0)];
-
-        assert_eq!(
-            frequent_folder_pinned_status_from_entries("c:/folder", &entries),
-            PinnedStatus::Pinned
-        );
-    }
-
-    #[test]
-    fn frequent_folder_pinned_status_from_entries_detects_unpinned_entry() {
-        let entries = vec![destlist_entry_for_test("C:\\Folder", -1)];
-
-        assert_eq!(
-            frequent_folder_pinned_status_from_entries("C:\\Folder", &entries),
-            PinnedStatus::Unpinned
-        );
-    }
-
-    #[test]
-    fn frequent_folder_pinned_status_from_entries_prefers_any_pinned_match() {
-        let entries = vec![
-            destlist_entry_for_test("C:\\Folder", -1),
-            destlist_entry_for_test("C:\\Folder", 0),
-        ];
-
-        assert_eq!(
-            frequent_folder_pinned_status_from_entries("C:\\Folder", &entries),
-            PinnedStatus::Pinned
-        );
-    }
-
-    #[test]
-    fn frequent_folder_pinned_status_from_entries_returns_unknown_for_unmatched_path() {
-        let entries = vec![destlist_entry_for_test("C:\\Other", 0)];
-
-        assert_eq!(
-            frequent_folder_pinned_status_from_entries("C:\\Folder", &entries),
-            PinnedStatus::Unknown
         );
     }
 

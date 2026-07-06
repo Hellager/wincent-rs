@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::WincentError;
-use crate::utils::{get_windows_recent_folder, normalize_path_lightweight};
+use crate::utils::{get_windows_recent_folder, normalize_path_lightweight, paths_equal};
 use crate::WincentResult;
 
 use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, CompoundFile};
@@ -12,6 +12,17 @@ use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, Com
 pub const RECENT_FILES_APPID: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
 /// Explorer Frequent Folders automatic destination AppID hash.
 pub const FREQUENT_FOLDERS_APPID: &str = "f01b4d95cf55d32a.automaticDestinations-ms";
+
+/// Pin state for a path in Explorer's Frequent Folders DestList.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrequentFolderPinStatus {
+    /// A matching Frequent Folders entry is pinned.
+    Pinned,
+    /// Matching Frequent Folders entries exist, but none are pinned.
+    Unpinned,
+    /// No matching Frequent Folders entry was found.
+    NotFound,
+}
 
 /// Parsed `.automaticDestinations-ms` file.
 #[derive(Debug, Clone, PartialEq)]
@@ -582,6 +593,37 @@ pub fn quick_access_entries(dest_list: &DestList, normal_slot_count: i32) -> Vec
 #[must_use]
 pub fn visible_entries(dest_list: &DestList) -> Vec<DestListEntry> {
     quick_access_entries(dest_list, 4)
+}
+
+pub(crate) fn frequent_folder_pin_status(path: &str) -> WincentResult<FrequentFolderPinStatus> {
+    let parsed = parse_file(frequent_folders_dest_path()?)?;
+    Ok(frequent_folder_pin_status_from_entries(
+        path,
+        parsed.dest_list().entries(),
+    ))
+}
+
+pub(crate) fn frequent_folder_pin_status_from_entries(
+    path: &str,
+    entries: &[DestListEntry],
+) -> FrequentFolderPinStatus {
+    let mut matched = false;
+
+    for entry in entries
+        .iter()
+        .filter(|entry| paths_equal(entry.path(), path))
+    {
+        matched = true;
+        if entry.is_pinned() {
+            return FrequentFolderPinStatus::Pinned;
+        }
+    }
+
+    if matched {
+        FrequentFolderPinStatus::Unpinned
+    } else {
+        FrequentFolderPinStatus::NotFound
+    }
 }
 
 fn quick_access_entries_v6(
@@ -1635,6 +1677,59 @@ mod tests {
             .collect();
 
         assert_eq!(visible, vec!["C:\\Pinned", "C:\\Normal3", "C:\\Normal0"]);
+    }
+
+    #[test]
+    fn frequent_folder_pin_status_from_entries_detects_pinned_entry() {
+        let entries = vec![destlist_entry_for_test("C:\\Folder", 1, 1, 0, 1, Some(0))];
+
+        assert_eq!(
+            frequent_folder_pin_status_from_entries("c:/folder", &entries),
+            FrequentFolderPinStatus::Pinned
+        );
+    }
+
+    #[test]
+    fn frequent_folder_pin_status_from_entries_detects_unpinned_entry() {
+        let entries = vec![destlist_entry_for_test("C:\\Folder", 1, 1, 0, 1, None)];
+
+        assert_eq!(
+            frequent_folder_pin_status_from_entries("C:\\Folder", &entries),
+            FrequentFolderPinStatus::Unpinned
+        );
+    }
+
+    #[test]
+    fn frequent_folder_pin_status_from_entries_prefers_any_pinned_match() {
+        let entries = vec![
+            destlist_entry_for_test("C:\\Folder", 1, 1, 0, 1, None),
+            destlist_entry_for_test("C:\\Folder", 2, 2, 0, 1, Some(0)),
+        ];
+
+        assert_eq!(
+            frequent_folder_pin_status_from_entries("C:\\Folder", &entries),
+            FrequentFolderPinStatus::Pinned
+        );
+    }
+
+    #[test]
+    fn frequent_folder_pin_status_from_entries_returns_not_found_for_unmatched_path() {
+        let entries = vec![destlist_entry_for_test("C:\\Other", 1, 1, 0, 1, Some(0))];
+
+        assert_eq!(
+            frequent_folder_pin_status_from_entries("C:\\Folder", &entries),
+            FrequentFolderPinStatus::NotFound
+        );
+    }
+
+    #[test]
+    fn frequent_folder_pin_status_from_entries_matches_windows_path_variants() {
+        let entries = vec![destlist_entry_for_test("C:\\Folder\\", 1, 1, 0, 1, None)];
+
+        assert_eq!(
+            frequent_folder_pin_status_from_entries("c:/folder", &entries),
+            FrequentFolderPinStatus::Unpinned
+        );
     }
 
     #[test]

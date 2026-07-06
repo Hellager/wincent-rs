@@ -92,6 +92,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "list" => cmd_list(&manager, &args[1..]),
         "list-paths" => cmd_list_paths(&manager, &args[1..]),
         "check" => cmd_check(&manager, &args[1..]),
+        "pin-status" => cmd_pin_status(&manager, &args[1..]),
         "contains" => cmd_contains(&manager, &args[1..]),
         "add" => cmd_add(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
@@ -161,6 +162,7 @@ Core:
   list <recent|frequent|all> [--paths]
   list-paths <recent|frequent|all>
   check <recent|frequent|all> <path>
+  pin-status <path>
   contains <recent|frequent|all> <keyword>
   add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
@@ -273,6 +275,12 @@ fn cmd_check(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
     let qa_type = parse_category(&args[0], true)?;
     let exists = manager.check_item_exact(&args[1], qa_type)?;
     println!("{exists}");
+    Ok(())
+}
+
+fn cmd_pin_status(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 1, "pin-status <path>")?;
+    println!("{:?}", manager.frequent_folder_pin_status(&args[0])?);
     Ok(())
 }
 

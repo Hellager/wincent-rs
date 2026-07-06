@@ -512,6 +512,40 @@ impl QuickAccessManager {
         Ok(items.iter().any(|item| paths_equal(item, &path)))
     }
 
+    /// Returns whether a Frequent Folders path is pinned, unpinned, or absent.
+    ///
+    /// This reads Explorer's Frequent Folders DestList metadata directly. It
+    /// does not call Shell verbs and does not mutate Explorer state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Also returns
+    /// I/O or DestList parse errors when Explorer's Frequent Folders backing
+    /// file cannot be read or parsed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// match manager.frequent_folder_pin_status("C:\\Work")? {
+    ///     FrequentFolderPinStatus::Pinned => println!("pinned"),
+    ///     FrequentFolderPinStatus::Unpinned => println!("frequent but not pinned"),
+    ///     FrequentFolderPinStatus::NotFound => println!("not in Frequent Folders"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn frequent_folder_pin_status<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> WincentResult<crate::destlist::FrequentFolderPinStatus> {
+        let path = path_to_shell_string(path.as_ref())?;
+        crate::destlist::frequent_folder_pin_status(&path)
+    }
+
     /// Checks if any item in Quick Access contains the given keyword.
     ///
     /// This is a plain, case-sensitive substring check against Explorer's path
@@ -2041,6 +2075,15 @@ mod tests {
         assert!(matches!(result, Err(WincentError::InvalidPath(_))));
         assert!(backend.get_item_timeouts().is_empty());
         assert!(backend.calls().is_empty());
+    }
+
+    #[test]
+    fn frequent_folder_pin_status_rejects_empty_path_before_parsing_destlist() {
+        let manager = QuickAccessManager::new();
+
+        let result = manager.frequent_folder_pin_status("");
+
+        assert!(matches!(result, Err(WincentError::InvalidPath(_))));
     }
 
     #[test]
