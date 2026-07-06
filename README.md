@@ -71,6 +71,9 @@ fn main() -> WincentResult<()> {
     // Fuzzy check: any item whose path string contains the keyword.
     let any_match = manager.contains_item("Projects", QuickAccess::All)?;
     println!("Any Quick Access item contains 'Projects': {any_match}");
+    for item in manager.find_items_containing("Projects", QuickAccess::All)? {
+        println!("Matched Quick Access item: {item}");
+    }
 
     // Check whether a Frequent Folders path is pinned, unpinned, or absent.
     let pin_status = manager.frequent_folder_pin_status("C:\\Projects")?;

@@ -94,6 +94,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "check" => cmd_check(&manager, &args[1..]),
         "pin-status" => cmd_pin_status(&manager, &args[1..]),
         "contains" => cmd_contains(&manager, &args[1..]),
+        "find" => cmd_find(&manager, &args[1..]),
         "add" => cmd_add(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
         "batch-add" => cmd_batch_add(&manager, &args[1..]),
@@ -164,6 +165,7 @@ Core:
   check <recent|frequent|all> <path>
   pin-status <path>
   contains <recent|frequent|all> <keyword>
+  find <recent|frequent|all> <keyword>
   add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
     frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
@@ -289,6 +291,14 @@ fn cmd_contains(manager: &QuickAccessManager, args: &[String]) -> WincentResult<
     let qa_type = parse_category(&args[0], true)?;
     let exists = manager.contains_item(&args[1], qa_type)?;
     println!("{exists}");
+    Ok(())
+}
+
+fn cmd_find(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 2, "find <recent|frequent|all> <keyword>")?;
+    let qa_type = parse_category(&args[0], true)?;
+    let matches = manager.find_items_containing(&args[1], qa_type)?;
+    print_strings("matches", &matches);
     Ok(())
 }
 
