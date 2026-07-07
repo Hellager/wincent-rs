@@ -68,10 +68,10 @@ fn main() -> WincentResult<()> {
     let exists = manager.check_item_exact("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
     println!("report.docx in Recent Files: {exists}");
 
-    // Fuzzy check: any item whose path string contains the keyword.
-    let any_match = manager.contains_item("Projects", QuickAccess::All)?;
-    println!("Any Quick Access item contains 'Projects': {any_match}");
-    for item in manager.find_items_containing("Projects", QuickAccess::All)? {
+    // Fuzzy check: any item whose path string contains the keyword, case-insensitively.
+    let any_match = manager.contains_item("projects", QuickAccess::All)?;
+    println!("Any Quick Access item contains 'projects': {any_match}");
+    for item in manager.find_items_containing("projects", QuickAccess::All)? {
         println!("Matched Quick Access item: {item}");
     }
 

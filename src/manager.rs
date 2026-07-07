@@ -549,7 +549,7 @@ impl QuickAccessManager {
 
     /// Finds Quick Access items containing the given keyword.
     ///
-    /// This is a plain, case-sensitive substring check against Explorer's path
+    /// This is a case-insensitive substring check against Explorer's path
     /// strings. It is useful for loose search, but it can produce false
     /// positives for path membership checks. An empty keyword returns all
     /// queried items, matching [`str::contains`] behavior.
@@ -565,7 +565,7 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// for item in manager.find_items_containing("Projects", QuickAccess::All)? {
+    /// for item in manager.find_items_containing("projects", QuickAccess::All)? {
     ///     println!("{item}");
     /// }
     /// # Ok(())
@@ -576,10 +576,11 @@ impl QuickAccessManager {
         keyword: &str,
         qa_type: QuickAccess,
     ) -> WincentResult<Vec<String>> {
+        let keyword = keyword.to_lowercase();
         Ok(self
             .get_items(qa_type)?
             .into_iter()
-            .filter(|item| item.contains(keyword))
+            .filter(|item| item.to_lowercase().contains(&keyword))
             .collect())
     }
 
@@ -599,7 +600,7 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// if manager.contains_item("Projects", QuickAccess::All)? {
+    /// if manager.contains_item("projects", QuickAccess::All)? {
     ///     println!("Found a matching Quick Access item");
     /// }
     /// # Ok(())
@@ -1774,7 +1775,7 @@ mod tests {
         ]));
         let manager = QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend);
 
-        let matches = manager.find_items_containing("Projects", QuickAccess::All)?;
+        let matches = manager.find_items_containing("projects", QuickAccess::All)?;
 
         assert_eq!(
             matches,
@@ -1819,7 +1820,7 @@ mod tests {
         let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
         let manager = QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend);
 
-        assert!(manager.contains_item("Projects", QuickAccess::All)?);
+        assert!(manager.contains_item("projects", QuickAccess::All)?);
         assert!(!manager.contains_item("Missing", QuickAccess::All)?);
         Ok(())
     }
