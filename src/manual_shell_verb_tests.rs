@@ -21,11 +21,11 @@ const WAIT_INTERVAL: Duration = Duration::from_millis(500);
 static QUICK_ACCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn given_pinned_folder() -> &'static str {
-    r"G:\Github\wincent-rs\temp"
+    r"D:\Project\Github\wincent-rs\temp"
 }
 
 fn given_unpinned_folder() -> &'static str {
-    r"G:\Github\wincent-rs\tests"
+    r"D:\Temp\packing"
 }
 
 fn lock_quick_access_tests() -> MutexGuard<'static, ()> {
@@ -331,3 +331,35 @@ fn win11_pintohome_is_frequent_folder_toggle() -> WincentResult<()> {
 
     Ok(())
 }
+
+// Manual Win11+ shell verb notes
+//
+// Version detection in `utils.rs` uses RtlGetVersion().dwBuildNumber and treats
+// build >= 22000 as Win11+. On the host used for these diagnostics, registry
+// data reported DisplayVersion=25H2, CurrentBuildNumber=26200, UBR=8655
+// (10.0.26200.8655). `ProductName` still reported "Windows 10 Enterprise",
+// so build number is the reliable classification signal here.
+//
+// Observed Win11+ Frequent Folders results:
+// - win11_unpinfromhome_removes_pinned_frequent_folder:
+//   `unpinfromhome` invoked on the matching item in the Frequent Folders
+//   namespace successfully removed `given_pinned_folder()`.
+// - win11_remove_removes_unpinned_frequent_folder:
+//   QuickAccessManager::remove_item(..., QuickAccess::FrequentFolders)
+//   successfully removed an unpinned frequent entry after it had been added.
+// - win11_pintohome_is_frequent_folder_toggle:
+//   the first `pintohome` added the folder to Frequent Folders and the second
+//   `pintohome` removed it, confirming that Win11+ treats `pintohome` as a
+//   toggle for Frequent Folders state.
+//
+// Practical guidance for Win11+:
+// - `unpinfromhome` is valid for removing a pinned Frequent Folders item when
+//   the target item is found through the Frequent Folders namespace.
+// - `pintohome` is valid for adding a folder only after an existence check;
+//   blindly invoking it on an existing item can remove the item instead.
+// - Unpinned frequent entries need special handling. The production remove
+//   state machine should continue to verify presence after each verb and may
+//   need to pin/toggle before the item disappears.
+// - Do not trust InvokeVerb success alone. Explorer updates this state
+//   asynchronously, so tests and production code should poll the namespace or
+//   DestList-backed status after mutations.
