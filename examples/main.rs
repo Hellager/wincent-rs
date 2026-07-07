@@ -330,6 +330,7 @@ fn cmd_watch(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
             println!("changed {:?}", event.qa_type());
             print_strings("added", event.added_items());
             print_strings("removed", event.removed_items());
+            println!("reordered: {}", event.is_reorder());
             println!("current: {}", event.current_items().len());
         }
         Err(error) => eprintln!("watch error: {error}"),

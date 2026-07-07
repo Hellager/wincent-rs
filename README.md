@@ -86,9 +86,10 @@ fn main() -> WincentResult<()> {
         |event| {
             if let Ok(event) = event {
                 println!(
-                    "Quick Access changed: +{} -{}",
+                    "Quick Access changed: +{} -{} reorder={}",
                     event.added_items().len(),
-                    event.removed_items().len()
+                    event.removed_items().len(),
+                    event.is_reorder()
                 );
             }
         },

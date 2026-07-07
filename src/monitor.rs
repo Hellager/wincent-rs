@@ -83,6 +83,12 @@ impl QuickAccessMonitorOptions {
 }
 
 /// Quick Access snapshot change event.
+///
+/// Events may represent added items, removed items, or order-only changes.
+/// [`QuickAccessChangeEvent::added_items`] and
+/// [`QuickAccessChangeEvent::removed_items`] report only membership changes;
+/// they are both empty for a pure reorder. Use
+/// [`QuickAccessChangeEvent::is_reorder`] to detect that case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickAccessChangeEvent {
     qa_type: QuickAccess,
@@ -125,15 +131,29 @@ impl QuickAccessChangeEvent {
     }
 
     /// Items present in the current snapshot but not in the previous snapshot.
+    ///
+    /// This does not include order changes. For a pure reorder, this slice is
+    /// empty and [`QuickAccessChangeEvent::is_reorder`] returns `true`.
     #[must_use]
     pub fn added_items(&self) -> &[String] {
         &self.added_items
     }
 
     /// Items present in the previous snapshot but not in the current snapshot.
+    ///
+    /// This does not include order changes. For a pure reorder, this slice is
+    /// empty and [`QuickAccessChangeEvent::is_reorder`] returns `true`.
     #[must_use]
     pub fn removed_items(&self) -> &[String] {
         &self.removed_items
+    }
+
+    /// Returns whether this event is only a change in item order.
+    #[must_use]
+    pub fn is_reorder(&self) -> bool {
+        self.added_items.is_empty()
+            && self.removed_items.is_empty()
+            && !items_equal(&self.previous_items, &self.current_items)
     }
 }
 
@@ -362,6 +382,33 @@ mod tests {
 
         assert_eq!(event.added_items(), &["C:\\New".to_string()]);
         assert_eq!(event.removed_items(), &["C:\\Old".to_string()]);
+        assert!(!event.is_reorder());
+    }
+
+    #[test]
+    fn added_item_event_is_not_reorder() {
+        let event = QuickAccessChangeEvent::new(
+            QuickAccess::All,
+            vec!["C:\\Same".to_string()],
+            vec!["C:\\Same".to_string(), "C:\\New".to_string()],
+        );
+
+        assert_eq!(event.added_items(), &["C:\\New".to_string()]);
+        assert!(event.removed_items().is_empty());
+        assert!(!event.is_reorder());
+    }
+
+    #[test]
+    fn removed_item_event_is_not_reorder() {
+        let event = QuickAccessChangeEvent::new(
+            QuickAccess::All,
+            vec!["C:\\Old".to_string(), "C:\\Same".to_string()],
+            vec!["C:\\Same".to_string()],
+        );
+
+        assert!(event.added_items().is_empty());
+        assert_eq!(event.removed_items(), &["C:\\Old".to_string()]);
+        assert!(!event.is_reorder());
     }
 
     #[test]
@@ -373,6 +420,7 @@ mod tests {
         assert!(!items_equal(&previous, event.current_items()));
         assert!(event.added_items().is_empty());
         assert!(event.removed_items().is_empty());
+        assert!(event.is_reorder());
     }
 
     #[test]
