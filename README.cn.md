@@ -15,10 +15,11 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 ## 功能特性
 
 - 查询最近文件和常用文件夹
-- 添加和删除项目，自动检测重复项
+- 添加和删除项目，自动检测重复项，包括已固定和未固定的常用文件夹
 - 清空分类（可选同时移除已固定文件夹）
 - 以保守 `.lnk` 清理恢复默认快速访问状态，并提供可选深度清理
 - 精确路径或关键词检查项目是否存在
+- 查询常用文件夹是已固定、未固定还是不存在
 - 批量添加/删除，逐项收集错误
 - Shell 和 PowerShell 操作具备调用方等待超时保护
 - 快速访问分区可见性控制
@@ -67,9 +68,32 @@ fn main() -> WincentResult<()> {
     let exists = manager.check_item_exact("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
     println!("report.docx 在最近文件中：{exists}");
 
-    // 模糊检查：任意项目的路径字符串包含指定关键词。
-    let any_match = manager.contains_item("Projects", QuickAccess::All)?;
-    println!("快速访问中存在包含 'Projects' 的项目：{any_match}");
+    // 模糊检查：任意项目的路径字符串不区分大小写地包含指定关键词。
+    let any_match = manager.contains_item("projects", QuickAccess::All)?;
+    println!("快速访问中存在包含 'projects' 的项目：{any_match}");
+    for item in manager.find_items_containing("projects", QuickAccess::All)? {
+        println!("匹配的快速访问项目：{item}");
+    }
+
+    // 检查常用文件夹路径是已固定、未固定还是不存在。
+    let pin_status = manager.frequent_folder_pin_status("C:\\Projects")?;
+    println!("Projects 常用文件夹固定状态：{pin_status:?}");
+
+    // 监控快照变化。监控期间需要保持 guard 存活。
+    // 这会报告 Explorer 和本 crate 自身操作造成的变化。
+    let _monitor = manager.watch_quick_access(
+        QuickAccessMonitorOptions::new().with_qa_type(QuickAccess::All),
+        |event| {
+            if let Ok(event) = event {
+                println!(
+                    "快速访问已变化：+{} -{} reorder={}",
+                    event.added_items().len(),
+                    event.removed_items().len(),
+                    event.is_reorder()
+                );
+            }
+        },
+    )?;
 
     // --- 删除 ---
     // 移除文件。若不存在则返回 Err(NotInQuickAccess)。
@@ -85,10 +109,10 @@ fn main() -> WincentResult<()> {
 - **Rust**：1.85.0 或更高版本。
 - **状态一致性**：快速访问状态由 Windows Explorer 维护，修改操作后结果可能有短暂延迟，Explorer 也可能在不同版本间以异步方式重建状态。
 - **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
+- **常用文件夹删除**：`remove_item(..., QuickAccess::FrequentFolders)` 会通过 Explorer Shell verb 取消固定已固定文件夹。对于未固定但在常用文件夹中的条目，会先固定再取消固定；如果第二步失败，文件夹可能保持固定状态。
 - **固定文件夹清理超时**：在 `empty` 操作中显式移除可见固定文件夹时，可用 `EmptyOptions::with_pinned_folders_timeout()` 覆盖 snapshot/unpin 超时。未设置时使用 manager timeout。
 - **恢复清理**：默认恢复清理只删除目标类型可解析为对应文件或文件夹分类的 `.lnk` 文件。使用 `RestoreDefaultsOptions::deep_lnk_cleanup()` 或 CLI `restore --deep` 时，也会删除无法解析或目标类型未知的 `.lnk` 文件。
 - **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复最近文件可见性，请先显示开始菜单推荐项目，再用 `ShowRecent` 控制最近文件可见性。
-- **实验性 DestList 删除**：experimental remove API 会直接重建 Explorer backing file，并可能删除 Recent 文件夹中匹配的 `.lnk` 文件；其稳定性弱于 parser/query API。
 
 ## 贡献指南
 

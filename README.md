@@ -113,7 +113,6 @@ fn main() -> WincentResult<()> {
 - **Pinned-folder cleanup timeout**: when explicitly removing visible pinned folders during an `empty` operation, `EmptyOptions::with_pinned_folders_timeout()` can override the snapshot/unpin timeout. If unset, the operation uses the manager timeout.
 - **Restore cleanup**: default restore cleanup deletes only `.lnk` files whose target type is resolved as the requested file or folder category. Use `RestoreDefaultsOptions::deep_lnk_cleanup()` or CLI `restore --deep` to also delete unresolved or unknown-type `.lnk` files.
 - **Start menu Recommended visibility**: the Start Recommended APIs target the Windows 11 Start menu. They write the current user's `Explorer\Advanced\Start_TrackDocs` value and are not blocked on Windows 10, where the setting may have no visible Start menu effect. On some Windows 11 builds, hiding Start Recommended can also make Explorer Recent Files invisible; if `ShowRecent` alone does not restore Recent Files visibility, show Start Recommended first and then control Recent Files with `ShowRecent`.
-- **Experimental DestList removal**: experimental remove APIs rebuild Explorer backing files directly and may delete matching Recent-folder `.lnk` files. Treat them as destructive low-level APIs, not the default item removal path.
 
 ## Contributing
 

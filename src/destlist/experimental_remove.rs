@@ -213,27 +213,6 @@ impl ExperimentalRemoveReport {
 /// `rebuilt()`, `post_delete_error()`, and `remaining_paths_after_rebuild()`
 /// together.
 ///
-/// # Examples
-///
-/// ```rust,no_run
-/// # fn main() -> wincent::WincentResult<()> {
-/// use wincent::destlist::{
-///     experimental_remove_entry_paths_by_rebuild, AutomaticDestinationsKind,
-///     ExperimentalRemoveOptions,
-/// };
-///
-/// let report = experimental_remove_entry_paths_by_rebuild(
-///     AutomaticDestinationsKind::RecentFiles,
-///     &["C:\\Work\\old-report.docx"],
-///     ExperimentalRemoveOptions::new(),
-/// )?;
-///
-/// if !report.success() {
-///     eprintln!("remaining entries: {:?}", report.remaining_paths_after_rebuild());
-/// }
-/// Ok(())
-/// # }
-/// ```
 pub(crate) fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     kind: AutomaticDestinationsKind,
     target_paths: &[P],

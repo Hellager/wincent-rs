@@ -24,10 +24,9 @@
 //! [`crate::error::WincentError::DestListUnsupportedVersion`].
 
 pub(super) mod cfb;
-/// Experimental APIs that remove entries by rebuilding Explorer backing files.
+/// Internal destructive tests for removing entries by rebuilding Explorer backing files.
 ///
-/// These functions may delete matching Recent-folder `.lnk` files and have a
-/// weaker compatibility contract than the stable parser/query APIs.
+/// These helpers are intentionally not part of the public API.
 #[cfg(test)]
 pub(crate) mod experimental_remove;
 /// Parser for Explorer `.automaticDestinations-ms` Jump List files.
