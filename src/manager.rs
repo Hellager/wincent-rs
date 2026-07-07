@@ -6,6 +6,7 @@ use crate::{
     batch::{self, BatchFailure, BatchOptions, BatchResult},
     empty::{self, EmptyOptions},
     error::{QuickAccessPostMutationStep, WincentError},
+    monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions},
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
     restore::{
         self, FrequentRestoreReport, RecentRestoreReport, RestoreDefaultsOptions,
@@ -606,6 +607,47 @@ impl QuickAccessManager {
     /// ```
     pub fn contains_item(&self, keyword: &str, qa_type: QuickAccess) -> WincentResult<bool> {
         Ok(!self.find_items_containing(keyword, qa_type)?.is_empty())
+    }
+
+    /// Monitors Quick Access for snapshot changes.
+    ///
+    /// This starts a background polling thread. The callback is invoked when
+    /// the monitored snapshot changes, including changes caused by this crate's
+    /// own add, remove, empty, and restore operations. Keep the returned
+    /// [`QuickAccessMonitor`] alive for as long as monitoring should continue.
+    ///
+    /// # Errors
+    ///
+    /// Returns query errors from [`QuickAccessManager::get_items`] when the
+    /// initial snapshot cannot be read.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// let _monitor = manager.watch_quick_access(
+    ///     QuickAccessMonitorOptions::new().with_qa_type(QuickAccess::All),
+    ///     |event| {
+    ///         if let Ok(event) = event {
+    ///             println!("{} Quick Access items", event.current_items().len());
+    ///         }
+    ///     },
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn watch_quick_access<F>(
+        &self,
+        options: QuickAccessMonitorOptions,
+        callback: F,
+    ) -> WincentResult<QuickAccessMonitor>
+    where
+        F: FnMut(WincentResult<QuickAccessChangeEvent>) + Send + 'static,
+    {
+        QuickAccessMonitor::start(self.clone(), options, callback)
     }
 
     /// Adds an item to Recent Files or Frequent Folders.

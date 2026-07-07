@@ -95,6 +95,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "pin-status" => cmd_pin_status(&manager, &args[1..]),
         "contains" => cmd_contains(&manager, &args[1..]),
         "find" => cmd_find(&manager, &args[1..]),
+        "watch" => cmd_watch(&manager, &args[1..]),
         "add" => cmd_add(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
         "batch-add" => cmd_batch_add(&manager, &args[1..]),
@@ -166,6 +167,7 @@ Core:
   pin-status <path>
   contains <recent|frequent|all> <keyword>
   find <recent|frequent|all> <keyword>
+  watch <recent|frequent|all> [--poll-ms N]
   add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
     frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
@@ -300,6 +302,47 @@ fn cmd_find(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> 
     let matches = manager.find_items_containing(&args[1], qa_type)?;
     print_strings("matches", &matches);
     Ok(())
+}
+
+fn cmd_watch(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 1, "watch <recent|frequent|all> [--poll-ms N]")?;
+    let qa_type = parse_category(&args[0], true)?;
+    let mut options = QuickAccessMonitorOptions::new().with_qa_type(qa_type);
+    let mut iter = args.iter().skip(1);
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--poll-ms" => {
+                let value = required_arg(iter.next(), "--poll-ms")?;
+                options = options
+                    .try_poll_interval(Duration::from_millis(parse_u64(value, "poll-ms")?))?;
+            }
+            other => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown watch option: {other}"
+                )));
+            }
+        }
+    }
+
+    let _monitor = manager.watch_quick_access(options, |event| match event {
+        Ok(event) => {
+            println!("changed {:?}", event.qa_type());
+            print_strings("added", event.added_items());
+            print_strings("removed", event.removed_items());
+            println!("current: {}", event.current_items().len());
+        }
+        Err(error) => eprintln!("watch error: {error}"),
+    })?;
+    println!(
+        "watching {:?} every {:?}; press Ctrl+C to stop",
+        options.qa_type(),
+        options.poll_interval()
+    );
+
+    loop {
+        std::thread::park();
+    }
 }
 
 fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {

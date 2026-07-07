@@ -75,6 +75,7 @@ pub mod error;
 mod explorer_window;
 mod handle;
 pub mod manager;
+pub mod monitor;
 mod query;
 mod quick_access_lock;
 mod recent_links;
@@ -99,6 +100,9 @@ pub mod prelude {
     };
     pub use crate::manager::{
         AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
+    };
+    pub use crate::monitor::{
+        QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions,
     };
     pub use crate::quick_access_lock::{
         QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
@@ -137,6 +141,7 @@ pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::empty::EmptyOptions;
 pub use crate::error::QuickAccessPostMutationStep;
 pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions};
+pub use crate::monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions};
 pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
     QuickAccessUnlockReport,

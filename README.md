@@ -79,6 +79,21 @@ fn main() -> WincentResult<()> {
     let pin_status = manager.frequent_folder_pin_status("C:\\Projects")?;
     println!("Projects Frequent Folders pin status: {pin_status:?}");
 
+    // Watch snapshot changes. Keep the guard alive while monitoring.
+    // This reports changes from Explorer and from this crate's own operations.
+    let _monitor = manager.watch_quick_access(
+        QuickAccessMonitorOptions::new().with_qa_type(QuickAccess::All),
+        |event| {
+            if let Ok(event) = event {
+                println!(
+                    "Quick Access changed: +{} -{}",
+                    event.added_items().len(),
+                    event.removed_items().len()
+                );
+            }
+        },
+    )?;
+
     // --- Remove ---
     // Remove a file. Returns Err(NotInQuickAccess) if not present.
     manager.remove_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
