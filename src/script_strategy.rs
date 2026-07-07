@@ -289,39 +289,52 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
         $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')
     }}
 
+    $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
     $target = Find-WincentFrequentFolder;
     if ($null -eq $target) {{
         Write-Output 'WINCENT_NOT_IN_QUICK_ACCESS';
         exit 1;
     }}
 
-    Invoke-WincentUnpinFromHome $target;
-    if (Wait-WincentFrequentFolderPresence $false) {{
-        return
-    }}
-
-    Invoke-WincentPinToHomeToggle;
-    if (Wait-WincentFrequentFolderPresence $false) {{
-        return
-    }}
-
-    $target = Find-WincentFrequentFolder;
-    if ($null -eq $target) {{
-        return
-    }}
-
-    $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
     if ($isWin11)
     {{
-        Invoke-WincentPinToHomeToggle
+        Invoke-WincentPinToHomeToggle;
+        if (Wait-WincentFrequentFolderPresence $false) {{
+            return
+        }}
+
+        Invoke-WincentPinToHomeToggle;
+        if (Wait-WincentFrequentFolderPresence $false) {{
+            return
+        }}
     }}
     else
     {{
         Invoke-WincentUnpinFromHome $target;
-    }}
+        if (Wait-WincentFrequentFolderPresence $false) {{
+            return
+        }}
 
-    if (Wait-WincentFrequentFolderPresence $false) {{
-        return
+        Invoke-WincentPinToHomeToggle;
+        $target = Find-WincentFrequentFolder;
+        if ($null -eq $target) {{
+            return
+        }}
+
+        Invoke-WincentUnpinFromHome $target;
+        if (Wait-WincentFrequentFolderPresence $false) {{
+            return
+        }}
+
+        $target = Find-WincentFrequentFolder;
+        if ($null -eq $target) {{
+            return
+        }}
+
+        Invoke-WincentUnpinFromHome $target;
+        if (Wait-WincentFrequentFolderPresence $false) {{
+            return
+        }}
     }}
 
     throw "Failed to remove frequent folder: $requestedPath"
@@ -515,9 +528,25 @@ mod tests {
             script
                 .matches("Invoke-WincentUnpinFromHome $target")
                 .count(),
-            2
+            3
         );
         assert!(script.matches("Invoke-WincentPinToHomeToggle").count() >= 3);
+        assert!(
+            script.contains("if ($isWin11)\r\n    {\r\n        Invoke-WincentPinToHomeToggle;")
+                || script.contains("if ($isWin11)\n    {\n        Invoke-WincentPinToHomeToggle;")
+        );
+        assert!(script.contains(
+            "Invoke-WincentUnpinFromHome $target;\r\n        if (Wait-WincentFrequentFolderPresence $false"
+        ) || script.contains(
+            "Invoke-WincentUnpinFromHome $target;\n        if (Wait-WincentFrequentFolderPresence $false"
+        ));
+        assert!(
+            script.contains(
+                "Invoke-WincentPinToHomeToggle;\r\n        $target = Find-WincentFrequentFolder;"
+            ) || script.contains(
+                "Invoke-WincentPinToHomeToggle;\n        $target = Find-WincentFrequentFolder;"
+            )
+        );
         assert!(!script.contains("try {\n        Invoke-WincentPinToHomeToggle"));
         assert!(!script.contains("try {\r\n        Invoke-WincentPinToHomeToggle"));
         assert!(

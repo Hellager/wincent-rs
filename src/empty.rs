@@ -183,9 +183,8 @@ where
 /// Attempts to unpin all pinned folders from Quick Access.
 ///
 /// Snapshots every item currently in the Frequent Folders namespace and removes
-/// each one through the single-item native mutation path. That path tries
-/// `unpinfromhome` first and falls back to the Windows 11 `pintohome` toggle
-/// workaround when needed.
+/// each one through the single-item mutation path. That path uses
+/// version-aware Explorer Shell verbs and verifies that each folder disappears.
 #[allow(dead_code)]
 pub(crate) fn empty_pinned_folders() -> WincentResult<()> {
     let backend = SystemQuickAccessBackend;

@@ -6,6 +6,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::time::Duration;
+use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 
 /// Lightweight path normalization without I/O operations.
 ///
@@ -52,6 +53,38 @@ pub(crate) fn paths_equal(path1: &str, path2: &str) -> bool {
     }
 
     normalize_path_for_comparison(path1) == normalize_path_for_comparison(path2)
+}
+
+#[link(name = "ntdll")]
+extern "system" {
+    fn RtlGetVersion(lpversioninformation: *mut OSVERSIONINFOW) -> i32;
+}
+
+pub(crate) fn current_windows_build_number() -> WincentResult<u32> {
+    let mut version_info = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
+
+    // SAFETY: version_info is initialized with the correct size in `dwOSVersionInfoSize`.
+    // RtlGetVersion fills the struct in-place. This is the recommended API for reliable
+    // OS version detection that bypasses compatibility shims.
+    let status = unsafe { RtlGetVersion(&mut version_info) };
+    if status != 0 {
+        return Err(WincentError::SystemError(format!(
+            "Failed to get Windows version: NTSTATUS 0x{status:08X}"
+        )));
+    }
+
+    Ok(version_info.dwBuildNumber)
+}
+
+pub(crate) fn is_windows_11_build_number(build: u32) -> bool {
+    build >= 22_000
+}
+
+pub(crate) fn is_windows_11_or_later() -> WincentResult<bool> {
+    Ok(is_windows_11_build_number(current_windows_build_number()?))
 }
 
 pub(crate) fn os_str_to_wide_null(value: &OsStr) -> Vec<u16> {
@@ -202,6 +235,13 @@ pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
 #[cfg(test)]
 mod utils_test {
     use super::*;
+
+    #[test]
+    fn windows_11_build_detection_uses_22000_threshold() {
+        assert!(!is_windows_11_build_number(21_999));
+        assert!(is_windows_11_build_number(22_000));
+        assert!(is_windows_11_build_number(26_000));
+    }
 
     #[test]
     fn refresh_explorer_window_with_timeout_passes_timeout_to_native() -> WincentResult<()> {
