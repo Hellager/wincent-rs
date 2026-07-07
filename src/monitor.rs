@@ -51,21 +51,6 @@ impl QuickAccessMonitorOptions {
         self.poll_interval
     }
 
-    /// Sets the poll interval.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `poll_interval` is zero.
-    #[must_use]
-    pub fn with_poll_interval(mut self, poll_interval: Duration) -> Self {
-        assert!(
-            !poll_interval.is_zero(),
-            "poll interval must be greater than zero"
-        );
-        self.poll_interval = poll_interval;
-        self
-    }
-
     /// Tries to set the poll interval.
     ///
     /// # Errors
