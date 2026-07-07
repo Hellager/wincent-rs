@@ -8,11 +8,9 @@ use wincent::error::{InvalidPathError, PowerShellError, PowerShellErrorKind, Win
 use wincent::prelude::*;
 
 use wincent::destlist::{
-    entries as dest_entries, experimental_remove_entries_by_rebuild,
-    experimental_remove_entry_paths_by_rebuild, filetime_to_system_time,
-    frequent_folders_dest_path, parse_bytes as parse_dest_bytes, parse_file as parse_dest_file,
-    recent_files_dest_path, AutomaticDestinations, AutomaticDestinationsKind,
-    ExperimentalRemoveOptions,
+    entries as dest_entries, filetime_to_system_time, frequent_folders_dest_path,
+    parse_bytes as parse_dest_bytes, parse_file as parse_dest_file, recent_files_dest_path,
+    AutomaticDestinations,
 };
 
 fn main() {
@@ -201,11 +199,6 @@ DestList APIs:
   dest parse-bytes <path> [--limit N]
   dest manager <recent|frequent> [--limit N]
   dest filetime <value>
-  dest remove <recent|frequent> [--delay-ms N] <path>...
-  dest remove-entries <recent|frequent> [--delay-ms N] <path>...
-
-Experimental DestList remove APIs rebuild Explorer backing files and may delete matching .lnk files.
-Use them as low-level destructive tools, not the default item removal path.
 "#
     );
 }
@@ -797,8 +790,6 @@ fn cmd_dest(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> 
             }
             Ok(())
         }
-        "remove" => cmd_dest_remove(false, &args[1..]),
-        "remove-entries" => cmd_dest_remove(true, &args[1..]),
         other => Err(WincentError::InvalidArgument(format!(
             "unknown dest command: {other}"
         ))),
@@ -862,68 +853,6 @@ fn cmd_dest_manager(manager: &QuickAccessManager, args: &[String]) -> WincentRes
     Ok(())
 }
 
-fn cmd_dest_remove(use_entries: bool, args: &[String]) -> WincentResult<()> {
-    require_len(
-        args,
-        2,
-        "dest remove <recent|frequent> [--delay-ms N] <path>...",
-    )?;
-    let kind = parse_dest_kind(&args[0])?;
-    let mut delay = Duration::from_millis(500);
-    let mut paths = Vec::new();
-    let mut index = 1;
-
-    while index < args.len() {
-        if args[index] == "--delay-ms" {
-            index += 1;
-            delay = Duration::from_millis(parse_u64(
-                required_arg(args.get(index), "delay-ms")?,
-                "delay-ms",
-            )?);
-        } else {
-            paths.push(PathBuf::from(&args[index]));
-        }
-        index += 1;
-    }
-
-    if paths.is_empty() {
-        return Err(WincentError::InvalidArgument(
-            "dest remove requires at least one target path".to_string(),
-        ));
-    }
-
-    let options = ExperimentalRemoveOptions::new().with_rebuild_delay(delay);
-    let report = if use_entries {
-        let parsed = parse_dest_file(dest_path(kind)?)?;
-        let requested: Vec<String> = paths
-            .iter()
-            .map(|path| path.to_string_lossy().to_string())
-            .collect();
-        let matching: Vec<_> = parsed
-            .dest_list()
-            .entries()
-            .iter()
-            .filter(|entry| {
-                requested
-                    .iter()
-                    .any(|path| windows_path_eq_lightweight(entry.path(), path))
-            })
-            .cloned()
-            .collect();
-        if matching.is_empty() {
-            return Err(WincentError::InvalidArgument(
-                "dest remove-entries found no matching DestList entries".to_string(),
-            ));
-        }
-        experimental_remove_entries_by_rebuild(kind, &matching, options)?
-    } else {
-        experimental_remove_entry_paths_by_rebuild(kind, &paths, options)?
-    };
-
-    print_remove_report(&report);
-    Ok(())
-}
-
 fn parse_category(value: &str, allow_all: bool) -> WincentResult<QuickAccess> {
     match value {
         "recent" | "recent-files" | "files" => Ok(QuickAccess::RecentFiles),
@@ -938,25 +867,26 @@ fn parse_category(value: &str, allow_all: bool) -> WincentResult<QuickAccess> {
     }
 }
 
-fn parse_dest_kind(value: &str) -> WincentResult<AutomaticDestinationsKind> {
+#[derive(Debug, Clone, Copy)]
+enum DestKind {
+    RecentFiles,
+    FrequentFolders,
+}
+
+fn parse_dest_kind(value: &str) -> WincentResult<DestKind> {
     match value {
-        "recent" | "recent-files" | "files" => Ok(AutomaticDestinationsKind::RecentFiles),
-        "frequent" | "frequent-folders" | "folders" => {
-            Ok(AutomaticDestinationsKind::FrequentFolders)
-        }
+        "recent" | "recent-files" | "files" => Ok(DestKind::RecentFiles),
+        "frequent" | "frequent-folders" | "folders" => Ok(DestKind::FrequentFolders),
         other => Err(WincentError::InvalidArgument(format!(
             "unknown AutomaticDestinations kind: {other}"
         ))),
     }
 }
 
-fn dest_path(kind: AutomaticDestinationsKind) -> WincentResult<PathBuf> {
+fn dest_path(kind: DestKind) -> WincentResult<PathBuf> {
     match kind {
-        AutomaticDestinationsKind::RecentFiles => recent_files_dest_path(),
-        AutomaticDestinationsKind::FrequentFolders => frequent_folders_dest_path(),
-        _ => Err(WincentError::UnsupportedOperation(
-            "unknown AutomaticDestinations kind".to_string(),
-        )),
+        DestKind::RecentFiles => recent_files_dest_path(),
+        DestKind::FrequentFolders => frequent_folders_dest_path(),
     }
 }
 
@@ -1167,34 +1097,6 @@ fn print_dest_entries(entries: &[wincent::destlist::DestListEntry], limit: usize
     }
 }
 
-fn print_remove_report(report: &wincent::destlist::ExperimentalRemoveReport) {
-    println!("kind: {:?}", report.kind());
-    println!("recent_folder: {}", report.recent_folder().display());
-    println!("dest_path: {}", report.dest_path().display());
-    print_strings("requested_paths", report.requested_paths());
-    print_strings("matching_paths_before", report.matching_paths_before());
-    println!("deleted_lnk_paths: {}", report.deleted_lnk_paths().len());
-    for path in report.deleted_lnk_paths() {
-        println!("{}", path.display());
-    }
-    print_strings(
-        "missing_lnk_target_paths",
-        report.missing_lnk_target_paths(),
-    );
-    println!("dest_deleted: {}", report.dest_deleted());
-    println!("rebuilt: {}", report.rebuilt());
-    println!(
-        "rebuild_parse_elapsed: {:?}",
-        report.rebuild_parse_elapsed()
-    );
-    println!("rebuild_parse_error: {:?}", report.rebuild_parse_error());
-    print_strings(
-        "remaining_paths_after_rebuild",
-        report.remaining_paths_after_rebuild(),
-    );
-    println!("success: {}", report.success());
-}
-
 fn print_restore_report(report: &RestoreDefaultsReport) {
     println!("success: {}", report.success());
     if let Some(r) = report.recent_report() {
@@ -1336,18 +1238,6 @@ fn parse_limit(args: &[String], default: usize) -> WincentResult<usize> {
     Ok(limit)
 }
 
-fn windows_path_eq_lightweight(a: &str, b: &str) -> bool {
-    normalize_windows_path_lightweight(a) == normalize_windows_path_lightweight(b)
-}
-
-fn normalize_windows_path_lightweight(path: &str) -> String {
-    let mut normalized = path.replace('/', "\\").to_lowercase();
-    while normalized.len() > 3 && normalized.ends_with('\\') {
-        normalized.pop();
-    }
-    normalized
-}
-
 fn parse_bool(value: &str) -> WincentResult<bool> {
     match value {
         "true" | "1" | "yes" | "on" | "show" => Ok(true),
@@ -1481,18 +1371,6 @@ mod tests {
         let limit = parse_limit(&["--limit".to_string(), "3".to_string()], 20).unwrap();
 
         assert_eq!(limit, 3);
-    }
-
-    #[test]
-    fn windows_path_eq_lightweight_matches_case_slash_and_trailing_separator() {
-        assert!(windows_path_eq_lightweight(
-            r#"C:\Projects\Report.docx"#,
-            r#"c:/projects/report.docx"#
-        ));
-        assert!(windows_path_eq_lightweight(
-            r#"C:\Projects\"#,
-            r#"c:/projects"#
-        ));
     }
 
     #[test]

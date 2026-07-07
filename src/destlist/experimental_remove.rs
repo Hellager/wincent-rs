@@ -38,7 +38,7 @@ const REBUILD_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Explorer automatic destination file family to modify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum AutomaticDestinationsKind {
+pub(crate) enum AutomaticDestinationsKind {
     /// Recent Files automatic destination.
     RecentFiles,
     /// Frequent Folders automatic destination.
@@ -50,19 +50,8 @@ pub enum AutomaticDestinationsKind {
 /// The delay is only the initial grace period after deleting Explorer's backing
 /// file. The implementation still polls for a rebuilt file afterwards.
 ///
-/// # Examples
-///
-/// ```rust
-/// use std::time::Duration;
-/// use wincent::destlist::ExperimentalRemoveOptions;
-///
-/// let options = ExperimentalRemoveOptions::new()
-///     .with_rebuild_delay(Duration::from_secs(1));
-///
-/// assert_eq!(options.rebuild_delay(), Duration::from_secs(1));
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExperimentalRemoveOptions {
+pub(crate) struct ExperimentalRemoveOptions {
     /// Initial grace delay after deleting the `.automaticDestinations-ms` file
     /// before polling for the rebuilt file.
     ///
@@ -111,17 +100,7 @@ impl ExperimentalRemoveOptions {
 /// [`ExperimentalRemoveReport::post_delete_error`] so callers can inspect the
 /// operation's partial progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExperimentalRemoveReport {
-    /// Automatic destination kind that was processed.
-    kind: AutomaticDestinationsKind,
-    /// Current user's Windows Recent folder.
-    recent_folder: PathBuf,
-    /// `.automaticDestinations-ms` file that was deleted and then monitored.
-    dest_path: PathBuf,
-    /// Target paths requested by the caller.
-    requested_paths: Vec<String>,
-    /// DestList paths that matched before deletion started.
-    matching_paths_before: Vec<String>,
+pub(crate) struct ExperimentalRemoveReport {
     /// `.lnk` files deleted from the Recent folder.
     deleted_lnk_paths: Vec<PathBuf>,
     /// Requested target paths that had no matching `.lnk` file.
@@ -143,36 +122,6 @@ pub struct ExperimentalRemoveReport {
 }
 
 impl ExperimentalRemoveReport {
-    /// Automatic destination kind that was processed.
-    #[must_use]
-    pub fn kind(&self) -> AutomaticDestinationsKind {
-        self.kind
-    }
-
-    /// Current user's Windows Recent folder.
-    #[must_use]
-    pub fn recent_folder(&self) -> &Path {
-        &self.recent_folder
-    }
-
-    /// `.automaticDestinations-ms` file that was deleted and then monitored.
-    #[must_use]
-    pub fn dest_path(&self) -> &Path {
-        &self.dest_path
-    }
-
-    /// Target paths requested by the caller.
-    #[must_use]
-    pub fn requested_paths(&self) -> &[String] {
-        &self.requested_paths
-    }
-
-    /// DestList paths that matched before deletion started.
-    #[must_use]
-    pub fn matching_paths_before(&self) -> &[String] {
-        &self.matching_paths_before
-    }
-
     /// `.lnk` files deleted from the Recent folder.
     #[must_use]
     pub fn deleted_lnk_paths(&self) -> &[PathBuf] {
@@ -285,7 +234,7 @@ impl ExperimentalRemoveReport {
 /// Ok(())
 /// # }
 /// ```
-pub fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
+pub(crate) fn experimental_remove_entry_paths_by_rebuild<P: AsRef<Path>>(
     kind: AutomaticDestinationsKind,
     target_paths: &[P],
     options: ExperimentalRemoveOptions,
@@ -321,17 +270,14 @@ where
     let recent_folder = PathBuf::from(get_windows_recent_folder()?);
     let dest_path = dest_path_for_kind(kind)?;
 
-    let before = parse_file_with_retries(&dest_path, Duration::from_secs(2))?;
-    let matching_paths_before = matching_dest_paths(before.dest_list().entries(), &requested_paths);
+    parse_file_with_retries(&dest_path, Duration::from_secs(2))?;
 
     fs::remove_file(&dest_path).map_err(WincentError::Io)?;
 
     let base = ExperimentalRemoveBase {
-        kind,
         recent_folder,
         dest_path,
         requested_paths,
-        matching_paths_before,
     };
 
     Ok(complete_after_destination_deleted(
@@ -352,7 +298,7 @@ where
 /// # Errors
 ///
 /// Returns the same errors as [`experimental_remove_entry_paths_by_rebuild`].
-pub fn experimental_remove_entries_by_rebuild(
+pub(crate) fn experimental_remove_entries_by_rebuild(
     kind: AutomaticDestinationsKind,
     entries: &[DestListEntry],
     options: ExperimentalRemoveOptions,
@@ -366,11 +312,9 @@ pub fn experimental_remove_entries_by_rebuild(
 
 #[derive(Debug)]
 struct ExperimentalRemoveBase {
-    kind: AutomaticDestinationsKind,
     recent_folder: PathBuf,
     dest_path: PathBuf,
     requested_paths: Vec<String>,
-    matching_paths_before: Vec<String>,
 }
 
 impl ExperimentalRemoveBase {
@@ -389,11 +333,6 @@ impl ExperimentalRemoveBase {
             post_delete_error.is_none() && rebuilt && remaining_paths_after_rebuild.is_empty();
 
         ExperimentalRemoveReport {
-            kind: self.kind,
-            recent_folder: self.recent_folder,
-            dest_path: self.dest_path,
-            requested_paths: self.requested_paths,
-            matching_paths_before: self.matching_paths_before,
             deleted_lnk_paths,
             missing_lnk_target_paths,
             dest_deleted: true,
@@ -705,11 +644,9 @@ mod tests {
 
     fn report_base_for_tests(recent_folder: &Path) -> ExperimentalRemoveBase {
         ExperimentalRemoveBase {
-            kind: AutomaticDestinationsKind::RecentFiles,
             recent_folder: recent_folder.to_path_buf(),
             dest_path: recent_folder.join("automaticDestinations-ms"),
             requested_paths: vec!["C:\\Work\\Report.docx".to_string()],
-            matching_paths_before: vec!["C:\\Work\\Report.docx".to_string()],
         }
     }
 
@@ -738,6 +675,15 @@ mod tests {
         );
 
         assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn frequent_folders_kind_uses_frequent_dest_path() -> WincentResult<()> {
+        assert_eq!(
+            dest_path_for_kind(AutomaticDestinationsKind::FrequentFolders)?,
+            frequent_folders_dest_path()?
+        );
+        Ok(())
     }
 
     #[test]
