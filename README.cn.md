@@ -32,7 +32,7 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对
 
 ```toml
 [dependencies]
-wincent = "0.2.5"
+wincent = "0.2.6"
 ```
 
 ## 快速开始
