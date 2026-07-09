@@ -23,7 +23,7 @@ use crate::{
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
     script_executor::ScriptExecutor,
     script_strategy::PSScript,
-    utils::{is_windows_11_or_later, paths_equal, validate_path, PathType},
+    utils::{paths_equal, validate_path, PathType},
     QuickAccess, WincentResult,
 };
 use std::ffi::OsString;
@@ -183,8 +183,8 @@ where
     C: FnMut(&str) -> WincentResult<bool>,
     I: FnMut(&str, &str) -> WincentResult<()>,
 {
-    // On Windows 11 "pintohome" acts as a toggle. Check in the same STA flow
-    // as the verb invocation so an already-pinned folder is never toggled off.
+    // "pintohome" can act as a toggle. Check in the same STA flow as the verb
+    // invocation so an existing folder is never toggled off.
     if contains(path)? {
         return Err(WincentError::already_exists(
             path,
@@ -225,8 +225,8 @@ where
 /// - [`invoke_verb_on_self_current_sta()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     // Check and invoke in one STA worker to narrow the TOCTOU window.
-    // On Windows 11 "pintohome" acts as a toggle. The check prevents toggling an
-    // already-pinned folder off.
+    // "pintohome" can act as a toggle. The check prevents toggling an
+    // existing folder off.
     let path = path.to_owned();
     crate::com_thread::run_on_sta_thread(
         move || {
@@ -339,7 +339,7 @@ fn frequent_folder_pinned_status(path: &str) -> FrequentFolderPinStatus {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_unpin_frequent_folder_state_machine<C, N, S, W, Sleep>(
+fn run_unpin_frequent_folder_state_machine<C, N, S, Sleep>(
     path: &str,
     pinned_status: FrequentFolderPinStatus,
     verification_timeout: Duration,
@@ -347,14 +347,12 @@ fn run_unpin_frequent_folder_state_machine<C, N, S, W, Sleep>(
     mut contains: C,
     mut invoke_on_namespace: N,
     mut invoke_on_self: S,
-    mut is_win11_or_later: W,
     mut sleep: Sleep,
 ) -> WincentResult<()>
 where
     C: FnMut(&str) -> WincentResult<bool>,
     N: FnMut(&str, &str) -> WincentResult<bool>,
     S: FnMut(&str, &str) -> WincentResult<()>,
-    W: FnMut() -> WincentResult<bool>,
     Sleep: FnMut(Duration),
 {
     if !contains(path)? {
@@ -364,21 +362,19 @@ where
         ));
     }
 
-    let is_win11 = is_win11_or_later()?;
+    match pinned_status {
+        FrequentFolderPinStatus::Pinned => {
+            let _ = invoke_on_namespace(path, "unpinfromhome");
+            if wait_for_frequent_folder_removed(
+                path,
+                verification_timeout,
+                poll_interval,
+                &mut contains,
+                &mut sleep,
+            )? {
+                return Ok(());
+            }
 
-    if is_win11 {
-        invoke_on_self(path, "pintohome")?;
-        if wait_for_frequent_folder_removed(
-            path,
-            verification_timeout,
-            poll_interval,
-            &mut contains,
-            &mut sleep,
-        )? {
-            return Ok(());
-        }
-
-        if !matches!(pinned_status, FrequentFolderPinStatus::Pinned) {
             invoke_on_self(path, "pintohome")?;
             if wait_for_frequent_folder_removed(
                 path,
@@ -389,44 +385,7 @@ where
             )? {
                 return Ok(());
             }
-        }
-    } else if matches!(pinned_status, FrequentFolderPinStatus::Unpinned) {
-        invoke_on_self(path, "pintohome")?;
-        let _ = invoke_on_namespace(path, "unpinfromhome");
-        if wait_for_frequent_folder_removed(
-            path,
-            verification_timeout,
-            poll_interval,
-            &mut contains,
-            &mut sleep,
-        )? {
-            return Ok(());
-        }
 
-        let _ = invoke_on_namespace(path, "unpinfromhome");
-        if wait_for_frequent_folder_removed(
-            path,
-            verification_timeout,
-            poll_interval,
-            &mut contains,
-            &mut sleep,
-        )? {
-            return Ok(());
-        }
-    } else {
-        let _ = invoke_on_namespace(path, "unpinfromhome");
-        if wait_for_frequent_folder_removed(
-            path,
-            verification_timeout,
-            poll_interval,
-            &mut contains,
-            &mut sleep,
-        )? {
-            return Ok(());
-        }
-
-        if matches!(pinned_status, FrequentFolderPinStatus::NotFound) {
-            invoke_on_self(path, "pintohome")?;
             let _ = invoke_on_namespace(path, "unpinfromhome");
             if wait_for_frequent_folder_removed(
                 path,
@@ -438,16 +397,62 @@ where
                 return Ok(());
             }
         }
+        FrequentFolderPinStatus::Unpinned => {
+            invoke_on_self(path, "pintohome")?;
+            if wait_for_frequent_folder_removed(
+                path,
+                verification_timeout,
+                poll_interval,
+                &mut contains,
+                &mut sleep,
+            )? {
+                return Ok(());
+            }
 
-        let _ = invoke_on_namespace(path, "unpinfromhome");
-        if wait_for_frequent_folder_removed(
-            path,
-            verification_timeout,
-            poll_interval,
-            &mut contains,
-            &mut sleep,
-        )? {
-            return Ok(());
+            let _ = invoke_on_namespace(path, "unpinfromhome");
+            if wait_for_frequent_folder_removed(
+                path,
+                verification_timeout,
+                poll_interval,
+                &mut contains,
+                &mut sleep,
+            )? {
+                return Ok(());
+            }
+
+            invoke_on_self(path, "pintohome")?;
+            if wait_for_frequent_folder_removed(
+                path,
+                verification_timeout,
+                poll_interval,
+                &mut contains,
+                &mut sleep,
+            )? {
+                return Ok(());
+            }
+        }
+        FrequentFolderPinStatus::NotFound => {
+            let _ = invoke_on_namespace(path, "unpinfromhome");
+            if wait_for_frequent_folder_removed(
+                path,
+                verification_timeout,
+                poll_interval,
+                &mut contains,
+                &mut sleep,
+            )? {
+                return Ok(());
+            }
+
+            invoke_on_self(path, "pintohome")?;
+            if wait_for_frequent_folder_removed(
+                path,
+                verification_timeout,
+                poll_interval,
+                &mut contains,
+                &mut sleep,
+            )? {
+                return Ok(());
+            }
         }
     }
 
@@ -458,19 +463,18 @@ where
 }
 
 ///
-/// This function implements a **version-aware compatible strategy**:
+/// This function implements a **state-first compatible strategy**:
 ///
 /// 1. **Check if folder is present**
 ///    - Query the Frequent Folders namespace to verify the folder is visible
 ///    - If absent, return `NotInQuickAccess` error immediately
 ///
-/// 2. **Windows 10**
-///    - Uses `unpinfromhome` for removal
-///    - Uses `pintohome` only to pin an unpinned frequent entry before unpinning
+/// 2. **Pinned entries**
+///    - Prefer `unpinfromhome`, then verify removal
 ///
-/// 3. **Windows 11 and later**
-///    - Uses `pintohome` as a toggle for removal
-///    - Unpinned frequent entries are pinned first, then toggled off
+/// 3. **Unpinned or unknown entries**
+///    - Try `pintohome`/`unpinfromhome` as compatible Shell verbs
+///    - Verify after every verb because `pintohome` can add or remove state
 ///
 /// Every removal attempt is followed by a Frequent Folders query; the state
 /// machine does not trust `InvokeVerb` success alone.
@@ -493,11 +497,6 @@ where
 /// - `NotInQuickAccess`: The folder is not in Frequent Folders
 /// - `SystemError`: COM operation failed (e.g., permission denied, COM error)
 ///
-/// # Windows Version Compatibility
-///
-/// - **Windows 10**: Uses "unpinfromhome" verb (step 2 succeeds)
-/// - **Windows 11**: Uses "pintohome" toggle (step 2 fails, step 3 succeeds)
-///
 /// # See Also
 ///
 /// - [`unpin_frequent_folder()`] - Higher-level internal wrapper with PowerShell fallback
@@ -513,7 +512,6 @@ fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Win
                 contains_frequent_folder_current_sta,
                 try_invoke_verb_on_frequent_folder_current_sta,
                 invoke_verb_on_self_current_sta,
-                is_windows_11_or_later,
                 std::thread::sleep,
             )
         },
@@ -938,8 +936,8 @@ where
         Ok(()) => Ok(()),
         Err(e @ WincentError::AlreadyExists { .. }) => Err(e),
         // A timed-out STA worker keeps running and may still complete the
-        // `pintohome` call later. On Windows 11 that verb can behave like a
-        // toggle, so running the fallback could undo a successful late pin.
+        // `pintohome` call later. That verb can behave like a toggle, so
+        // running the fallback could undo a successful late pin.
         Err(e @ WincentError::Timeout(_)) => Err(e),
         Err(_) => powershell(),
     }
@@ -1084,8 +1082,8 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
 /// This is the internal implementation that uses a **two-tier fallback strategy**:
 ///
 /// 1. **Native COM API** (fast path, 10-50ms): Uses [`unpin_frequent_folder_native()`]
-///    - Windows 10: uses `unpinfromhome` to remove; `pintohome` only pins before unpinning
-///    - Windows 11: uses `pintohome` as a remove toggle
+///    - Uses Frequent Folder pin status to choose the first compatible verb
+///    - Verifies after every `unpinfromhome` or `pintohome` attempt
 ///    - Runs on dedicated STA thread to avoid Windows 11 deadlock
 ///
 /// 2. **PowerShell fallback** (slow path, 200-500ms): Uses [`unpin_frequent_folder_powershell()`]
@@ -1110,12 +1108,6 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
 /// it and then removes it using the version-appropriate verb. If the removal
 /// step fails, the folder may remain pinned. `InvalidPath` errors are returned
 /// directly without fallback, as the path is definitively wrong.
-///
-/// # Windows Version Compatibility
-///
-/// The native COM implementation automatically adapts to Windows version:
-/// - **Windows 10**: Uses `unpinfromhome` for removal
-/// - **Windows 11**: Uses `pintohome` as a removal toggle
 ///
 /// # Performance
 ///
@@ -1290,7 +1282,7 @@ mod tests {
     }
 
     // Legacy test helper for invoking an unpin verb directly on a FolderItem.
-    // Production frequent-folder removal uses the version-aware state machine above.
+    // Production frequent-folder removal uses the state-first machine above.
     fn unpin_folder_item(item: &FolderItem) -> WincentResult<()> {
         let verb_variant = VARIANT::from("unpinfromhome");
         // SAFETY: Test helper receives a live FolderItem from a COM STA worker;
@@ -1299,8 +1291,8 @@ mod tests {
             Ok(()) => Ok(()),
             Err(_) => {
                 let verb_variant = VARIANT::from("pintohome");
-                // SAFETY: Same live FolderItem as above, with the Windows 11
-                // fallback verb VARIANT alive until InvokeVerb returns.
+                // SAFETY: Same live FolderItem as above, with the fallback verb
+                // VARIANT alive until InvokeVerb returns.
                 unsafe {
                     item.InvokeVerb(&verb_variant).map_err(|e| {
                         WincentError::SystemError(format!("Failed to unpin folder item: {}", e))
@@ -1369,8 +1361,6 @@ mod tests {
     fn test_unpin_state_machine_rejects_initial_absence() {
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
         let action_log = std::rc::Rc::clone(&actions);
-        let version_checked = std::rc::Rc::new(std::cell::RefCell::new(false));
-        let version_checked_for_closure = std::rc::Rc::clone(&version_checked);
 
         let result = run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
@@ -1389,10 +1379,6 @@ mod tests {
                     Ok(())
                 }
             },
-            move || {
-                *version_checked_for_closure.borrow_mut() = true;
-                Ok(true)
-            },
             |_| {},
         );
 
@@ -1405,14 +1391,124 @@ mod tests {
             actions.borrow().is_empty(),
             "no verbs should be invoked when the folder is absent"
         );
-        assert!(
-            !*version_checked.borrow(),
-            "Windows version should not be read when the folder is absent"
-        );
     }
 
     #[test]
-    fn test_unpin_state_machine_win10_unpinned_pins_then_unpins() -> WincentResult<()> {
+    fn test_unpin_state_machine_pinned_uses_unpinfromhome_first() -> WincentResult<()> {
+        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+
+        run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            FrequentFolderPinStatus::Pinned,
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            {
+                let present = std::rc::Rc::clone(&present);
+                move |_| Ok(*present.borrow())
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                let present = std::rc::Rc::clone(&present);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    *present.borrow_mut() = false;
+                    Ok(true)
+                }
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    Ok(())
+                }
+            },
+            |_| {},
+        )?;
+
+        assert_eq!(actions.borrow().as_slice(), ["namespace:unpinfromhome"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_unpin_state_machine_pinned_falls_back_to_pintohome() -> WincentResult<()> {
+        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+
+        run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            FrequentFolderPinStatus::Pinned,
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            {
+                let present = std::rc::Rc::clone(&present);
+                move |_| Ok(*present.borrow())
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    Ok(true)
+                }
+            },
+            {
+                let present = std::rc::Rc::clone(&present);
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    *present.borrow_mut() = false;
+                    Ok(())
+                }
+            },
+            |_| {},
+        )?;
+
+        assert_eq!(
+            actions.borrow().as_slice(),
+            ["namespace:unpinfromhome", "self:pintohome"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unpin_state_machine_unpinned_uses_pintohome_first() -> WincentResult<()> {
+        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+
+        run_unpin_frequent_folder_state_machine(
+            "C:\\Folder",
+            FrequentFolderPinStatus::Unpinned,
+            Duration::from_nanos(1),
+            Duration::from_nanos(1),
+            {
+                let present = std::rc::Rc::clone(&present);
+                move |_| Ok(*present.borrow())
+            },
+            {
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("namespace:{verb}"));
+                    Ok(true)
+                }
+            },
+            {
+                let present = std::rc::Rc::clone(&present);
+                let actions = std::rc::Rc::clone(&actions);
+                move |_, verb| {
+                    actions.borrow_mut().push(format!("self:{verb}"));
+                    *present.borrow_mut() = false;
+                    Ok(())
+                }
+            },
+            |_| {},
+        )?;
+
+        assert_eq!(actions.borrow().as_slice(), ["self:pintohome"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_unpin_state_machine_unpinned_falls_back_to_unpinfromhome() -> WincentResult<()> {
         let present = std::rc::Rc::new(std::cell::RefCell::new(true));
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
 
@@ -1441,7 +1537,6 @@ mod tests {
                     Ok(())
                 }
             },
-            || Ok(false),
             |_| {},
         )?;
 
@@ -1453,7 +1548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unpin_state_machine_returns_unpinned_pin_error() {
+    fn test_unpin_state_machine_returns_pintohome_error() {
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
 
         let result = run_unpin_frequent_folder_state_machine(
@@ -1473,16 +1568,15 @@ mod tests {
                 let actions = std::rc::Rc::clone(&actions);
                 move |_, verb| {
                     actions.borrow_mut().push(format!("self:{verb}"));
-                    Err(WincentError::SystemError("pin failed".to_string()))
+                    Err(WincentError::SystemError("pintohome failed".to_string()))
                 }
             },
-            || Ok(true),
             |_| {},
         );
 
         assert!(
-            matches!(result, Err(WincentError::SystemError(ref message)) if message == "pin failed"),
-            "pin failure should be returned directly, got: {:?}",
+            matches!(result, Err(WincentError::SystemError(ref message)) if message == "pintohome failed"),
+            "pintohome failure should be returned directly, got: {:?}",
             result
         );
         assert_eq!(actions.borrow().as_slice(), ["self:pintohome"]);
@@ -1618,145 +1712,13 @@ mod tests {
     }
 
     #[test]
-    fn test_unpin_state_machine_win11_unknown_retries_pintohome() -> WincentResult<()> {
+    fn test_unpin_state_machine_unknown_uses_unpinfromhome_then_pintohome() -> WincentResult<()> {
         let present = std::rc::Rc::new(std::cell::RefCell::new(true));
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-        let self_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
 
         run_unpin_frequent_folder_state_machine(
             "C:\\Folder",
             FrequentFolderPinStatus::NotFound,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    Ok(true)
-                }
-            },
-            {
-                let present = std::rc::Rc::clone(&present);
-                let actions = std::rc::Rc::clone(&actions);
-                let self_calls = std::rc::Rc::clone(&self_calls);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    let mut calls = self_calls.borrow_mut();
-                    *calls += 1;
-                    if *calls == 2 {
-                        *present.borrow_mut() = false;
-                    }
-                    Ok(())
-                }
-            },
-            || Ok(true),
-            |_| {},
-        )?;
-
-        assert_eq!(
-            actions.borrow().as_slice(),
-            ["self:pintohome", "self:pintohome"]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_win10_pinned_uses_unpinfromhome() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Pinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                let present = std::rc::Rc::clone(&present);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    *present.borrow_mut() = false;
-                    Ok(true)
-                }
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    Ok(())
-                }
-            },
-            || Ok(false),
-            |_| {},
-        )?;
-
-        assert_eq!(actions.borrow().as_slice(), ["namespace:unpinfromhome"]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_win11_unpinned_pins_then_toggles() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-        let self_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Unpinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    Ok(true)
-                }
-            },
-            {
-                let present = std::rc::Rc::clone(&present);
-                let actions = std::rc::Rc::clone(&actions);
-                let self_calls = std::rc::Rc::clone(&self_calls);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    let mut calls = self_calls.borrow_mut();
-                    *calls += 1;
-                    if *calls == 2 {
-                        *present.borrow_mut() = false;
-                    }
-                    Ok(())
-                }
-            },
-            || Ok(true),
-            |_| {},
-        )?;
-
-        assert_eq!(
-            actions.borrow().as_slice(),
-            ["self:pintohome", "self:pintohome"]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_win11_pinned_uses_pintohome_toggle() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Pinned,
             Duration::from_nanos(1),
             Duration::from_nanos(1),
             {
@@ -1779,102 +1741,14 @@ mod tests {
                     Ok(())
                 }
             },
-            || Ok(true),
-            |_| {},
-        )?;
-
-        assert_eq!(actions.borrow().as_slice(), ["self:pintohome"]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_win10_unknown_pins_then_unpins() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-        let namespace_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::NotFound,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let present = std::rc::Rc::clone(&present);
-                let actions = std::rc::Rc::clone(&actions);
-                let namespace_calls = std::rc::Rc::clone(&namespace_calls);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    let mut calls = namespace_calls.borrow_mut();
-                    *calls += 1;
-                    if *calls == 2 {
-                        *present.borrow_mut() = false;
-                    }
-                    Ok(true)
-                }
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    Ok(())
-                }
-            },
-            || Ok(false),
             |_| {},
         )?;
 
         assert_eq!(
             actions.borrow().as_slice(),
-            [
-                "namespace:unpinfromhome",
-                "self:pintohome",
-                "namespace:unpinfromhome"
-            ]
+            ["namespace:unpinfromhome", "self:pintohome"]
         );
         Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_returns_version_error_before_verbs() {
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        let result = run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Pinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            |_| Ok(true),
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    Ok(true)
-                }
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    Ok(())
-                }
-            },
-            || Err(WincentError::SystemError("version failed".to_string())),
-            |_| {},
-        );
-
-        assert!(
-            matches!(result, Err(WincentError::SystemError(ref message)) if message == "version failed"),
-            "version failure should be returned directly, got: {:?}",
-            result
-        );
-        assert!(
-            actions.borrow().is_empty(),
-            "no verbs should be invoked when version detection fails"
-        );
     }
 
     #[test]
@@ -1887,7 +1761,6 @@ mod tests {
             |_| Ok(true),
             |_, _| Ok(true),
             |_, _| Ok(()),
-            || Ok(true),
             |_| {},
         );
 
@@ -2462,7 +2335,7 @@ mod tests {
     fn test_unpin_folder_item_compatibility() -> WincentResult<()> {
         // Tests the legacy direct FolderItem helper used by this integration test.
         // Implementation: src/handle.rs:258-272
-        // Production removal uses the version-aware state machine above.
+        // Production removal uses the state-first machine above.
         //
         // This test directly verifies the fallback mechanism by:
         // 1. Pinning a folder to get a real FolderItem

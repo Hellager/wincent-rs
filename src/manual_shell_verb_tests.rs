@@ -21,11 +21,11 @@ const WAIT_INTERVAL: Duration = Duration::from_millis(500);
 static QUICK_ACCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn given_pinned_folder() -> &'static str {
-    r"D:\Project\Github\wincent-rs\temp"
+    r"G:\Github\wincent-rs\temp"
 }
 
 fn given_unpinned_folder() -> &'static str {
-    r"D:\Temp\packing"
+    r"G:\Github\scourgify\src-tauri\icons\dark"
 }
 
 fn lock_quick_access_tests() -> MutexGuard<'static, ()> {
@@ -363,3 +363,22 @@ fn win11_pintohome_is_frequent_folder_toggle() -> WincentResult<()> {
 // - Do not trust InvokeVerb success alone. Explorer updates this state
 //   asynchronously, so tests and production code should poll the namespace or
 //   DestList-backed status after mutations.
+//
+// Observed Win10 Frequent Folders results:
+// - win10_unpinfromhome_removes_pinned_frequent_folder:
+//   `unpinfromhome` invoked on the matching pinned item in the Frequent Folders
+//   namespace successfully removed `given_pinned_folder()`.
+// - win10_remove_removes_unpinned_frequent_folder:
+//   QuickAccessManager::remove_item(..., QuickAccess::FrequentFolders)
+//   successfully removed an unpinned frequent entry.
+// - win10_pintohome_is_not_frequent_folder_toggle:
+//   the second `pintohome` removed the unpinned frequent entry, so this host's
+//   Win10 shell also behaved as a Frequent Folders toggle in that scenario.
+//
+// Practical guidance for Win10:
+// - `unpinfromhome` is valid for removing a pinned Frequent Folders item when
+//   the target item is found through the Frequent Folders namespace.
+// - The public remove path successfully handles unpinned frequent entries on
+//   the tested Win10 host.
+// - `pintohome` behavior is not safe to model as add-only on all Win10 hosts;
+//   keep the production path version-aware but verification-driven.

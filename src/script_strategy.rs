@@ -289,52 +289,33 @@ impl ScriptStrategy for UnpinFromFrequentFolderStrategy {
         $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')
     }}
 
-    $isWin11 = (Get-CimInstance -Class Win32_OperatingSystem).Caption -Match "Windows 11"
     $target = Find-WincentFrequentFolder;
     if ($null -eq $target) {{
         Write-Output 'WINCENT_NOT_IN_QUICK_ACCESS';
         exit 1;
     }}
 
-    if ($isWin11)
-    {{
-        Invoke-WincentPinToHomeToggle;
-        if (Wait-WincentFrequentFolderPresence $false) {{
-            return
-        }}
+    Invoke-WincentUnpinFromHome $target;
+    if (Wait-WincentFrequentFolderPresence $false) {{
+        return
+    }}
 
-        Invoke-WincentPinToHomeToggle;
+    Invoke-WincentPinToHomeToggle;
+    if (Wait-WincentFrequentFolderPresence $false) {{
+        return
+    }}
+
+    $target = Find-WincentFrequentFolder;
+    if ($null -ne $target) {{
+        Invoke-WincentUnpinFromHome $target;
         if (Wait-WincentFrequentFolderPresence $false) {{
             return
         }}
     }}
-    else
-    {{
-        Invoke-WincentUnpinFromHome $target;
-        if (Wait-WincentFrequentFolderPresence $false) {{
-            return
-        }}
 
-        Invoke-WincentPinToHomeToggle;
-        $target = Find-WincentFrequentFolder;
-        if ($null -eq $target) {{
-            return
-        }}
-
-        Invoke-WincentUnpinFromHome $target;
-        if (Wait-WincentFrequentFolderPresence $false) {{
-            return
-        }}
-
-        $target = Find-WincentFrequentFolder;
-        if ($null -eq $target) {{
-            return
-        }}
-
-        Invoke-WincentUnpinFromHome $target;
-        if (Wait-WincentFrequentFolderPresence $false) {{
-            return
-        }}
+    Invoke-WincentPinToHomeToggle;
+    if (Wait-WincentFrequentFolderPresence $false) {{
+        return
     }}
 
     throw "Failed to remove frequent folder: $requestedPath"
@@ -510,7 +491,6 @@ mod tests {
             ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
                 .unwrap();
         assert!(script.contains("unpinfromhome"));
-        // Win11 branch must also be present
         assert!(script.contains("pintohome"));
         assert!(script.contains(ShellNamespaces::FREQUENT_FOLDERS));
         assert!(script.contains("Find-WincentFrequentFolder"));
@@ -528,30 +508,31 @@ mod tests {
             script
                 .matches("Invoke-WincentUnpinFromHome $target")
                 .count(),
-            3
+            2
         );
         assert!(script.matches("Invoke-WincentPinToHomeToggle").count() >= 3);
-        assert!(
-            script.contains("if ($isWin11)\r\n    {\r\n        Invoke-WincentPinToHomeToggle;")
-                || script.contains("if ($isWin11)\n    {\n        Invoke-WincentPinToHomeToggle;")
-        );
-        assert!(script.contains(
-            "Invoke-WincentUnpinFromHome $target;\r\n        if (Wait-WincentFrequentFolderPresence $false"
-        ) || script.contains(
-            "Invoke-WincentUnpinFromHome $target;\n        if (Wait-WincentFrequentFolderPresence $false"
-        ));
+        assert!(!script.contains("$isWin11"));
+        assert!(!script.contains("Windows 11"));
+        assert!(!script.contains("Get-CimInstance"));
         assert!(
             script.contains(
-                "Invoke-WincentPinToHomeToggle;\r\n        $target = Find-WincentFrequentFolder;"
+                "Invoke-WincentUnpinFromHome $target;\r\n    if (Wait-WincentFrequentFolderPresence $false"
             ) || script.contains(
-                "Invoke-WincentPinToHomeToggle;\n        $target = Find-WincentFrequentFolder;"
+                "Invoke-WincentUnpinFromHome $target;\n    if (Wait-WincentFrequentFolderPresence $false"
+            )
+        );
+        assert!(
+            script.contains(
+                "Invoke-WincentPinToHomeToggle;\r\n    if (Wait-WincentFrequentFolderPresence $false"
+            ) || script.contains(
+                "Invoke-WincentPinToHomeToggle;\n    if (Wait-WincentFrequentFolderPresence $false"
             )
         );
         assert!(!script.contains("try {\n        Invoke-WincentPinToHomeToggle"));
         assert!(!script.contains("try {\r\n        Invoke-WincentPinToHomeToggle"));
         assert!(
             !script.contains("{path}"),
-            "Win11 unpin branch must not contain an unsubstituted path placeholder"
+            "UnpinFromFrequentFolder must not contain an unsubstituted path placeholder"
         );
     }
 
@@ -756,20 +737,19 @@ mod tests {
             );
         }
 
-        // UnpinFromFrequentFolder also contains a Win11 branch that calls pintohome with
-        // the escaped path. Verify that branch is correctly escaped too.
         let unpin_script =
             ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
                 .expect("UnpinFromFrequentFolder generation failed");
-        let win11_fragment = "$shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')";
+        let pintohome_fragment = "$shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')";
         assert!(
-            unpin_script.contains(win11_fragment),
-            "UnpinFromFrequentFolder Win11 branch: expected fragment not found.\nExpected: {}\nScript: {}",
-            win11_fragment, unpin_script
+            unpin_script.contains(pintohome_fragment),
+            "UnpinFromFrequentFolder: expected fragment not found.\nExpected: {}\nScript: {}",
+            pintohome_fragment,
+            unpin_script
         );
         assert!(
             !unpin_script.contains("{path}"),
-            "UnpinFromFrequentFolder Win11 branch must not leave a literal {{path}} placeholder"
+            "UnpinFromFrequentFolder must not leave a literal {{path}} placeholder"
         );
     }
 }

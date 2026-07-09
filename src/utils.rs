@@ -6,6 +6,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::time::Duration;
+#[cfg(test)]
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 
 /// Lightweight path normalization without I/O operations.
@@ -55,11 +56,13 @@ pub(crate) fn paths_equal(path1: &str, path2: &str) -> bool {
     normalize_path_for_comparison(path1) == normalize_path_for_comparison(path2)
 }
 
+#[cfg(test)]
 #[link(name = "ntdll")]
 extern "system" {
     fn RtlGetVersion(lpversioninformation: *mut OSVERSIONINFOW) -> i32;
 }
 
+#[cfg(test)]
 pub(crate) fn current_windows_build_number() -> WincentResult<u32> {
     let mut version_info = OSVERSIONINFOW {
         dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
@@ -79,10 +82,12 @@ pub(crate) fn current_windows_build_number() -> WincentResult<u32> {
     Ok(version_info.dwBuildNumber)
 }
 
+#[cfg(test)]
 pub(crate) fn is_windows_11_build_number(build: u32) -> bool {
     build >= 22_000
 }
 
+#[cfg(test)]
 pub(crate) fn is_windows_11_or_later() -> WincentResult<bool> {
     Ok(is_windows_11_build_number(current_windows_build_number()?))
 }
