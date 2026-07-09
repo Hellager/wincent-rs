@@ -87,9 +87,6 @@ mod script_strategy;
 mod test_utils;
 mod utils;
 
-#[cfg(all(test, windows))]
-mod manual_shell_verb_tests;
-
 pub mod visible;
 
 pub mod destlist;

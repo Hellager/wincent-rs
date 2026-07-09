@@ -479,6 +479,21 @@ where
 /// Every removal attempt is followed by a Frequent Folders query; the state
 /// machine does not trust `InvokeVerb` success alone.
 ///
+/// # Observed Shell Verb Behavior
+///
+/// Manual diagnostics on Windows 10 `10.0.19041.6456` and Windows 11
+/// `10.0.26200.8655` both showed:
+///
+/// - `unpinfromhome` can remove a pinned Frequent Folders item when invoked on
+///   the matching item from the Frequent Folders namespace.
+/// - [`crate::manager::QuickAccessManager::remove_item`] can remove an
+///   unpinned frequent entry.
+/// - `pintohome` can add a folder, but can also toggle-remove existing
+///   Frequent Folders state.
+///
+/// Shell verb behavior should not be modeled by Windows version alone; keep
+/// this path state-first and verification-driven.
+///
 /// # Threading Model
 ///
 /// Runs the full check, mutation, verification, and fallback sequence inside a
