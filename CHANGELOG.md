@@ -1,3 +1,28 @@
+## [0.2.6] - 2026-07-09
+
+### Added
+- `QuickAccessManager::frequent_folder_pin_status()` for reading Frequent Folders pinned, unpinned, or absent state from DestList metadata
+- `QuickAccessManager::find_items_containing()` for returning fuzzy Quick Access matches instead of only a boolean
+- `QuickAccessManager::watch_quick_access()` with `QuickAccessMonitorOptions`, `QuickAccessMonitor`, and `QuickAccessChangeEvent`
+- `QuickAccessChangeEvent::is_reorder()` for detecting order-only monitor events
+- Example CLI commands for Frequent Folders pin status, fuzzy finding, and watching Quick Access changes
+
+### Changed
+- Frequent Folders removal is now state-first and verification-driven, so pinned and unpinned frequent entries are handled without relying on Windows version alone
+- Fuzzy matching through `contains_item()` and `find_items_containing()` is now case-insensitive
+- Quick Access monitor poll interval configuration now uses `try_poll_interval()` to return `InvalidArgument` for zero intervals instead of exposing a panic setter
+- README and rustdoc now describe current monitor, fuzzy search, DestList, visibility, and Frequent Folders removal behavior more accurately
+
+### Fixed
+- Removed unpinned Frequent Folders entries through Shell verbs instead of requiring destructive DestList removal
+- Preserved Frequent Folders remove correctness when `pintohome` behaves as a toggle on both Windows 10 and Windows 11
+- Made reorder-only monitor events visible to callers instead of requiring them to infer from empty added/removed lists
+- Avoided case-sensitive misses in fuzzy Quick Access matching
+
+### Removed
+- Removed public and example CLI access to destructive experimental DestList removal helpers; the rebuild-based helpers are now test-only internals
+- Removed temporary manual Shell verb diagnostics and kept their Win10/Win11 observations in implementation rustdoc
+
 ## [0.2.5] - 2026-06-22
 
 ### Added
