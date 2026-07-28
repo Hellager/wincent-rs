@@ -29,6 +29,8 @@ features = [
     "Win32_System_Variant",
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
     "Win32_Security",
 ]

@@ -1,7 +1,7 @@
 //! Helpers for cleaning Windows Recent folder shortcuts.
 
 use crate::error::WincentError;
-use crate::utils::{get_windows_recent_folder, paths_equal};
+use crate::utils::{get_windows_recent_folder, normalize_path_lightweight, paths_equal};
 use crate::WincentResult;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,6 +64,29 @@ pub(crate) fn delete_recent_links_for_target(
     delete_recent_links_for_target_in(&recent_folder, target, timeout, resolve_lnk_target)
 }
 
+/// Finds shortcuts in the Windows Recent folder whose resolved target equals `target`.
+///
+/// The comparison uses Windows path semantics: it is case-insensitive and treats forward
+/// slashes and backslashes as equivalent. Broken or unresolvable shortcuts are ignored.
+/// Shortcut targets are not accessed, so offline drives and network paths cannot block lookup.
+pub fn find_windows_recent_links_for_target(target: &str) -> WincentResult<Vec<PathBuf>> {
+    let recent_folder = PathBuf::from(get_windows_recent_folder()?);
+    let normalized_target = normalize_path_lightweight(target);
+    let mut matches = Vec::new();
+
+    for lnk_path in recent_lnk_paths(&recent_folder)? {
+        let Some(resolved_target) = resolve_lnk_target(&lnk_path, Duration::ZERO)? else {
+            continue;
+        };
+
+        if normalize_path_lightweight(&resolved_target) == normalized_target {
+            matches.push(lnk_path);
+        }
+    }
+
+    Ok(matches)
+}
+
 fn delete_recent_links_for_target_in<F>(
     recent_folder: &Path,
     target: &str,
@@ -114,21 +137,20 @@ pub(crate) fn recent_lnk_paths(recent_folder: &Path) -> WincentResult<Vec<PathBu
 
 pub(crate) fn resolve_lnk_target(
     lnk_path: &Path,
-    timeout: Duration,
+    _timeout: Duration,
 ) -> WincentResult<Option<String>> {
-    Ok(resolve_lnk_with_type(lnk_path, timeout)?.map(|resolution| resolution.path))
+    let Some(summary) = read_shell_link_summary(lnk_path)? else {
+        return Ok(None);
+    };
+
+    Ok(summary.target_path.or(summary.relative_path))
 }
 
 pub(crate) fn resolve_lnk_with_type(
     lnk_path: &Path,
     timeout: Duration,
 ) -> WincentResult<Option<LnkResolution>> {
-    let data = match fs::read(lnk_path) {
-        Ok(data) => data,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(WincentError::Io(error)),
-    };
-    let Some(summary) = parse_shell_link_summary(&data) else {
+    let Some(summary) = read_shell_link_summary(lnk_path)? else {
         return Ok(None);
     };
     let Some(path) = summary.target_path.or(summary.relative_path) else {
@@ -142,6 +164,16 @@ pub(crate) fn resolve_lnk_with_type(
     );
 
     Ok(Some(LnkResolution { path, is_dir }))
+}
+
+fn read_shell_link_summary(lnk_path: &Path) -> WincentResult<Option<ShellLinkSummary>> {
+    let data = match fs::read(lnk_path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(WincentError::Io(error)),
+    };
+
+    Ok(parse_shell_link_summary(&data))
 }
 
 fn lnk_target_is_dir(

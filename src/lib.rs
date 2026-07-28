@@ -85,7 +85,7 @@ mod script_executor;
 mod script_storage;
 mod script_strategy;
 mod test_utils;
-mod utils;
+pub mod utils;
 
 pub mod visible;
 
@@ -146,6 +146,7 @@ pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
     QuickAccessUnlockReport,
 };
+pub use crate::recent_links::find_windows_recent_links_for_target;
 pub use crate::restore::{
     FrequentRawPathRemoveReport, FrequentRestoreReport, RecentRestoreReport,
     RestoreDefaultsOptions, RestoreDefaultsReport,

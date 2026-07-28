@@ -356,11 +356,11 @@ fn refresh_shell_view(dispatch: &IDispatch) -> WincentResult<()> {
 }
 
 fn is_recent_access_location(location: &ExplorerLocation) -> bool {
-    // Match only stable shell namespace URLs/GUIDs. Explorer display names are
-    // localized and may be empty, so name-based matching is intentionally not
-    // used; callers fall back to broader Explorer refresh when URL matching is
-    // unavailable.
+    // Home/Quick Access display names are localized. On some Windows builds,
+    // ShellWindows also reports their LocationURL as empty, so a non-empty
+    // display name with no URL is the language-neutral fallback.
     is_home_or_recent_url(&location.location_url)
+        || location.location_url.is_empty() && !location.location_name.is_empty()
 }
 
 fn is_probable_explorer_location(location: &ExplorerLocation) -> bool {
@@ -429,12 +429,16 @@ mod tests {
             location_name: String::new(),
             location_url: "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}".to_string(),
         }));
-        assert!(!is_recent_access_location(&ExplorerLocation {
+        assert!(is_recent_access_location(&ExplorerLocation {
             location_name: "Quick Access".to_string(),
             location_url: String::new(),
         }));
-        assert!(!is_recent_access_location(&ExplorerLocation {
+        assert!(is_recent_access_location(&ExplorerLocation {
             location_name: "\u{5feb}\u{901f}\u{8bbf}\u{95ee}".to_string(),
+            location_url: String::new(),
+        }));
+        assert!(!is_recent_access_location(&ExplorerLocation {
+            location_name: String::new(),
             location_url: String::new(),
         }));
         assert!(!is_recent_access_location(&ExplorerLocation {
