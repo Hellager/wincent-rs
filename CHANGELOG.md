@@ -1,3 +1,8 @@
+## Unreleased
+
+### Changed
+- `QuickAccessLock` can now be moved to another thread for unlocking or dropping
+
 ## [0.2.6] - 2026-07-09
 
 ### Added

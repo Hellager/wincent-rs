@@ -152,6 +152,16 @@ impl QuickAccessUnlockReport {
 /// destination files. Add or remove operations for the locked target are
 /// expected to fail or be ignored by Explorer until the guard is dropped or
 /// [`QuickAccessLock::unlock`] is called.
+///
+/// This guard owns process-wide Windows file handles and may be moved to another
+/// thread. It does not provide shared concurrent access; transfer ownership when
+/// another thread is responsible for unlocking or dropping it.
+///
+/// Dropping the guard releases the backing-file locks without producing an
+/// unlock cleanup report. [`QuickAccessLock::unlock`] consumes the guard and may
+/// return an error, but its backing-file handles are still released during
+/// destruction. Cleanup of newly-created Recent shortcuts is best-effort and is
+/// separate from releasing the backing-file locks.
 pub struct QuickAccessLock {
     target: QuickAccessLockTarget,
     recent_folder: PathBuf,
@@ -226,6 +236,8 @@ impl QuickAccessLock {
     ///
     /// When cleanup is enabled, deletion is best-effort: failures do not abort
     /// the unlock and are returned in [`QuickAccessUnlockReport::failed_lnk_deletions`].
+    /// The guard is consumed even when snapshot enumeration returns an error, and
+    /// its backing-file handles are released during destruction in all cases.
     pub fn unlock(
         self,
         options: QuickAccessUnlockOptions,
@@ -263,6 +275,12 @@ impl QuickAccessLock {
 struct LockedFile {
     handle: HANDLE,
 }
+
+// SAFETY: The handle is an owned process-wide file handle returned by CreateFileW.
+// LockedFile has exclusive ownership of the handle, exposes no borrowed or
+// thread-affine state, and closes the handle exactly once in Drop. Windows file
+// handles may be closed from a thread other than the one that opened them.
+unsafe impl Send for LockedFile {}
 
 impl LockedFile {
     fn open(path: &Path) -> WincentResult<Self> {
@@ -317,6 +335,153 @@ fn paths_equal_path(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_NONE;
+
+    fn create_recent_fixture() -> WincentResult<(tempfile::TempDir, PathBuf, PathBuf, PathBuf)> {
+        let temp_dir = tempfile::tempdir().map_err(WincentError::Io)?;
+        let recent_folder = temp_dir.path().to_path_buf();
+        let automatic_destinations = recent_folder.join("AutomaticDestinations");
+        fs::create_dir(&automatic_destinations).map_err(WincentError::Io)?;
+
+        let recent_file = automatic_destinations.join(RECENT_FILES_AUTOMATIC_DESTINATION);
+        let frequent_file = automatic_destinations.join(FREQUENT_FOLDERS_AUTOMATIC_DESTINATION);
+        fs::write(&recent_file, b"recent").map_err(WincentError::Io)?;
+        fs::write(&frequent_file, b"frequent").map_err(WincentError::Io)?;
+
+        Ok((temp_dir, recent_folder, recent_file, frequent_file))
+    }
+
+    fn can_open_exclusively(path: &Path) -> bool {
+        let mut wide_path = os_str_to_wide_null(path.as_os_str());
+        // SAFETY: wide_path is null-terminated and remains alive for the call.
+        // A successful handle is owned locally and closed exactly once below.
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR::from_raw(wide_path.as_mut_ptr()),
+                GENERIC_READ.0,
+                FILE_SHARE_NONE,
+                None,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            )
+        };
+
+        match handle {
+            Ok(handle) => {
+                // SAFETY: handle was returned successfully by CreateFileW and
+                // has not been closed or transferred.
+                unsafe {
+                    let _ = CloseHandle(handle);
+                }
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    #[test]
+    fn quick_access_lock_is_send_but_not_sync() {
+        fn assert_send<T: Send>() {}
+        trait AmbiguousIfSync<Marker> {}
+        impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+        struct SyncMarker;
+        impl<T: ?Sized + Sync> AmbiguousIfSync<SyncMarker> for T {}
+        fn assert_not_sync<T, Marker>()
+        where
+            T: ?Sized + AmbiguousIfSync<Marker>,
+        {
+        }
+
+        assert_send::<QuickAccessLock>();
+        // Marker inference becomes ambiguous if QuickAccessLock implements Sync.
+        assert_not_sync::<QuickAccessLock, _>();
+    }
+
+    #[test]
+    fn lock_can_be_unlocked_on_another_thread() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder,
+        )?;
+        assert!(!can_open_exclusively(&recent_file));
+
+        std::thread::spawn(move || lock.unlock(QuickAccessUnlockOptions::new()))
+            .join()
+            .expect("unlock worker panicked")?;
+
+        assert!(can_open_exclusively(&recent_file));
+        Ok(())
+    }
+
+    #[test]
+    fn lock_can_be_dropped_on_another_thread() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder,
+        )?;
+        assert!(!can_open_exclusively(&recent_file));
+
+        std::thread::spawn(move || drop(lock))
+            .join()
+            .expect("drop worker panicked");
+
+        assert!(can_open_exclusively(&recent_file));
+        Ok(())
+    }
+
+    #[test]
+    fn partial_lock_failure_releases_opened_handles() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, recent_file, frequent_file) = create_recent_fixture()?;
+        fs::remove_file(frequent_file).map_err(WincentError::Io)?;
+
+        assert!(QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::All,
+            recent_folder,
+        )
+        .is_err());
+        assert!(can_open_exclusively(&recent_file));
+        Ok(())
+    }
+
+    #[test]
+    fn unlock_snapshot_failure_releases_opened_handles() -> WincentResult<()> {
+        let (_temp_dir, _recent_folder, recent_file, _) = create_recent_fixture()?;
+        let lock = QuickAccessLock {
+            target: QuickAccessLockTarget::RecentFiles,
+            recent_folder: recent_file.join("not-a-directory"),
+            initial_lnk_paths: Vec::new(),
+            locks: vec![LockedFile::open(&recent_file)?],
+        };
+        assert!(!can_open_exclusively(&recent_file));
+
+        assert!(lock.unlock(QuickAccessUnlockOptions::new()).is_err());
+
+        assert!(can_open_exclusively(&recent_file));
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_failure_is_reported_and_releases_backing_handle() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )?;
+        let new_link = recent_folder.join("new.lnk");
+        fs::write(&new_link, b"new").map_err(WincentError::Io)?;
+        let deletion_blocker = LockedFile::open(&new_link)?;
+
+        let report = lock.unlock(QuickAccessUnlockOptions::new().cleanup_new_recent_links())?;
+
+        assert_eq!(report.failed_lnk_deletions().len(), 1);
+        assert_eq!(report.failed_lnk_deletions()[0].path(), new_link);
+        assert!(can_open_exclusively(&recent_file));
+        drop(deletion_blocker);
+        Ok(())
+    }
 
     #[test]
     fn lock_target_variants_are_distinct() {

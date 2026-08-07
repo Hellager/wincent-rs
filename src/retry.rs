@@ -165,7 +165,7 @@ impl RetryPolicy {
     ///
     /// Custom policies should be validated before direct use with
     /// [`RetryPolicy::calculate_delay`]. Policies passed through
-    /// [`crate::QuickAccessManagerBuilder`] are validated when the manager is
+    /// [`crate::prelude::QuickAccessManagerBuilder`] are validated when the manager is
     /// built.
     ///
     /// # Errors
@@ -305,7 +305,7 @@ impl RetryPolicy {
     /// If jitter is enabled, adds ±25% random variation.
     ///
     /// This method assumes the policy is valid. Use one of the predefined
-    /// policies, pass the policy through [`crate::QuickAccessManagerBuilder`],
+    /// policies, pass the policy through [`crate::prelude::QuickAccessManagerBuilder`],
     /// or call [`RetryPolicy::validate`] / [`RetryPolicy::validated`] before
     /// directly calculating delays for a custom policy.
     ///
