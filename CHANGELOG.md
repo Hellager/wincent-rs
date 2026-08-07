@@ -2,6 +2,8 @@
 
 ### Changed
 - `QuickAccessLock` can now be moved to another thread for unlocking or dropping
+- Visibility refresh failures now report that the registry mutation completed; callers
+  should not retry the registry write for `VisibilityPostMutationFailure`
 
 ## [0.2.6] - 2026-07-09
 

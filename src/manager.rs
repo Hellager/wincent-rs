@@ -1113,8 +1113,10 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when the current user's Explorer settings
-    /// cannot be created or updated. If `options` requests Explorer refresh,
-    /// refresh errors are also returned after the registry write.
+    /// cannot be created or updated.
+    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
+    /// completed but the requested Explorer refresh failed; do not blindly
+    /// retry the visibility mutation.
     pub fn set_visible_with_options(
         &self,
         qa_type: QuickAccess,
@@ -1129,8 +1131,8 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. If `options` requests Explorer refresh, refresh errors are also
-    /// returned after the registry write.
+    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
+    /// registry write completed but the requested Explorer refresh failed.
     pub fn show_section_with_options(
         &self,
         qa_type: QuickAccess,
@@ -1148,8 +1150,8 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. If `options` requests Explorer refresh, refresh errors are also
-    /// returned after the registry write.
+    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
+    /// registry write completed but the requested Explorer refresh failed.
     pub fn hide_section_with_options(
         &self,
         qa_type: QuickAccess,
@@ -1163,8 +1165,8 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. If `options` requests Explorer refresh, refresh errors are also
-    /// returned after the registry write.
+    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
+    /// registry write completed but the requested Explorer refresh failed.
     pub fn set_recent_files_visible_with_options(
         &self,
         visible: bool,
@@ -1181,8 +1183,8 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. If `options` requests Explorer refresh, refresh errors are also
-    /// returned after the registry write.
+    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
+    /// registry write completed but the requested Explorer refresh failed.
     pub fn set_frequent_folders_visible_with_options(
         &self,
         visible: bool,
@@ -1257,8 +1259,10 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated. If `options` requests Explorer refresh,
-    /// refresh errors are also returned after the registry write.
+    /// cannot be created or updated.
+    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
+    /// completed but the requested Explorer refresh failed; do not blindly
+    /// retry the visibility mutation.
     pub fn set_start_recommended_section_visible_with_options(
         &self,
         visible: bool,
@@ -1273,8 +1277,9 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated. If `options` requests Explorer refresh,
-    /// refresh errors are also returned after the registry write.
+    /// cannot be created or updated.
+    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
+    /// completed but the requested Explorer refresh failed.
     pub fn show_start_recommended_section_with_options(
         &self,
         options: visible::VisibilityOptions,
@@ -1288,8 +1293,9 @@ impl QuickAccessManager {
     /// # Errors
     ///
     /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated. If `options` requests Explorer refresh,
-    /// refresh errors are also returned after the registry write.
+    /// cannot be created or updated.
+    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
+    /// completed but the requested Explorer refresh failed.
     pub fn hide_start_recommended_section_with_options(
         &self,
         options: visible::VisibilityOptions,

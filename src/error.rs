@@ -1038,6 +1038,27 @@ pub enum WincentError {
         source: Box<WincentError>,
     },
 
+    /// A visibility mutation completed, but a follow-up display update failed.
+    ///
+    /// The requested registry value was written before the follow-up step failed.
+    /// Callers should treat the visibility mutation as completed, surface the
+    /// follow-up failure as a warning, and avoid blindly retrying the registry write.
+    #[error(
+        "Quick Access visibility post-mutation step {step:?} failed for {qa_type:?}: {source}"
+    )]
+    #[non_exhaustive]
+    VisibilityPostMutationFailure {
+        /// Visibility setting that was written.
+        qa_type: QuickAccess,
+        /// Value written to the registry.
+        visible: bool,
+        /// Follow-up step that failed.
+        step: QuickAccessPostMutationStep,
+        /// Underlying error from the failed follow-up step.
+        #[source]
+        source: Box<WincentError>,
+    },
+
     /// The item is already present in the requested Quick Access category.
     #[error("Item already exists in {qa_type:?}: {path}")]
     #[non_exhaustive]
@@ -1109,6 +1130,20 @@ impl WincentError {
         Self::PostMutationFailure {
             path: path.into(),
             qa_type,
+            step,
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn visibility_post_mutation_failure(
+        qa_type: QuickAccess,
+        visible: bool,
+        step: QuickAccessPostMutationStep,
+        source: WincentError,
+    ) -> Self {
+        Self::VisibilityPostMutationFailure {
+            qa_type,
+            visible,
             step,
             source: Box::new(source),
         }

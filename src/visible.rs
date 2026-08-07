@@ -32,6 +32,7 @@
 //! again; restore Start Recommended first, then use `ShowRecent` for Recent
 //! Files visibility.
 
+use crate::error::{QuickAccessPostMutationStep, WincentError};
 use crate::{QuickAccess, WincentResult};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
@@ -338,7 +339,16 @@ impl VisibilityOptions {
 /// same Frequent Folders behavior.
 ///
 /// If `options.refresh_explorer_enabled()` is true, calls `refresh_explorer_window()`
-/// after the registry write. Registry write is NOT rolled back if refresh fails.
+/// after writing the registry value. The write is not rolled back if refresh fails.
+///
+/// # Errors
+///
+/// Returns the registry writer error when the requested value could not be written.
+/// Returns [`WincentError::VisibilityPostMutationFailure`] when the write completed
+/// but the optional Explorer refresh failed. That error guarantees the visibility
+/// mutation completed, so callers should not blindly retry it. Callers may use
+/// [`is_visible`] to confirm the current value, but a failed read does not change
+/// the side-effect guarantee represented by the post-mutation error.
 pub fn set_visible_with_options(
     qa_type: QuickAccess,
     visible: bool,
@@ -362,7 +372,14 @@ fn set_visible_with_options_inner(
 ) -> WincentResult<()> {
     write(qa_type, visible)?;
     if options.refresh_explorer_enabled() {
-        refresh()?;
+        refresh().map_err(|error| {
+            WincentError::visibility_post_mutation_failure(
+                qa_type,
+                visible,
+                QuickAccessPostMutationStep::RefreshExplorer,
+                error,
+            )
+        })?;
     }
     Ok(())
 }
@@ -394,8 +411,17 @@ pub fn set_frequent_folders_visible_with_options(
 /// before relying on `ShowRecent` to control Recent Files visibility.
 ///
 /// If `options.refresh_explorer_enabled()` is true, calls
-/// `refresh_explorer_window()` after the registry write. Registry write is NOT
-/// rolled back if refresh fails.
+/// `refresh_explorer_window()` after writing the registry value. The write is
+/// not rolled back if refresh fails.
+///
+/// # Errors
+///
+/// Returns the registry writer error when the requested value could not be written.
+/// Returns [`WincentError::VisibilityPostMutationFailure`] when the write completed
+/// but the optional Explorer refresh failed. That error guarantees the visibility
+/// mutation completed, so callers should not blindly retry it. Callers may use
+/// [`is_start_recommended_section_visible`] to confirm the current value, but a
+/// failed read does not change the side-effect guarantee represented by the error.
 pub fn set_start_recommended_section_visible_with_options(
     visible: bool,
     options: VisibilityOptions,
@@ -416,7 +442,14 @@ fn set_start_recommended_section_visible_with_options_inner(
 ) -> WincentResult<()> {
     write(visible)?;
     if options.refresh_explorer_enabled() {
-        refresh()?;
+        refresh().map_err(|error| {
+            WincentError::visibility_post_mutation_failure(
+                QuickAccess::RecentFiles,
+                visible,
+                QuickAccessPostMutationStep::RefreshExplorer,
+                error,
+            )
+        })?;
     }
     Ok(())
 }
@@ -438,6 +471,36 @@ pub fn hide_start_recommended_section_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
+
+    fn assert_visibility_post_mutation_failure(
+        error: WincentError,
+        expected_qa_type: QuickAccess,
+        expected_visible: bool,
+    ) {
+        let source = error
+            .source()
+            .expect("visibility post-mutation error must preserve its source");
+        assert_eq!(source.to_string(), "System error: refresh sentinel");
+
+        match error {
+            WincentError::VisibilityPostMutationFailure {
+                qa_type,
+                visible,
+                step,
+                source,
+            } => {
+                assert_eq!(qa_type, expected_qa_type);
+                assert_eq!(visible, expected_visible);
+                assert_eq!(step, QuickAccessPostMutationStep::RefreshExplorer);
+                assert!(matches!(
+                    *source,
+                    WincentError::SystemError(ref message) if message == "refresh sentinel"
+                ));
+            }
+            other => panic!("expected visibility post-mutation error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn registry_value_names_match_quick_access_sections() {
@@ -600,10 +663,8 @@ mod tests {
     }
 
     #[test]
-    fn set_visible_inner_refresh_error_propagates() {
-        use crate::error::WincentError;
-
-        let expected = WincentError::SystemError("sentinel".into());
+    fn set_visible_inner_refresh_error_is_post_mutation_failure() {
+        let expected = WincentError::SystemError("refresh sentinel".into());
         let result = set_visible_with_options_inner(
             QuickAccess::RecentFiles,
             true,
@@ -612,10 +673,11 @@ mod tests {
             || Err(expected),
         );
 
-        match result {
-            Err(WincentError::SystemError(message)) => assert_eq!(message, "sentinel"),
-            other => panic!("expected refresh sentinel error, got {other:?}"),
-        }
+        assert_visibility_post_mutation_failure(
+            result.expect_err("refresh failure must be reported"),
+            QuickAccess::RecentFiles,
+            true,
+        );
     }
 
     #[test]
@@ -705,21 +767,20 @@ mod tests {
     }
 
     #[test]
-    fn set_start_recommended_inner_refresh_error_propagates() {
-        use crate::error::WincentError;
-
-        let expected = WincentError::SystemError("sentinel".into());
+    fn set_start_recommended_inner_refresh_error_is_post_mutation_failure() {
+        let expected = WincentError::SystemError("refresh sentinel".into());
         let result = set_start_recommended_section_visible_with_options_inner(
-            true,
+            false,
             VisibilityOptions::new().refresh_explorer(),
             |_| Ok(()),
             || Err(expected),
         );
 
-        match result {
-            Err(WincentError::SystemError(message)) => assert_eq!(message, "sentinel"),
-            other => panic!("expected refresh sentinel error, got {other:?}"),
-        }
+        assert_visibility_post_mutation_failure(
+            result.expect_err("refresh failure must be reported"),
+            QuickAccess::RecentFiles,
+            false,
+        );
     }
 
     #[test]
