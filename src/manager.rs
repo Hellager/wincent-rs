@@ -721,6 +721,37 @@ impl QuickAccessManager {
         }
     }
 
+    /// Pins a directory to Quick Access Frequent Folders.
+    ///
+    /// This is a convenience wrapper around [`QuickAccessManager::add_item`] for
+    /// callers that only need to pin a folder. The directory must exist. A
+    /// folder that is present but unpinned is still passed to Explorer's pin
+    /// operation; only an already-pinned folder is rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
+    /// is not a directory; [`WincentError::AlreadyExists`] when the folder is
+    /// already pinned; or the underlying Shell/PowerShell error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// manager.pin_frequent_folder("C:\\Work")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn pin_frequent_folder<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
+        let path = path_to_shell_string(path.as_ref())?;
+        self.backend
+            .validate_path(&path, crate::utils::PathType::Directory)?;
+        self.execute_with_retry(|| self.backend.add_frequent_folder(&path, self.timeout))
+    }
+
     /// Removes an item from Recent Files or Frequent Folders.
     ///
     /// For [`QuickAccess::FrequentFolders`], pinned folders are unpinned through
@@ -2139,6 +2170,30 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn pin_frequent_folder_validates_then_uses_frequent_folder_add_path() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        manager.pin_frequent_folder("C:\\Projects")?;
+
+        assert_eq!(
+            backend.calls(),
+            vec!["add_frequent_folder:C:\\Projects".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pin_frequent_folder_rejects_empty_path() {
+        let manager = QuickAccessManager::new();
+        assert!(matches!(
+            manager.pin_frequent_folder(""),
+            Err(WincentError::InvalidPath(_))
+        ));
     }
 
     #[test]

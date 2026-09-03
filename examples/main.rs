@@ -95,6 +95,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "find" => cmd_find(&manager, &args[1..]),
         "watch" => cmd_watch(&manager, &args[1..]),
         "add" => cmd_add(&manager, &args[1..]),
+        "pin" => cmd_pin(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
         "batch-add" => cmd_batch_add(&manager, &args[1..]),
         "batch-remove" => cmd_batch_remove(&manager, &args[1..]),
@@ -167,6 +168,7 @@ Core:
   find <recent|frequent|all> <keyword>
   watch <recent|frequent|all> [--poll-ms N]
   add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
+  pin <path>
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
     frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
   batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
@@ -350,6 +352,14 @@ fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
 
     manager.add_item(&args[1], qa_type, options)?;
     println!("added {}", args[1]);
+    Ok(())
+}
+
+fn cmd_pin(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 1, "pin <path>")?;
+
+    manager.pin_frequent_folder(&args[0])?;
+    println!("pinned {}", args[0]);
     Ok(())
 }
 

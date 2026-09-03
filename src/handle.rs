@@ -184,7 +184,7 @@ where
     I: FnMut(&str, &str) -> WincentResult<()>,
 {
     // "pintohome" can act as a toggle. Check in the same STA flow as the verb
-    // invocation so an existing folder is never toggled off.
+    // invocation so an already-pinned folder is never toggled off.
     if contains(path)? {
         return Err(WincentError::already_exists(
             path,
@@ -216,7 +216,8 @@ where
 ///
 /// # Errors
 ///
-/// - `AlreadyExists`: The folder is already pinned
+/// - `AlreadyExists`: The folder is already pinned. Existing unpinned frequent
+///   entries are allowed to proceed through the pin verb.
 /// - `SystemError`: COM operation failed (e.g., failed to open folder namespace, invoke verb)
 ///
 /// # See Also
@@ -232,7 +233,10 @@ fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Wince
         move || {
             run_pin_frequent_folder_checked(
                 &path,
-                contains_frequent_folder_current_sta,
+                |candidate| {
+                    crate::destlist::frequent_folder_pin_status(candidate)
+                        .map(|status| matches!(status, FrequentFolderPinStatus::Pinned))
+                },
                 invoke_verb_on_self_current_sta,
             )
         },
@@ -922,7 +926,7 @@ fn pin_frequent_folder_powershell_with_timeout(path: &str, timeout: Duration) ->
         },
     ) {
         Ok(()) => Ok(()),
-        Err(error) => Err(map_pin_frequent_folder_powershell_error(path, error)),
+        Err(error) => Err(error),
     }
 }
 
@@ -955,21 +959,6 @@ where
         // running the fallback could undo a successful late pin.
         Err(e @ WincentError::Timeout(_)) => Err(e),
         Err(_) => powershell(),
-    }
-}
-
-fn map_pin_frequent_folder_powershell_error(path: &str, error: WincentError) -> WincentError {
-    const ALREADY_EXISTS_SENTINEL: &str = "WINCENT_ALREADY_EXISTS";
-
-    match error {
-        WincentError::PowerShellExecution(ref powershell_error)
-            if powershell_error
-                .raw_stdout()
-                .contains(ALREADY_EXISTS_SENTINEL) =>
-        {
-            WincentError::already_exists(path, QuickAccess::FrequentFolders)
-        }
-        other => other,
     }
 }
 
@@ -1088,7 +1077,20 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
     // from the native check+pin path and must not be retried via PowerShell.
     pin_frequent_folder_with_fallback(
         || pin_frequent_folder_native(path, timeout),
-        || pin_frequent_folder_powershell_with_timeout(path, timeout),
+        || {
+            // DestList is the source of truth for pin state. PowerShell is
+            // only a mutation fallback when native COM cannot run.
+            if matches!(
+                crate::destlist::frequent_folder_pin_status(path)?,
+                FrequentFolderPinStatus::Pinned
+            ) {
+                return Err(WincentError::already_exists(
+                    path,
+                    QuickAccess::FrequentFolders,
+                ));
+            }
+            pin_frequent_folder_powershell_with_timeout(path, timeout)
+        },
     )
 }
 
@@ -2142,54 +2144,6 @@ mod tests {
 
         assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
         Ok(())
-    }
-
-    #[test]
-    fn pin_frequent_folder_powershell_sentinel_maps_to_already_exists() {
-        let error = WincentError::PowerShellExecution(Box::new(
-            crate::error::PowerShellError::builder(
-                crate::error::PowerShellOperation::PinFrequentFolder,
-            )
-            .stdout("WINCENT_ALREADY_EXISTS")
-            .stderr("")
-            .parameters("C:\\Folder")
-            .build(),
-        ));
-
-        let mapped = map_pin_frequent_folder_powershell_error("C:\\Folder", error);
-
-        assert!(
-            matches!(
-                mapped,
-                WincentError::AlreadyExists {
-                    ref path,
-                    qa_type: QuickAccess::FrequentFolders,
-                } if path == "C:\\Folder"
-            ),
-            "sentinel should map to AlreadyExists, got: {:?}",
-            mapped
-        );
-    }
-
-    #[test]
-    fn pin_frequent_folder_powershell_keeps_non_sentinel_error() {
-        let error = WincentError::PowerShellExecution(Box::new(
-            crate::error::PowerShellError::builder(
-                crate::error::PowerShellOperation::PinFrequentFolder,
-            )
-            .stdout("ordinary output")
-            .stderr("ordinary failure")
-            .parameters("C:\\Folder")
-            .build(),
-        ));
-
-        let mapped = map_pin_frequent_folder_powershell_error("C:\\Folder", error);
-
-        assert!(
-            matches!(mapped, WincentError::PowerShellExecution(_)),
-            "ordinary PowerShell failures should remain PowerShellExecution, got: {:?}",
-            mapped
-        );
     }
 
     #[test]
