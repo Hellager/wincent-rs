@@ -4,6 +4,13 @@
 //! score, FILETIME) that is not available through the COM/Shell API used by the
 //! rest of this crate.
 //!
+//! Offsets exposed by [`DestListEntry`](parser::DestListEntry) are logical
+//! DestList stream offsets, not physical file offsets. CFB stream allocation
+//! may be non-contiguous, and an embedded Shell Link payload is not guaranteed
+//! to be byte-identical to the standalone `.lnk` in the Recent directory.
+//! One Shell operation may update both Explorer backing files: adding a recent
+//! file can also record access to its parent in Frequent Folders.
+//!
 //! # Quick Start
 //!
 //! ```rust,no_run

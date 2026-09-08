@@ -93,7 +93,8 @@ pub struct CfbDirectoryEntry {
     pub(crate) name: String,
     /// Raw CFB object type.
     pub(crate) object_type: u8,
-    /// First sector of the entry stream.
+    /// First regular-sector id, or first mini-sector id when the stream is
+    /// smaller than [`CfbInfo::mini_cutoff_size`].
     pub(crate) start_sector: u32,
     /// Stream size in bytes.
     pub(crate) stream_size: u64,
@@ -112,7 +113,8 @@ impl CfbDirectoryEntry {
         self.object_type
     }
 
-    /// First sector of the entry stream.
+    /// First regular-sector id, or first mini-sector id when the stream is
+    /// smaller than [`CfbInfo::mini_cutoff_size`].
     #[must_use]
     pub fn start_sector(&self) -> u32 {
         self.start_sector
@@ -219,15 +221,19 @@ pub struct DestList {
     pub(crate) declared_entry_count: usize,
     /// Number of pinned entries declared by the DestList header.
     pub(crate) pinned_entry_count: u32,
-    /// Raw counter at header offset `0x0c`.
+    /// Raw field at header offset `0x0c`.
     pub(crate) header_counter_raw: u32,
-    /// Raw counter interpreted as `f32`.
+    /// Raw header field interpreted as `f32`. In observed v4 files this is
+    /// approximately the sum of the entry scores.
     pub(crate) header_counter_f32: f32,
     /// Last entry id assigned by Explorer.
     pub(crate) last_entry_id: u64,
     /// Low 32 bits of [`DestList::last_entry_id`].
     pub(crate) last_entry_number: u32,
-    /// Add/delete action count stored at header offset `0x18`.
+    /// Raw field stored at header offset `0x18`.
+    ///
+    /// Its exact meaning is not confirmed. Observed v4 files advanced it by
+    /// two for one add operation and left it unchanged for a remove operation.
     pub(crate) add_delete_action_count: u64,
     /// Parsed DestList entries.
     pub(crate) entries: Vec<DestListEntry>,
@@ -254,13 +260,16 @@ impl DestList {
         self.pinned_entry_count
     }
 
-    /// Raw counter at header offset `0x0c`.
+    /// Raw field at header offset `0x0c`.
     #[must_use]
     pub fn header_counter_raw(&self) -> u32 {
         self.header_counter_raw
     }
 
-    /// Raw counter at header offset `0x0c` interpreted as `f32`.
+    /// Raw header field at `0x0c` interpreted as `f32`.
+    ///
+    /// In observed v4 files this is approximately the sum of the entry scores;
+    /// its meaning in every supported DestList version is not yet confirmed.
     #[must_use]
     pub fn header_counter_f32(&self) -> f32 {
         self.header_counter_f32
@@ -281,7 +290,10 @@ impl DestList {
         self.last_entry_number
     }
 
-    /// Add/delete action count stored at header offset `0x18`.
+    /// Raw field stored at header offset `0x18`.
+    ///
+    /// Its exact meaning is not confirmed. Observed v4 files advanced it by
+    /// two for one add operation and left it unchanged for a remove operation.
     #[must_use]
     pub fn add_delete_action_count(&self) -> u64 {
         self.add_delete_action_count
@@ -303,11 +315,15 @@ impl DestList {
 /// A single DestList entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DestListEntry {
-    /// Byte offset of this entry inside the DestList stream.
+    /// Logical byte offset of this entry inside the DestList stream.
+    ///
+    /// This is not a physical file offset because the stream may span
+    /// non-contiguous CFB sectors.
     pub(crate) entry_offset: usize,
     /// Parsed byte length of this entry.
     pub(crate) entry_len: usize,
-    /// Physical entry position in the DestList stream.
+    /// Zero-based entry order in the logical DestList stream, normally MRU
+    /// order for Explorer's v4 Recent Files and Frequent Folders lists.
     pub(crate) mru_position: usize,
     /// Checksum or unknown signed field at entry offset `0x00`.
     pub(crate) checksum: i64,
@@ -329,7 +345,11 @@ pub struct DestListEntry {
     pub(crate) file_birth_droid: String,
     /// MAC address embedded in the file Droid GUID.
     pub(crate) file_droid_mac: String,
-    /// CFB stream name containing the Shell Link payload for this entry.
+    /// Lower 32 bits of the entry id formatted as the hexadecimal CFB stream
+    /// name containing its Shell Link payload.
+    ///
+    /// The embedded payload can differ from the standalone `.lnk` in the
+    /// user's Recent directory while still identifying the same target.
     pub(crate) stream_name: String,
     /// Raw path as stored; may be `"knownfolder:{GUID}"`.
     pub(crate) raw_path: String,
@@ -341,13 +361,18 @@ pub struct DestListEntry {
     pub(crate) pin_order: Option<i32>,
     /// Compatibility alias for [`DestListEntry::recent_rank`].
     pub(crate) rank: i32,
-    /// Recent rank reported by the DestList entry.
+    /// Raw rank at entry offset `0x70`.
+    ///
+    /// It is commonly `-1` in the Recent Files list and is actively updated
+    /// as a sort rank in the Frequent Folders list.
     pub(crate) recent_rank: i32,
-    /// `0` means hidden in v4.
+    /// Compatibility alias for [`DestListEntry::access_count`]. Visibility
+    /// heuristics for v4 Recent Files treat `0` as hidden.
     pub(crate) count: u32,
     /// Access count reported by the DestList entry.
     pub(crate) access_count: u32,
-    /// Explorer score value reported by the DestList entry.
+    /// Explorer score value reported by the DestList entry. Frequent Folders
+    /// may recompute this value for every entry after one folder is accessed.
     pub(crate) score: f32,
     /// Compatibility alias for [`DestListEntry::last_interaction_filetime`].
     pub(crate) last_access_filetime: Option<u64>,
@@ -355,7 +380,10 @@ pub struct DestListEntry {
     pub(crate) last_interaction_filetime: Option<u64>,
     /// Serialized property-store size when present.
     pub(crate) sps_size: Option<u32>,
-    /// Reserved field at entry offset `0x78` for v3/v4/v6.
+    /// Reserved field at entry offset `0x78` for v3/v4/v6. An observed v4
+    /// Recent Files removal changed this from `0` to `1` while zeroing the
+    /// entry's score and access count, but the field's general meaning is not
+    /// confirmed.
     pub(crate) reserved_78: Option<u32>,
     /// Reserved field at entry offset `0x7c` for v3/v4/v6.
     pub(crate) reserved_7c: Option<u32>,
@@ -366,7 +394,10 @@ pub struct DestListEntry {
 }
 
 impl DestListEntry {
-    /// Byte offset of this entry inside the DestList stream.
+    /// Logical byte offset of this entry inside the DestList stream.
+    ///
+    /// This is not a physical file offset because the stream may span
+    /// non-contiguous CFB sectors.
     #[must_use]
     pub fn entry_offset(&self) -> usize {
         self.entry_offset
@@ -378,7 +409,8 @@ impl DestListEntry {
         self.entry_len
     }
 
-    /// Physical entry position in the DestList stream.
+    /// Zero-based entry order in the logical DestList stream, normally MRU
+    /// order for Explorer's v4 Recent Files and Frequent Folders lists.
     #[must_use]
     pub fn mru_position(&self) -> usize {
         self.mru_position
@@ -444,7 +476,11 @@ impl DestListEntry {
         &self.file_droid_mac
     }
 
-    /// CFB stream name containing the Shell Link payload for this entry.
+    /// Lower 32 bits of the entry id formatted as the hexadecimal CFB stream
+    /// name containing its Shell Link payload.
+    ///
+    /// The embedded payload can differ from the standalone `.lnk` in the
+    /// user's Recent directory while still identifying the same target.
     #[must_use]
     pub fn stream_name(&self) -> &str {
         &self.stream_name
@@ -486,7 +522,10 @@ impl DestListEntry {
         self.rank
     }
 
-    /// Recent rank reported by the DestList entry.
+    /// Raw rank at entry offset `0x70`.
+    ///
+    /// It is commonly `-1` in the Recent Files list and is actively updated
+    /// as a sort rank in the Frequent Folders list.
     #[must_use]
     pub fn recent_rank(&self) -> i32 {
         self.recent_rank
@@ -504,7 +543,8 @@ impl DestListEntry {
         self.access_count
     }
 
-    /// Explorer score value reported by the DestList entry.
+    /// Explorer score value reported by the DestList entry. Frequent Folders
+    /// may recompute this value for every entry after one folder is accessed.
     #[must_use]
     pub fn score(&self) -> f32 {
         self.score
@@ -528,7 +568,10 @@ impl DestListEntry {
         self.sps_size
     }
 
-    /// Reserved field at entry offset `0x78` for v3/v4/v6.
+    /// Reserved field at entry offset `0x78` for v3/v4/v6. An observed v4
+    /// Recent Files removal changed this from `0` to `1` while zeroing the
+    /// entry's score and access count, but the field's general meaning is not
+    /// confirmed.
     #[must_use]
     pub fn reserved_78(&self) -> Option<u32> {
         self.reserved_78
