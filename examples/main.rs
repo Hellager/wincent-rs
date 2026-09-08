@@ -197,6 +197,7 @@ Visibility APIs:
 
 DestList APIs:
   dest path <recent|frequent>
+  dest reveal <recent|frequent>
   dest parse <recent|frequent|file> [path] [--limit N]
   dest parse-bytes <path> [--limit N]
   dest manager <recent|frequent> [--limit N]
@@ -788,6 +789,10 @@ fn cmd_dest(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> 
             println!("{}", dest_path(parse_dest_kind(&args[1])?)?.display());
             Ok(())
         }
+        "reveal" => {
+            require_len(&args[1..], 1, "dest reveal <recent|frequent>")?;
+            cmd_dest_reveal(parse_dest_kind(&args[1])?)
+        }
         "parse" => cmd_dest_parse(&args[1..]),
         "parse-bytes" => cmd_dest_parse_bytes(&args[1..]),
         "manager" => cmd_dest_manager(manager, &args[1..]),
@@ -804,6 +809,33 @@ fn cmd_dest(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> 
             "unknown dest command: {other}"
         ))),
     }
+}
+
+fn cmd_dest_reveal(kind: DestKind) -> WincentResult<()> {
+    let path = dest_path(kind)?;
+    println!("revealing {}", path.display());
+    reveal_in_explorer(&path)
+}
+
+fn reveal_in_explorer(path: &Path) -> WincentResult<()> {
+    if !path.exists() {
+        return Err(WincentError::InvalidPath(InvalidPathError::new(
+            path,
+            "Path does not exist",
+        )));
+    }
+
+    let select = format!("/select,{}", path.display());
+    let mut child = std::process::Command::new("explorer.exe")
+        .arg(select)
+        .spawn()
+        .map_err(|error| WincentError::SystemError(format!("failed to launch explorer: {error}")))?;
+
+    // explorer.exe exits with status 1 even when /select succeeds, so exit
+    // status is unreliable; only a spawn failure counts as an error.
+    let _ = child.wait();
+    println!("opened Explorer at the dest path's folder with the file selected");
+    Ok(())
 }
 
 fn cmd_dest_parse(args: &[String]) -> WincentResult<()> {
