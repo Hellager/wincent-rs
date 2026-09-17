@@ -29,6 +29,14 @@
 //!
 //! **DestList versions 1, 3, 4 and 6 are supported.** Other versions return
 //! [`crate::error::WincentError::DestListUnsupportedVersion`].
+//!
+//! A parsed entry is not necessarily visible in Explorer. Explorer also
+//! applies version- and list-specific metadata filters and loads the expected
+//! Shell Link stream for visible candidates. In observed Windows 10 v4 Recent
+//! Files, a missing stream caused only that candidate to be skipped; Explorer
+//! did not repair the stream, remove the dangling entry, or rebuild the file.
+//! [`visible_entries`] returns metadata-level candidates and does not validate
+//! stream availability or apply a caller-specific result limit.
 
 pub(super) mod cfb;
 /// Internal destructive tests for removing entries by rebuilding Explorer backing files.

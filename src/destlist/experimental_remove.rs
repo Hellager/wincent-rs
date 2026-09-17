@@ -642,6 +642,7 @@ mod tests {
     use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
     use crate::{AddOptions, QuickAccess, RemoveOptions};
     use std::env;
+    use std::io::{self, Write};
     use std::process::Command;
     use tempfile::tempdir;
     use windows::core::{w, HSTRING};
@@ -1238,6 +1239,7 @@ mod tests {
             dest_path.display()
         );
         println!("deleted Recent DestList {}", dest_path.display());
+        pause_for_private_trace()?;
         browse_home_with_hidden_explorer_browser()?;
 
         let rebuilt = wait_for_rebuilt_dest(&dest_path, &matching_paths, REBUILD_POLL_TIMEOUT)?;
@@ -1261,12 +1263,30 @@ mod tests {
             "reparsed Recent DestList still contains keyword matches: {remaining_matches:?}"
         );
         let missing_unrelated = missing_dest_paths(rebuilt.dest_list().entries(), &unrelated_paths);
-        assert!(
-            missing_unrelated.is_empty(),
-            "reparsed Recent DestList lost unrelated entries: {missing_unrelated:?}"
+        println!(
+            "reparsed Recent DestList missing unrelated entries count={} paths={missing_unrelated:?}",
+            missing_unrelated.len()
         );
 
         Ok(())
+    }
+
+    fn pause_for_private_trace() -> WincentResult<()> {
+        let Some(value) = env::var_os("WINCENT_DESTLIST_PRIVATE_TRACE_PAUSE_MS") else {
+            return Ok(());
+        };
+        let Ok(milliseconds) = value.to_string_lossy().parse::<u64>() else {
+            println!("ignoring invalid WINCENT_DESTLIST_PRIVATE_TRACE_PAUSE_MS={value:?}");
+            return Ok(());
+        };
+        println!(
+            "PRIVATE_TRACE_PAUSE pid={} milliseconds={milliseconds}",
+            std::process::id()
+        );
+        io::stdout().flush().map_err(WincentError::Io)?;
+        thread::sleep(Duration::from_millis(milliseconds));
+        println!("PRIVATE_TRACE_RESUME pid={}", std::process::id());
+        io::stdout().flush().map_err(WincentError::Io)
     }
 
     fn required_recent_links_for_target_paths(

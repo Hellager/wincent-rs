@@ -218,6 +218,9 @@ pub struct DestList {
     /// DestList format version.
     pub(crate) version: u32,
     /// Entry count declared by the DestList header.
+    ///
+    /// This can include logically hidden entries and entries whose expected
+    /// Shell Link stream is missing.
     pub(crate) declared_entry_count: usize,
     /// Number of pinned entries declared by the DestList header.
     pub(crate) pinned_entry_count: u32,
@@ -233,9 +236,11 @@ pub struct DestList {
     /// Raw field stored at header offset `0x18`.
     ///
     /// Its exact meaning is not confirmed. Observed v4 files advanced it by
-    /// two for one add operation and left it unchanged for a remove operation.
+    /// two for one add operation and left it unchanged for a Shell/COM logical
+    /// remove operation.
     pub(crate) add_delete_action_count: u64,
-    /// Parsed DestList entries.
+    /// Parsed DestList entries, including hidden or dangling entries that
+    /// Explorer may omit from a query.
     pub(crate) entries: Vec<DestListEntry>,
     /// Non-fatal parse diagnostics.
     pub(crate) diagnostics: Vec<Diagnostic>,
@@ -249,6 +254,9 @@ impl DestList {
     }
 
     /// Entry count declared by the DestList header.
+    ///
+    /// This can include logically hidden entries and entries whose expected
+    /// Shell Link stream is missing.
     #[must_use]
     pub fn declared_entry_count(&self) -> usize {
         self.declared_entry_count
@@ -293,13 +301,15 @@ impl DestList {
     /// Raw field stored at header offset `0x18`.
     ///
     /// Its exact meaning is not confirmed. Observed v4 files advanced it by
-    /// two for one add operation and left it unchanged for a remove operation.
+    /// two for one add operation and left it unchanged for a Shell/COM logical
+    /// remove operation.
     #[must_use]
     pub fn add_delete_action_count(&self) -> u64 {
         self.add_delete_action_count
     }
 
-    /// Parsed DestList entries.
+    /// Parsed DestList entries, including hidden or dangling entries that
+    /// Explorer may omit from a query.
     #[must_use]
     pub fn entries(&self) -> &[DestListEntry] {
         &self.entries
@@ -326,6 +336,10 @@ pub struct DestListEntry {
     /// order for Explorer's v4 Recent Files and Frequent Folders lists.
     pub(crate) mru_position: usize,
     /// Checksum or unknown signed field at entry offset `0x00`.
+    ///
+    /// An observed Windows 10 v4 logical removal changed this field, but
+    /// Explorer also accepted direct visibility-field edits without updating
+    /// it. Its validation role is therefore not confirmed.
     pub(crate) checksum: i64,
     /// Full Explorer entry id at entry offset `0x58`.
     pub(crate) entry_id: u64,
@@ -345,15 +359,19 @@ pub struct DestListEntry {
     pub(crate) file_birth_droid: String,
     /// MAC address embedded in the file Droid GUID.
     pub(crate) file_droid_mac: String,
-    /// Lower 32 bits of the entry id formatted as the hexadecimal CFB stream
-    /// name containing its Shell Link payload.
+    /// Lower 32 bits of the entry id formatted as the expected hexadecimal CFB
+    /// stream name for its Shell Link payload.
     ///
     /// The embedded payload can differ from the standalone `.lnk` in the
-    /// user's Recent directory while still identifying the same target.
+    /// user's Recent directory while still identifying the same target. The
+    /// CFB stream may be missing; observed Windows 10 v4 Recent Files queries
+    /// skipped a visible candidate with a missing stream without repairing or
+    /// rebuilding the DestList.
     pub(crate) stream_name: String,
     /// Raw path as stored; may be `"knownfolder:{GUID}"`.
     pub(crate) raw_path: String,
-    /// Resolved path (knownfolder GUIDs resolved via Shell Link stream).
+    /// Resolved path, falling back to the raw path when the Shell Link stream
+    /// is missing, unreadable, or does not provide a usable path.
     pub(crate) path: String,
     /// `-1` if not pinned.
     pub(crate) pin_status: i32,
@@ -366,13 +384,21 @@ pub struct DestListEntry {
     /// It is commonly `-1` in the Recent Files list and is actively updated
     /// as a sort rank in the Frequent Folders list.
     pub(crate) recent_rank: i32,
-    /// Compatibility alias for [`DestListEntry::access_count`]. Visibility
-    /// heuristics for v4 Recent Files treat `0` as hidden.
+    /// Compatibility alias for [`DestListEntry::access_count`]. Observed
+    /// Windows 10 v4 Recent Files queries exclude entries with value `0`
+    /// before loading their Shell Link streams.
     pub(crate) count: u32,
     /// Access count reported by the DestList entry.
+    ///
+    /// In observed Windows 10 v4 Recent Files, `0` excludes an entry before
+    /// Shell Link loading. A positive value only makes it a visibility
+    /// candidate; a missing stream, path deduplication, or a caller limit can
+    /// still prevent Explorer from returning it.
     pub(crate) access_count: u32,
     /// Explorer score value reported by the DestList entry. Frequent Folders
     /// may recompute this value for every entry after one folder is accessed.
+    /// It is not an independent Recent Files visibility indicator: entries
+    /// directly hidden in experiments remained excluded with a positive score.
     pub(crate) score: f32,
     /// Compatibility alias for [`DestListEntry::last_interaction_filetime`].
     pub(crate) last_access_filetime: Option<u64>,
@@ -380,10 +406,13 @@ pub struct DestListEntry {
     pub(crate) last_interaction_filetime: Option<u64>,
     /// Serialized property-store size when present.
     pub(crate) sps_size: Option<u32>,
-    /// Reserved field at entry offset `0x78` for v3/v4/v6. An observed v4
-    /// Recent Files removal changed this from `0` to `1` while zeroing the
-    /// entry's score and access count, but the field's general meaning is not
-    /// confirmed.
+    /// Reserved field at entry offset `0x78` for v3/v4/v6.
+    ///
+    /// An observed Windows 10 v4 Recent Files logical removal changed this
+    /// from `0` to `1` while zeroing score and access count. Directly setting
+    /// `access_count = 0` and this field to `1` also hid entries, but those
+    /// fields were not varied independently. Whether this field alone controls
+    /// visibility, and its meaning in other versions, remains unconfirmed.
     pub(crate) reserved_78: Option<u32>,
     /// Reserved field at entry offset `0x7c` for v3/v4/v6.
     pub(crate) reserved_7c: Option<u32>,
@@ -417,6 +446,10 @@ impl DestListEntry {
     }
 
     /// Checksum or unknown signed field at entry offset `0x00`.
+    ///
+    /// An observed Windows 10 v4 logical removal changed this field, but
+    /// Explorer also accepted direct visibility-field edits without updating
+    /// it. Its validation role is therefore not confirmed.
     #[must_use]
     pub fn checksum(&self) -> i64 {
         self.checksum
@@ -476,11 +509,14 @@ impl DestListEntry {
         &self.file_droid_mac
     }
 
-    /// Lower 32 bits of the entry id formatted as the hexadecimal CFB stream
-    /// name containing its Shell Link payload.
+    /// Lower 32 bits of the entry id formatted as the expected hexadecimal CFB
+    /// stream name for its Shell Link payload.
     ///
     /// The embedded payload can differ from the standalone `.lnk` in the
-    /// user's Recent directory while still identifying the same target.
+    /// user's Recent directory while still identifying the same target. The
+    /// CFB stream may be missing; observed Windows 10 v4 Recent Files queries
+    /// skipped a visible candidate with a missing stream without repairing or
+    /// rebuilding the DestList.
     #[must_use]
     pub fn stream_name(&self) -> &str {
         &self.stream_name
@@ -492,7 +528,8 @@ impl DestListEntry {
         &self.raw_path
     }
 
-    /// Resolved path (knownfolder GUIDs resolved via Shell Link stream).
+    /// Resolved path, falling back to the raw path when the Shell Link stream
+    /// is missing, unreadable, or does not provide a usable path.
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
@@ -531,13 +568,20 @@ impl DestListEntry {
         self.recent_rank
     }
 
-    /// Compatibility alias for [`DestListEntry::access_count`].
+    /// Compatibility alias for [`DestListEntry::access_count`]. Observed
+    /// Windows 10 v4 Recent Files queries exclude entries with value `0`
+    /// before loading their Shell Link streams.
     #[must_use]
     pub fn count(&self) -> u32 {
         self.count
     }
 
     /// Access count reported by the DestList entry.
+    ///
+    /// In observed Windows 10 v4 Recent Files, `0` excludes an entry before
+    /// Shell Link loading. A positive value only makes it a visibility
+    /// candidate; a missing stream, path deduplication, or a caller limit can
+    /// still prevent Explorer from returning it.
     #[must_use]
     pub fn access_count(&self) -> u32 {
         self.access_count
@@ -545,6 +589,8 @@ impl DestListEntry {
 
     /// Explorer score value reported by the DestList entry. Frequent Folders
     /// may recompute this value for every entry after one folder is accessed.
+    /// It is not an independent Recent Files visibility indicator: entries
+    /// directly hidden in experiments remained excluded with a positive score.
     #[must_use]
     pub fn score(&self) -> f32 {
         self.score
@@ -568,10 +614,13 @@ impl DestListEntry {
         self.sps_size
     }
 
-    /// Reserved field at entry offset `0x78` for v3/v4/v6. An observed v4
-    /// Recent Files removal changed this from `0` to `1` while zeroing the
-    /// entry's score and access count, but the field's general meaning is not
-    /// confirmed.
+    /// Reserved field at entry offset `0x78` for v3/v4/v6.
+    ///
+    /// An observed Windows 10 v4 Recent Files logical removal changed this
+    /// from `0` to `1` while zeroing score and access count. Directly setting
+    /// `access_count = 0` and this field to `1` also hid entries, but those
+    /// fields were not varied independently. Whether this field alone controls
+    /// visibility, and its meaning in other versions, remains unconfirmed.
     #[must_use]
     pub fn reserved_78(&self) -> Option<u32> {
         self.reserved_78
@@ -598,6 +647,9 @@ impl DestListEntry {
 
 /// Returns all entries from a parsed DestList.
 ///
+/// This includes logically hidden entries, entries whose expected Shell Link
+/// stream is missing, and entries that Explorer may omit from a query.
+///
 /// This clones the parsed entries. Use [`DestList::entries`] when borrowing is
 /// enough.
 ///
@@ -623,6 +675,11 @@ pub fn entries(dest_list: &DestList) -> Vec<DestListEntry> {
 /// Uses Explorer-oriented heuristics for DestList v4 and v6. The
 /// `normal_slot_count` controls how many non-pinned v6 normal entries are
 /// considered; Explorer commonly uses 4.
+///
+/// These are metadata-level candidates. The function does not verify that an
+/// entry's expected Shell Link stream exists or can be loaded, and it does not
+/// apply a caller-specific result limit. Explorer may therefore return fewer
+/// entries than this function.
 #[must_use]
 pub fn quick_access_entries(dest_list: &DestList, normal_slot_count: i32) -> Vec<DestListEntry> {
     match dest_list.version {
@@ -632,7 +689,10 @@ pub fn quick_access_entries(dest_list: &DestList, normal_slot_count: i32) -> Vec
     }
 }
 
-/// Returns entries likely visible in Explorer Quick Access using 4 normal slots.
+/// Returns metadata-level visibility candidates using 4 normal slots.
+///
+/// See [`quick_access_entries`] for limitations around missing Shell Link
+/// streams and caller-specific result limits.
 #[must_use]
 pub fn visible_entries(dest_list: &DestList) -> Vec<DestListEntry> {
     quick_access_entries(dest_list, 4)
