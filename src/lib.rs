@@ -123,6 +123,8 @@ pub mod prelude {
         show_start_recommended_section_with_options, VisibilityOptions,
     };
 
+    pub use crate::utils::{get_windows_version, WindowsVersion};
+
     pub use crate::{
         BatchOptions, BatchResult, EmptyOptions, QuickAccess, RetryPolicy, WincentResult,
     };
