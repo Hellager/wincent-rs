@@ -12,6 +12,32 @@ use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, Com
 pub const RECENT_FILES_APPID: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
 /// Explorer Frequent Folders automatic destination AppID hash.
 pub const FREQUENT_FOLDERS_APPID: &str = "f01b4d95cf55d32a.automaticDestinations-ms";
+/// Result limit used by Explorer's default Recent Files namespace query.
+///
+/// Windows 10 1809 and 22H2 both retained more raw entries while returning at
+/// most 20 Recent Files from the default Shell query.
+pub const DEFAULT_RECENT_FILES_RESULT_LIMIT: usize = 20;
+/// Number of unpinned Frequent Folders slots observed in Explorer Quick Access.
+pub const DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS: i32 = 4;
+/// Minimum access count observed for an unpinned Frequent Folders entry to be
+/// returned by Explorer on Windows 10 1809 and 22H2.
+pub const FREQUENT_FOLDERS_MIN_ACCESS_COUNT: u32 = 3;
+
+/// Logical Explorer list stored in an Automatic Destinations file.
+///
+/// DestList v4 does not contain a reliable discriminator between Recent Files
+/// and Frequent Folders. Prefer the kind detected from the well-known AppID
+/// filename, or pass it explicitly when parsing a renamed evidence file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DestListKind {
+    /// Explorer Recent Files.
+    RecentFiles,
+    /// Explorer Frequent Folders.
+    FrequentFolders,
+    /// The source filename did not identify a well-known Explorer list.
+    Unknown,
+}
 
 /// Pin state for a path in Explorer's Frequent Folders DestList.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +53,8 @@ pub enum FrequentFolderPinStatus {
 /// Parsed `.automaticDestinations-ms` file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutomaticDestinations {
+    /// Logical Explorer list identified by the source filename or caller.
+    pub(crate) kind: DestListKind,
     /// Compound File Binary container metadata.
     pub(crate) cfb_info: CfbInfo,
     /// Parsed DestList stream.
@@ -34,6 +62,12 @@ pub struct AutomaticDestinations {
 }
 
 impl AutomaticDestinations {
+    /// Logical Explorer list represented by this file.
+    #[must_use]
+    pub fn kind(&self) -> DestListKind {
+        self.kind
+    }
+
     /// Compound File Binary container metadata.
     #[must_use]
     pub fn cfb_info(&self) -> &CfbInfo {
@@ -44,6 +78,54 @@ impl AutomaticDestinations {
     #[must_use]
     pub fn dest_list(&self) -> &DestList {
         &self.dest_list
+    }
+
+    /// Returns stream-backed entries that satisfy the list's visibility rules.
+    ///
+    /// Unlike the free [`quick_access_entries`] helper, this method uses the
+    /// list kind captured while parsing and drops entries whose expected
+    /// numeric Shell Link stream is absent or empty. It does not apply a
+    /// caller result limit; use [`AutomaticDestinations::shell_entries`] for a
+    /// Shell-query-shaped result.
+    #[must_use]
+    pub fn visible_entries(&self) -> Vec<DestListEntry> {
+        self.quick_access_entries(DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS)
+    }
+
+    /// Returns stream-backed visibility candidates using a custom number of
+    /// unpinned Frequent Folders slots.
+    #[must_use]
+    pub fn quick_access_entries(&self, normal_slot_count: i32) -> Vec<DestListEntry> {
+        quick_access_entries_for_kind(&self.dest_list, self.kind, normal_slot_count)
+            .into_iter()
+            .filter(|entry| self.has_shell_link_stream(entry))
+            .collect()
+    }
+
+    /// Returns the entries a bounded Shell list query can return.
+    ///
+    /// The limit is a query window, not a storage cap. Raw entries remain
+    /// available through [`DestList::entries`]. Use
+    /// [`DEFAULT_RECENT_FILES_RESULT_LIMIT`] to mirror the default Windows 10
+    /// Recent Files query observed on 1809 and 22H2.
+    #[must_use]
+    pub fn shell_entries(&self, result_limit: usize) -> Vec<DestListEntry> {
+        let mut entries = self.visible_entries();
+        entries.truncate(result_limit);
+        entries
+    }
+
+    fn has_shell_link_stream(&self, entry: &DestListEntry) -> bool {
+        self.cfb_info
+            .directory_entries
+            .iter()
+            .any(|directory_entry| {
+                directory_entry.object_type == 2
+                    && directory_entry.stream_size > 0
+                    && directory_entry
+                        .name
+                        .eq_ignore_ascii_case(entry.stream_name())
+            })
     }
 }
 
@@ -248,9 +330,20 @@ pub struct DestList {
 
 impl DestList {
     /// DestList format version.
+    ///
+    /// Explorer can keep an initialized CFB with a zero-length `DestList`
+    /// stream before the first Recent item is recorded. Such an empty stream
+    /// is represented as version `0`; it is not a persisted DestList format.
     #[must_use]
     pub fn version(&self) -> u32 {
         self.version
+    }
+
+    /// Returns whether Explorer stored a zero-length, not-yet-initialized
+    /// `DestList` stream.
+    #[must_use]
+    pub fn is_empty_stream(&self) -> bool {
+        self.version == 0 && self.declared_entry_count == 0 && self.entries.is_empty()
     }
 
     /// Entry count declared by the DestList header.
@@ -672,8 +765,10 @@ pub fn entries(dest_list: &DestList) -> Vec<DestListEntry> {
 
 /// Returns entries that are likely visible in Explorer Quick Access.
 ///
-/// Uses Explorer-oriented heuristics for DestList v4 and v6. The
-/// `normal_slot_count` controls how many non-pinned v6 normal entries are
+/// This compatibility helper infers the v4 list kind from entry metadata.
+/// Prefer [`quick_access_entries_for_kind`] or
+/// [`AutomaticDestinations::quick_access_entries`] when the AppID is known.
+/// The `normal_slot_count` controls how many non-pinned normal entries are
 /// considered; Explorer commonly uses 4.
 ///
 /// These are metadata-level candidates. The function does not verify that an
@@ -682,8 +777,22 @@ pub fn entries(dest_list: &DestList) -> Vec<DestListEntry> {
 /// entries than this function.
 #[must_use]
 pub fn quick_access_entries(dest_list: &DestList, normal_slot_count: i32) -> Vec<DestListEntry> {
+    quick_access_entries_for_kind(dest_list, DestListKind::Unknown, normal_slot_count)
+}
+
+/// Returns metadata-level visibility candidates for an explicit list kind.
+///
+/// DestList v4 Recent Files and Frequent Folders use different visibility
+/// rules despite sharing the same persisted entry layout. Supplying the kind
+/// avoids relying on pinned entries as an unreliable discriminator.
+#[must_use]
+pub fn quick_access_entries_for_kind(
+    dest_list: &DestList,
+    kind: DestListKind,
+    normal_slot_count: i32,
+) -> Vec<DestListEntry> {
     match dest_list.version {
-        4 => quick_access_entries_v4(&dest_list.entries),
+        4 => quick_access_entries_v4(&dest_list.entries, kind, normal_slot_count),
         6 => quick_access_entries_v6(&dest_list.entries, normal_slot_count),
         _ => dest_list.entries.clone(),
     }
@@ -695,7 +804,14 @@ pub fn quick_access_entries(dest_list: &DestList, normal_slot_count: i32) -> Vec
 /// streams and caller-specific result limits.
 #[must_use]
 pub fn visible_entries(dest_list: &DestList) -> Vec<DestListEntry> {
-    quick_access_entries(dest_list, 4)
+    quick_access_entries(dest_list, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS)
+}
+
+/// Returns metadata-level visibility candidates for an explicit list kind
+/// using Explorer's default four unpinned Frequent Folders slots.
+#[must_use]
+pub fn visible_entries_for_kind(dest_list: &DestList, kind: DestListKind) -> Vec<DestListEntry> {
+    quick_access_entries_for_kind(dest_list, kind, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS)
 }
 
 pub(crate) fn frequent_folder_pin_status(path: &str) -> WincentResult<FrequentFolderPinStatus> {
@@ -763,15 +879,28 @@ fn quick_access_entries_v6(
     pinned
 }
 
-fn quick_access_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
-    if entries.iter().any(|entry| entry.pin_order.is_some()) {
-        frequent_folder_entries_v4(entries)
-    } else {
-        recent_file_entries_v4(entries)
+fn quick_access_entries_v4(
+    entries: &[DestListEntry],
+    kind: DestListKind,
+    normal_slot_count: i32,
+) -> Vec<DestListEntry> {
+    match kind {
+        DestListKind::RecentFiles => recent_file_entries_v4(entries),
+        DestListKind::FrequentFolders => frequent_folder_entries_v4(entries, normal_slot_count),
+        DestListKind::Unknown => {
+            if entries.iter().any(|entry| entry.pin_order.is_some()) {
+                frequent_folder_entries_v4(entries, normal_slot_count)
+            } else {
+                recent_file_entries_v4(entries)
+            }
+        }
     }
 }
 
-fn frequent_folder_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
+fn frequent_folder_entries_v4(
+    entries: &[DestListEntry],
+    normal_slot_count: i32,
+) -> Vec<DestListEntry> {
     let mut pinned: Vec<_> = entries
         .iter()
         .filter(|entry| entry.pin_order.is_some())
@@ -787,7 +916,9 @@ fn frequent_folder_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
     let mut frequent_candidates: Vec<_> = entries
         .iter()
         .filter(|entry| {
-            entry.pin_order.is_none() && entry.access_count > 1 && entry.recent_rank >= 0
+            entry.pin_order.is_none()
+                && entry.access_count >= FREQUENT_FOLDERS_MIN_ACCESS_COUNT
+                && entry.recent_rank >= 0
         })
         .cloned()
         .collect();
@@ -802,7 +933,7 @@ fn frequent_folder_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
             .then_with(|| right.entry_number.cmp(&left.entry_number))
     });
     frequent_candidates.retain(|entry| used_paths.insert(visible_entry_path_key(&entry.path)));
-    frequent_candidates.truncate(4);
+    frequent_candidates.truncate(usize::try_from(normal_slot_count).unwrap_or_default());
 
     pinned.extend(frequent_candidates);
     pinned
@@ -902,7 +1033,21 @@ pub fn frequent_folders_dest_path() -> WincentResult<PathBuf> {
 pub fn parse_file(path: impl AsRef<Path>) -> WincentResult<AutomaticDestinations> {
     let path = path.as_ref();
     let data = fs::read(path).map_err(WincentError::Io)?;
-    parse_bytes(data)
+    parse_bytes_with_kind(data, dest_list_kind_from_path(path))
+}
+
+/// Parses a renamed or copied Automatic Destinations file with an explicit
+/// logical list kind.
+///
+/// # Errors
+///
+/// Returns the same errors as [`parse_file`].
+pub fn parse_file_with_kind(
+    path: impl AsRef<Path>,
+    kind: DestListKind,
+) -> WincentResult<AutomaticDestinations> {
+    let data = fs::read(path).map_err(WincentError::Io)?;
+    parse_bytes_with_kind(data, kind)
 }
 
 /// Parses an `.automaticDestinations-ms` file from an in-memory buffer.
@@ -914,6 +1059,19 @@ pub fn parse_file(path: impl AsRef<Path>) -> WincentResult<AutomaticDestinations
 /// [`WincentError::DestListUnsupportedVersion`] if the DestList version is not
 /// supported.
 pub fn parse_bytes(data: Vec<u8>) -> WincentResult<AutomaticDestinations> {
+    parse_bytes_with_kind(data, DestListKind::Unknown)
+}
+
+/// Parses an in-memory Automatic Destinations file with an explicit logical
+/// list kind.
+///
+/// # Errors
+///
+/// Returns the same errors as [`parse_bytes`].
+pub fn parse_bytes_with_kind(
+    data: Vec<u8>,
+    kind: DestListKind,
+) -> WincentResult<AutomaticDestinations> {
     let cfb = CompoundFile::parse(data).map_err(WincentError::DestListParse)?;
     let dest_list = parse_dest_list(&cfb)?;
     let cfb_info = CfbInfo {
@@ -932,9 +1090,24 @@ pub fn parse_bytes(data: Vec<u8>) -> WincentResult<AutomaticDestinations> {
             .collect(),
     };
     Ok(AutomaticDestinations {
+        kind,
         cfb_info,
         dest_list,
     })
+}
+
+fn dest_list_kind_from_path(path: &Path) -> DestListKind {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return DestListKind::Unknown;
+    };
+
+    if file_name.eq_ignore_ascii_case(RECENT_FILES_APPID) {
+        DestListKind::RecentFiles
+    } else if file_name.eq_ignore_ascii_case(FREQUENT_FOLDERS_APPID) {
+        DestListKind::FrequentFolders
+    } else {
+        DestListKind::Unknown
+    }
 }
 
 fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
@@ -943,7 +1116,7 @@ fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
         .map_err(WincentError::DestListParse)?
         .ok_or_else(|| WincentError::DestListParse("DestList stream not found".to_string()))?;
 
-    if dest_list.len() < 32 {
+    if dest_list.is_empty() {
         return Ok(DestList {
             version: 0,
             declared_entry_count: 0,
@@ -954,11 +1127,18 @@ fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
             last_entry_number: 0,
             add_delete_action_count: 0,
             entries: Vec::new(),
-            diagnostics: vec![Diagnostic::warning(
+            diagnostics: vec![Diagnostic::info(
                 "destlist",
-                format!("DestList stream is too small: {} bytes", dest_list.len()),
+                "DestList stream is empty and has not been initialized",
             )],
         });
+    }
+
+    if dest_list.len() < 32 {
+        return Err(WincentError::DestListParse(format!(
+            "DestList stream is too small: {} bytes",
+            dest_list.len()
+        )));
     }
 
     let version = read_u32(&dest_list, 0).map_err(WincentError::DestListParse)?;
@@ -1712,32 +1892,88 @@ mod tests {
     }
 
     #[test]
+    fn parse_bytes_accepts_zero_length_uninitialized_dest_list() {
+        let parsed = parse_bytes_with_kind(
+            build_minimal_cfb_from_dest_list(Vec::new()),
+            DestListKind::RecentFiles,
+        )
+        .expect("zero-length Explorer DestList should parse");
+
+        assert_eq!(parsed.kind(), DestListKind::RecentFiles);
+        assert!(parsed.dest_list().is_empty_stream());
+        assert_eq!(parsed.dest_list().version(), 0);
+        assert_eq!(parsed.dest_list().entries(), []);
+        assert_eq!(parsed.dest_list().diagnostics().len(), 1);
+        assert_eq!(
+            parsed.dest_list().diagnostics()[0].severity(),
+            DiagnosticSeverity::Info
+        );
+    }
+
+    #[test]
+    fn parse_bytes_rejects_short_nonempty_dest_list() {
+        let result = parse_bytes(build_minimal_cfb_from_dest_list(vec![0; 4]));
+
+        assert!(matches!(result, Err(WincentError::DestListParse(_))));
+    }
+
+    #[test]
+    fn dest_list_kind_is_detected_from_well_known_appid() {
+        assert_eq!(
+            dest_list_kind_from_path(Path::new(RECENT_FILES_APPID)),
+            DestListKind::RecentFiles
+        );
+        assert_eq!(
+            dest_list_kind_from_path(Path::new(&FREQUENT_FOLDERS_APPID.to_ascii_uppercase())),
+            DestListKind::FrequentFolders
+        );
+        assert_eq!(
+            dest_list_kind_from_path(Path::new("captured.cfb")),
+            DestListKind::Unknown
+        );
+    }
+
+    #[test]
     fn visible_entries_v4_frequent_folders_orders_filters_and_dedupes() {
         let entries = vec![
             destlist_entry_for_test("C:\\Pinned2", 2, 2, 5, 3, Some(1)),
             destlist_entry_for_test("C:\\Pinned1", 1, 1, 5, 3, Some(0)),
             destlist_entry_for_test("c:/pinned1/", 7, 7, 0, 4, None),
-            destlist_entry_for_test("C:\\FrequentA", 3, 3, 1, 2, None),
-            destlist_entry_for_test("C:\\FrequentB", 4, 4, 0, 2, None),
+            destlist_entry_for_test("C:\\FrequentA", 3, 3, 1, 3, None),
+            destlist_entry_for_test("C:\\Count2Hidden", 4, 4, 0, 2, None),
             destlist_entry_for_test("C:\\FrequentA", 5, 5, 2, 4, None),
             destlist_entry_for_test("C:\\LowCount", 6, 6, 0, 1, None),
         ];
         let dest = dest_list_for_test(4, entries);
 
-        let visible: Vec<_> = visible_entries(&dest)
+        let visible: Vec<_> = visible_entries_for_kind(&dest, DestListKind::FrequentFolders)
             .into_iter()
             .map(|entry| entry.path().to_string())
             .collect();
 
-        assert_eq!(
-            visible,
-            vec![
-                "C:\\Pinned1",
-                "C:\\Pinned2",
-                "C:\\FrequentB",
-                "C:\\FrequentA"
-            ]
-        );
+        assert_eq!(visible, vec!["C:\\Pinned1", "C:\\Pinned2", "C:\\FrequentA"]);
+    }
+
+    #[test]
+    fn explicit_v4_kind_handles_unpinned_frequent_folders() {
+        let entries = vec![
+            destlist_entry_for_test("C:\\Count1", 1, 1, 0, 1, None),
+            destlist_entry_for_test("C:\\Count2", 2, 2, 1, 2, None),
+            destlist_entry_for_test("C:\\Count3", 3, 3, 2, 3, None),
+        ];
+        let dest = dest_list_for_test(4, entries);
+
+        let frequent: Vec<_> = visible_entries_for_kind(&dest, DestListKind::FrequentFolders)
+            .into_iter()
+            .map(|entry| entry.path().to_string())
+            .collect();
+        let recent: Vec<_> = visible_entries_for_kind(&dest, DestListKind::RecentFiles)
+            .into_iter()
+            .map(|entry| entry.path().to_string())
+            .collect();
+
+        assert_eq!(frequent, vec!["C:\\Count3"]);
+        assert_eq!(recent, vec!["C:\\Count1", "C:\\Count2", "C:\\Count3"]);
     }
 
     #[test]
@@ -1761,6 +1997,34 @@ mod tests {
             visible,
             vec!["C:\\Report.txt", "C:/Folder/İtem.txt/", "C:\\Other.txt"]
         );
+    }
+
+    #[test]
+    fn parsed_visibility_drops_missing_streams_and_shell_query_applies_limit() {
+        let entries: Vec<_> = (1..=25)
+            .map(|number| {
+                destlist_entry_for_test(
+                    &format!("C:\\Recent\\item-{number:02}.txt"),
+                    number,
+                    0,
+                    -1,
+                    1,
+                    None,
+                )
+            })
+            .collect();
+        let stream_names: Vec<_> = (1..=24).map(|number| format!("{number:x}")).collect();
+        let parsed =
+            automatic_destinations_for_test(DestListKind::RecentFiles, entries, &stream_names);
+
+        let visible = parsed.visible_entries();
+        let shell = parsed.shell_entries(DEFAULT_RECENT_FILES_RESULT_LIMIT);
+
+        assert_eq!(visible.len(), 24);
+        assert_eq!(shell.len(), DEFAULT_RECENT_FILES_RESULT_LIMIT);
+        assert_eq!(shell[0].entry_number(), 1);
+        assert_eq!(shell[19].entry_number(), 20);
+        assert!(!visible.iter().any(|entry| entry.entry_number() == 25));
     }
 
     #[test]
@@ -1939,6 +2203,31 @@ mod tests {
         }
     }
 
+    fn automatic_destinations_for_test(
+        kind: DestListKind,
+        entries: Vec<DestListEntry>,
+        stream_names: &[String],
+    ) -> AutomaticDestinations {
+        AutomaticDestinations {
+            kind,
+            cfb_info: CfbInfo {
+                sector_size: 512,
+                mini_sector_size: 64,
+                mini_cutoff_size: 4096,
+                directory_entries: stream_names
+                    .iter()
+                    .map(|name| CfbDirectoryEntry {
+                        name: name.clone(),
+                        object_type: 2,
+                        start_sector: 0,
+                        stream_size: 1,
+                    })
+                    .collect(),
+            },
+            dest_list: dest_list_for_test(4, entries),
+        }
+    }
+
     fn destlist_entry_for_test(
         path: &str,
         entry_number: u32,
@@ -1983,7 +2272,10 @@ mod tests {
     }
 
     fn build_minimal_cfb_with_dest_list(path: &str) -> Vec<u8> {
-        let dest_list = build_dest_list(path);
+        build_minimal_cfb_from_dest_list(build_dest_list(path))
+    }
+
+    fn build_minimal_cfb_from_dest_list(dest_list: Vec<u8>) -> Vec<u8> {
         let num_mini_sectors = dest_list.len().div_ceil(64);
         let mini_stream_size = num_mini_sectors * 64;
         let mut file = vec![0u8; 512 + 512 * 4];

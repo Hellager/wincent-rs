@@ -29,6 +29,9 @@
 //!
 //! **DestList versions 1, 3, 4 and 6 are supported.** Other versions return
 //! [`crate::error::WincentError::DestListUnsupportedVersion`].
+//! Explorer can also keep a zero-length `DestList` stream before the first
+//! item is recorded. The parser represents that uninitialized state as version
+//! `0`; it is not a persisted DestList format version.
 //!
 //! A parsed entry is not necessarily visible in Explorer. Explorer also
 //! applies version- and list-specific metadata filters and loads the expected
@@ -36,7 +39,9 @@
 //! Files, a missing stream caused only that candidate to be skipped; Explorer
 //! did not repair the stream, remove the dangling entry, or rebuild the file.
 //! [`visible_entries`] returns metadata-level candidates and does not validate
-//! stream availability or apply a caller-specific result limit.
+//! stream availability or apply a caller-specific result limit. Parsed files
+//! expose [`AutomaticDestinations::visible_entries`] and
+//! [`AutomaticDestinations::shell_entries`] for stream-aware results.
 
 pub(super) mod cfb;
 /// Internal destructive tests for removing entries by rebuilding Explorer backing files.
@@ -51,8 +56,11 @@ pub mod time;
 
 pub(crate) use parser::frequent_folder_pin_status;
 pub use parser::{
-    entries, frequent_folders_dest_path, parse_bytes, parse_file, quick_access_entries,
-    recent_files_dest_path, visible_entries, AutomaticDestinations, CfbDirectoryEntry, CfbInfo,
-    DestList, DestListEntry, Diagnostic, DiagnosticSeverity, FrequentFolderPinStatus, PathSource,
+    entries, frequent_folders_dest_path, parse_bytes, parse_bytes_with_kind, parse_file,
+    parse_file_with_kind, quick_access_entries, quick_access_entries_for_kind,
+    recent_files_dest_path, visible_entries, visible_entries_for_kind, AutomaticDestinations,
+    CfbDirectoryEntry, CfbInfo, DestList, DestListEntry, DestListKind, Diagnostic,
+    DiagnosticSeverity, FrequentFolderPinStatus, PathSource, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
+    DEFAULT_RECENT_FILES_RESULT_LIMIT, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
 };
 pub use time::filetime_to_system_time;

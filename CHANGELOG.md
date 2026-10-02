@@ -1,9 +1,17 @@
 ## Unreleased
 
+### Added
+- Kind-aware DestList parsing for Recent Files and Frequent Folders, including
+  stream-backed visibility candidates and bounded Shell-query results
+
 ### Changed
 - `QuickAccessLock` can now be moved to another thread for unlocking or dropping
 - Visibility refresh failures now report that the registry mutation completed; callers
   should not retry the registry write for `VisibilityPostMutationFailure`
+- DestList v4 Frequent Folders now require `access_count >= 3` for unpinned
+  visibility candidates, matching Windows 10 1809 and 22H2 observations
+- Zero-length DestList streams are represented as an uninitialized empty state;
+  non-empty streams shorter than the 32-byte header are rejected as malformed
 
 ## [0.2.6] - 2026-07-09
 
