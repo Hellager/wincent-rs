@@ -507,7 +507,7 @@ pub struct DestListEntry {
     pub(crate) last_interaction_filetime: Option<u64>,
     /// Serialized property-store size when present.
     pub(crate) sps_size: Option<u32>,
-    /// Reserved field at entry offset `0x78` for v3/v4/v6.
+    /// Reserved field at entry offset `0x78` for v4/v6.
     ///
     /// An observed Windows 10 v4 Recent Files logical removal changed this
     /// from `0` to `1` while zeroing score and access count. Directly setting
@@ -515,7 +515,7 @@ pub struct DestListEntry {
     /// fields were not varied independently. Whether this field alone controls
     /// visibility, and its meaning in other versions, remains unconfirmed.
     pub(crate) reserved_78: Option<u32>,
-    /// Reserved field at entry offset `0x7c` for v3/v4/v6.
+    /// Reserved field at entry offset `0x7c` for v4/v6.
     pub(crate) reserved_7c: Option<u32>,
     /// Path candidates observed while resolving this entry.
     pub(crate) path_sources: Vec<PathSource>,
@@ -715,7 +715,7 @@ impl DestListEntry {
         self.sps_size
     }
 
-    /// Reserved field at entry offset `0x78` for v3/v4/v6.
+    /// Reserved field at entry offset `0x78` for v4/v6.
     ///
     /// An observed Windows 10 v4 Recent Files logical removal changed this
     /// from `0` to `1` while zeroing score and access count. Directly setting
@@ -727,7 +727,7 @@ impl DestListEntry {
         self.reserved_78
     }
 
-    /// Reserved field at entry offset `0x7c` for v3/v4/v6.
+    /// Reserved field at entry offset `0x7c` for v4/v6.
     #[must_use]
     pub fn reserved_7c(&self) -> Option<u32> {
         self.reserved_7c
@@ -1150,7 +1150,7 @@ fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
     }
 
     let version = read_u32(&dest_list, 0).map_err(WincentError::DestListParse)?;
-    if !matches!(version, 1 | 3 | 4 | 6) {
+    if !matches!(version, 4 | 6) {
         return Err(WincentError::DestListUnsupportedVersion(version));
     }
 
@@ -1213,59 +1213,12 @@ fn parse_dest_list_entry(
     offset: usize,
 ) -> Result<Option<DestListEntry>, String> {
     match version {
-        1 => parse_dest_list_entry_v1(cfb, dest_list, mru_position, offset),
-        3 | 4 | 6 => parse_dest_list_entry_v2_or_later(cfb, dest_list, mru_position, offset),
+        4 | 6 => parse_dest_list_entry_v4_or_v6(cfb, dest_list, mru_position, offset),
         _ => Err(format!("unsupported DestList version {version}")),
     }
 }
 
-fn parse_dest_list_entry_v1(
-    cfb: &CompoundFile,
-    dest_list: &[u8],
-    mru_position: usize,
-    offset: usize,
-) -> Result<Option<DestListEntry>, String> {
-    if offset + 0x72 > dest_list.len() {
-        return Ok(None);
-    }
-
-    let entry_id = read_u64(dest_list, offset + 0x58)?;
-    let entry_number = entry_id as u32;
-    let entry_number_unknown = (entry_id >> 32) as u32;
-    let score = f32::from_bits(read_u32(dest_list, offset + 0x60)?);
-    let last_interaction_filetime = read_u64(dest_list, offset + 0x64).ok();
-    let pin_status = read_i32(dest_list, offset + 0x6c)?;
-    let path_chars = read_u16(dest_list, offset + 0x70)? as usize;
-    let path_start = offset + 0x72;
-    let path_end = path_start
-        .checked_add(path_chars.saturating_mul(2))
-        .ok_or_else(|| "DestList v1 path size overflow".to_string())?;
-    if path_end > dest_list.len() {
-        return Ok(None);
-    }
-
-    Ok(Some(build_entry(
-        cfb,
-        dest_list,
-        offset,
-        path_end - offset,
-        mru_position,
-        entry_id,
-        entry_number,
-        entry_number_unknown,
-        &dest_list[path_start..path_end],
-        pin_status,
-        -1,
-        0,
-        score,
-        last_interaction_filetime,
-        None,
-        None,
-        None,
-    )))
-}
-
-fn parse_dest_list_entry_v2_or_later(
+fn parse_dest_list_entry_v4_or_v6(
     cfb: &CompoundFile,
     dest_list: &[u8],
     mru_position: usize,
@@ -1926,6 +1879,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_bytes_rejects_dest_list_versions_before_v4() {
+        for version in 0..4 {
+            let result = parse_bytes(build_minimal_cfb_from_dest_list(build_empty_dest_list(
+                version,
+            )));
+
+            assert!(matches!(
+                result,
+                Err(WincentError::DestListUnsupportedVersion(actual)) if actual == version
+            ));
+        }
+    }
+
+    #[test]
+    fn parse_bytes_accepts_empty_v4_and_v6_dest_lists() {
+        for version in [4, 6] {
+            let parsed = parse_bytes(build_minimal_cfb_from_dest_list(build_empty_dest_list(
+                version,
+            )))
+            .expect("supported empty DestList header should parse");
+
+            assert_eq!(parsed.dest_list().version(), version);
+            assert_eq!(parsed.dest_list().declared_entry_count(), 0);
+            assert!(parsed.dest_list().entries().is_empty());
+            assert!(!parsed.dest_list().is_empty_stream());
+        }
+    }
+
+    #[test]
     fn dest_list_kind_is_detected_from_well_known_appid() {
         assert_eq!(
             dest_list_kind_from_path(Path::new(RECENT_FILES_APPID)),
@@ -2379,6 +2361,12 @@ mod tests {
         write_u16(&mut data, offset + 0x80, path.encode_utf16().count() as u16);
         data[offset + 0x82..offset + 0x82 + path_bytes.len()].copy_from_slice(&path_bytes);
         write_u32(&mut data, offset + 0x82 + path_bytes.len(), 0);
+        data
+    }
+
+    fn build_empty_dest_list(version: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 32];
+        write_u32(&mut data, 0, version);
         data
     }
 

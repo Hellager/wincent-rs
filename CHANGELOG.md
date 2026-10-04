@@ -12,6 +12,8 @@
   visibility candidates, matching Windows 10 1809 and 22H2 observations
 - Zero-length DestList streams are represented as an uninitialized empty state;
   non-empty streams shorter than the 32-byte header are rejected as malformed
+- DestList parsing now supports only persisted versions 4 and 6; persisted
+  versions below 4 return `DestListUnsupportedVersion`
 
 ## [0.2.6] - 2026-07-09
 

@@ -27,7 +27,7 @@
 //!
 //! # Known Limitations
 //!
-//! **DestList versions 1, 3, 4 and 6 are supported.** Other versions return
+//! **DestList versions 4 and 6 are supported.** Other persisted versions return
 //! [`crate::error::WincentError::DestListUnsupportedVersion`].
 //! Explorer can also keep a zero-length `DestList` stream before the first
 //! item is recorded. The parser represents that uninitialized state as version
