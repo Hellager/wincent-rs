@@ -14,7 +14,9 @@
 //! # Data Characteristics
 //! - Updated automatically by Windows Explorer
 //! - Contains user-specific activity data
-//! - Maximum 20 items per category (Windows default)
+//! - Shell result sizes are version- and category-dependent; Windows 10
+//!   Recent Files currently returns 20 items in the observed default query
+//!   path on builds 17763.1 and 19045.6456
 
 #[cfg(test)]
 use crate::com::{ComGuard, ComInitStatus};
@@ -472,8 +474,10 @@ fn merge_quick_access_items(mut recent: Vec<String>, frequent: Vec<String>) -> V
 /// Gets a list of recent files from Windows Quick Access.
 ///
 /// This function retrieves files that Windows has tracked as recently accessed.
-/// The list is automatically maintained by Windows Explorer and typically contains
-/// up to 20 items (Windows default limit).
+/// The list is automatically maintained by Windows Explorer. On the observed
+/// Windows 10 17763.1 and 19045.6456 default Shell query paths it returns at
+/// most 20 items, while the backing DestList can retain more entries. This is
+/// not a public cross-version limit.
 ///
 /// # Returns
 ///
@@ -509,8 +513,9 @@ pub(crate) fn get_recent_files() -> WincentResult<Vec<String>> {
 /// Gets a list of frequent folders from Windows Quick Access.
 ///
 /// This function retrieves folders that Windows has tracked as frequently accessed.
-/// Windows automatically maintains this list based on user activity, typically containing
-/// up to 20 items (Windows default limit).
+/// Windows automatically maintains this list based on user activity. Its result
+/// count is implementation- and build-dependent; do not infer the Recent Files
+/// 20-item observation as a Frequent Folders contract.
 ///
 /// # Returns
 ///

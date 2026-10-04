@@ -12,12 +12,20 @@ use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, Com
 pub const RECENT_FILES_APPID: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
 /// Explorer Frequent Folders automatic destination AppID hash.
 pub const FREQUENT_FOLDERS_APPID: &str = "f01b4d95cf55d32a.automaticDestinations-ms";
-/// Result limit used by Explorer's default Recent Files namespace query.
+/// Observed result window for Explorer's default Recent Files namespace query.
 ///
-/// Windows 10 1809 and 22H2 both retained more raw entries while returning at
-/// most 20 Recent Files from the default Shell query.
+/// Windows 10 1809 (`17763.1`) and 22H2 (`19045.6456`) both retained more raw
+/// entries while returning at most 20 Recent Files from the default Shell
+/// query. This is an implementation detail observed on those builds, not a
+/// public registry/SDK constant; callers of public Shell APIs can request a
+/// different count.
 pub const DEFAULT_RECENT_FILES_RESULT_LIMIT: usize = 20;
-/// Number of unpinned Frequent Folders slots observed in Explorer Quick Access.
+/// Observed number of unpinned Frequent Folders slots in Explorer Quick Access.
+///
+/// The value `4` was read from the private `s_unpinnedDisplayCap` variable on
+/// Windows 10 1809 (`17763.1`). The 22H2 experiments confirmed the access-count
+/// threshold but did not independently inspect this private variable, so this
+/// remains an observed heuristic rather than a cross-version Windows contract.
 pub const DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS: i32 = 4;
 /// Minimum access count observed for an unpinned Frequent Folders entry to be
 /// returned by Explorer on Windows 10 1809 and 22H2.
@@ -769,7 +777,7 @@ pub fn entries(dest_list: &DestList) -> Vec<DestListEntry> {
 /// Prefer [`quick_access_entries_for_kind`] or
 /// [`AutomaticDestinations::quick_access_entries`] when the AppID is known.
 /// The `normal_slot_count` controls how many non-pinned normal entries are
-/// considered; Explorer commonly uses 4.
+/// considered; 4 is the observed Windows 10 1809 heuristic.
 ///
 /// These are metadata-level candidates. The function does not verify that an
 /// entry's expected Shell Link stream exists or can be loaded, and it does not
@@ -798,7 +806,7 @@ pub fn quick_access_entries_for_kind(
     }
 }
 
-/// Returns metadata-level visibility candidates using 4 normal slots.
+/// Returns metadata-level visibility candidates using the observed four normal slots.
 ///
 /// See [`quick_access_entries`] for limitations around missing Shell Link
 /// streams and caller-specific result limits.
