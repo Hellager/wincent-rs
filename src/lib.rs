@@ -134,10 +134,10 @@ pub mod prelude {
         parse_bytes as parse_dest_bytes, parse_bytes_with_kind as parse_dest_bytes_with_kind,
         parse_file as parse_dest_file, parse_file_with_kind as parse_dest_file_with_kind,
         quick_access_entries, quick_access_entries_for_kind, recent_files_dest_path,
-        visible_entries, visible_entries_for_kind, AutomaticDestinations, CfbInfo, DestList,
-        DestListEntry, DestListKind, Diagnostic, DiagnosticSeverity, FrequentFolderPinStatus,
-        PathSource, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS, DEFAULT_RECENT_FILES_RESULT_LIMIT,
-        FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
+        visible_entries, visible_entries_for_kind, AutomaticDestinations, CfbInfo, CfbStream,
+        DestList, DestListEntry, DestListKind, Diagnostic, DiagnosticSeverity,
+        FrequentFolderPinStatus, PathSource, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
+        DEFAULT_RECENT_FILES_RESULT_LIMIT, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
     };
 }
 

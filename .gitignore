@@ -24,3 +24,5 @@ Cargo.lock
 .claude/
 .idea/
 temp/
+.rust-skills
+.testagent

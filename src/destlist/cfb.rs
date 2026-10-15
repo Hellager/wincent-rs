@@ -1,333 +1,139 @@
-use std::collections::HashSet;
+use std::io::{Cursor, Read};
+use std::path::PathBuf;
 
-pub(super) const END_OF_CHAIN: u32 = 0xFFFF_FFFE;
-pub(super) const FREE_SECTOR: u32 = 0xFFFF_FFFF;
-const FAT_SECTOR: u32 = 0xFFFF_FFFD;
-const DIFAT_SECTOR: u32 = 0xFFFF_FFFC;
+#[cfg(test)]
+use std::path::Path;
 
 pub(super) type CfbResult<T> = Result<T, String>;
 
 #[derive(Debug, Clone)]
 pub(super) struct DirectoryEntry {
     pub(super) name: String,
+    pub(super) path: PathBuf,
     pub(super) object_type: u8,
-    pub(super) start_sector: u32,
+    pub(super) start_sector: Option<u32>,
     pub(super) stream_size: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct StreamData {
+    pub(super) name: String,
+    pub(super) path: PathBuf,
+    pub(super) data: Vec<u8>,
 }
 
 #[derive(Debug)]
 pub(super) struct CompoundFile {
-    pub(super) data: Vec<u8>,
+    pub(super) major_version: u16,
     pub(super) sector_size: usize,
     pub(super) mini_sector_size: usize,
     pub(super) mini_cutoff_size: u32,
-    pub(super) fat: Vec<u32>,
-    mini_fat: Vec<u32>,
     pub(super) directory: Vec<DirectoryEntry>,
-    root_stream: Vec<u8>,
+    pub(super) streams: Vec<StreamData>,
 }
 
 impl CompoundFile {
     pub(super) fn parse(data: Vec<u8>) -> CfbResult<Self> {
-        if data.len() < 512 {
-            return Err("file is too small for a CFB header".to_string());
-        }
-        if data.get(0..8) != Some(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
-            return Err("not an OLE Compound File Binary".to_string());
-        }
-        if read_u16(&data, 0x1c)? != 0xFFFE {
-            return Err("not a little-endian CFB file".to_string());
-        }
-        let major_version = read_u16(&data, 0x1a)?;
-        if major_version != 3 && major_version != 4 {
-            return Err(format!(
-                "unsupported CFB major version {major_version:#06x}"
-            ));
-        }
+        let mut compound = ::cfb::CompoundFile::open(Cursor::new(data)).map_err(|error| {
+            format!("failed to parse OLE Compound File Binary container: {error}")
+        })?;
 
-        let sector_size = 1usize
-            .checked_shl(read_u16(&data, 0x1e)? as u32)
-            .ok_or_else(|| "invalid sector size shift".to_string())?;
-        if sector_size != 512 && sector_size != 4096 {
-            return Err(format!(
-                "unsupported CFB sector size {sector_size}: expected 512 or 4096"
-            ));
-        }
-        let mini_sector_size = 1usize
-            .checked_shl(read_u16(&data, 0x20)? as u32)
-            .ok_or_else(|| "invalid mini sector size shift".to_string())?;
-        if mini_sector_size != 64 {
-            return Err(format!(
-                "unsupported CFB mini sector size {mini_sector_size}: expected 64"
-            ));
-        }
-        let first_dir_sector = read_u32(&data, 0x30)?;
-        let mini_cutoff_size = read_u32(&data, 0x38)?;
-        if mini_cutoff_size != 0x1000 {
-            return Err(format!(
-                "invalid CFB mini stream cutoff size {mini_cutoff_size:#x}: expected 0x1000"
-            ));
-        }
-        let first_mini_fat_sector = read_u32(&data, 0x3c)?;
-        let num_mini_fat_sectors = read_u32(&data, 0x40)? as usize;
-        let first_difat_sector = read_u32(&data, 0x44)?;
-        let num_difat_sectors = read_u32(&data, 0x48)? as usize;
-
-        let fat_sector_ids = read_difat(&data, sector_size, first_difat_sector, num_difat_sectors)?;
-        let fat = read_fat(&data, sector_size, &fat_sector_ids)?;
-
-        let directory_stream = read_regular_stream(&data, sector_size, &fat, first_dir_sector)?;
-        let directory = parse_directory(&directory_stream)?;
-        let root = directory
-            .iter()
-            .find(|entry| entry.object_type == 5)
-            .ok_or_else(|| "root storage entry not found".to_string())?;
-        let root_stream = read_regular_stream_sized(
-            &data,
-            sector_size,
-            &fat,
-            root.start_sector,
-            root.stream_size as usize,
-        )?;
-
-        let mini_fat = if first_mini_fat_sector == FREE_SECTOR
-            || first_mini_fat_sector == END_OF_CHAIN
-            || num_mini_fat_sectors == 0
-        {
-            Vec::new()
-        } else {
-            let bytes = read_regular_stream_sized(
-                &data,
-                sector_size,
-                &fat,
-                first_mini_fat_sector,
-                num_mini_fat_sectors * sector_size,
-            )?;
-            bytes
-                .chunks_exact(4)
-                .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("4-byte chunk")))
-                .collect()
+        let (major_version, sector_size) = match compound.version() {
+            ::cfb::Version::V3 => (3, 512),
+            ::cfb::Version::V4 => (4, 4096),
         };
 
+        let entries: Vec<_> = compound.walk().collect();
+        let directory = entries
+            .iter()
+            .map(|entry| DirectoryEntry {
+                name: entry.name().to_string(),
+                path: entry.path().to_path_buf(),
+                object_type: object_type(entry),
+                // rust-cfb exposes logical objects, not allocator-specific sectors.
+                start_sector: None,
+                stream_size: entry.len(),
+            })
+            .collect();
+
+        let mut streams = Vec::new();
+        for entry in entries.iter().filter(|entry| entry.is_stream()) {
+            streams.push(read_stream(&mut compound, entry)?);
+        }
+
         Ok(Self {
-            data,
+            major_version,
             sector_size,
-            mini_sector_size,
-            mini_cutoff_size,
-            fat,
-            mini_fat,
+            mini_sector_size: 64,
+            mini_cutoff_size: 4096,
             directory,
-            root_stream,
+            streams,
         })
     }
 
-    pub(super) fn stream(&self, name: &str) -> CfbResult<Option<Vec<u8>>> {
-        let Some(entry) = self
-            .directory
+    pub(super) fn stream(&self, name: &str) -> Option<&[u8]> {
+        self.streams
             .iter()
-            .find(|entry| entry.object_type == 2 && entry.name.eq_ignore_ascii_case(name))
-        else {
-            return Ok(None);
-        };
-
-        let size = entry.stream_size as usize;
-        if size < self.mini_cutoff_size as usize {
-            self.read_mini_stream(entry.start_sector, size).map(Some)
-        } else {
-            read_regular_stream_sized(
-                &self.data,
-                self.sector_size,
-                &self.fat,
-                entry.start_sector,
-                size,
-            )
-            .map(Some)
-        }
+            .find(|stream| stream.name.eq_ignore_ascii_case(name))
+            .map(|stream| stream.data.as_slice())
     }
 
-    fn read_mini_stream(&self, start_sector: u32, size: usize) -> CfbResult<Vec<u8>> {
-        if size == 0 {
-            return Ok(Vec::new());
-        }
-
-        let chain = sector_chain(&self.mini_fat, start_sector)?;
-        let mut out = Vec::with_capacity(size);
-        for mini_sector in chain {
-            let offset = mini_sector as usize * self.mini_sector_size;
-            let end = offset + self.mini_sector_size;
-            let sector = self
-                .root_stream
-                .get(offset..end)
-                .ok_or_else(|| format!("mini sector {mini_sector} is out of bounds"))?;
-            out.extend_from_slice(sector);
-            if out.len() >= size {
-                break;
-            }
-        }
-        out.truncate(size);
-        Ok(out)
+    #[cfg(test)]
+    pub(super) fn stream_at(&self, path: &Path) -> Option<&[u8]> {
+        self.streams
+            .iter()
+            .find(|stream| stream.path == path)
+            .map(|stream| stream.data.as_slice())
     }
 }
 
-pub(super) fn sector_chain(fat: &[u32], start_sector: u32) -> CfbResult<Vec<u32>> {
-    if start_sector == FREE_SECTOR || start_sector == END_OF_CHAIN {
-        return Ok(Vec::new());
+fn object_type(entry: &::cfb::Entry) -> u8 {
+    if entry.is_root() {
+        5
+    } else if entry.is_stream() {
+        2
+    } else {
+        1
     }
-
-    let mut chain = Vec::new();
-    let mut seen = HashSet::new();
-    let mut sector = start_sector;
-
-    loop {
-        if sector == END_OF_CHAIN {
-            break;
-        }
-        if sector == FREE_SECTOR || sector == FAT_SECTOR || sector == DIFAT_SECTOR {
-            return Err(format!("invalid sector marker {sector:#x} in chain"));
-        }
-        let index = sector as usize;
-        if index >= fat.len() {
-            return Err(format!("sector {sector} is outside the FAT"));
-        }
-        if !seen.insert(sector) {
-            return Err(format!("loop detected in sector chain at sector {sector}"));
-        }
-        chain.push(sector);
-        sector = fat[index];
-    }
-
-    Ok(chain)
 }
 
-pub(super) fn read_regular_stream_sized(
-    data: &[u8],
-    sector_size: usize,
-    fat: &[u32],
-    start_sector: u32,
-    size: usize,
-) -> CfbResult<Vec<u8>> {
-    let mut out = read_regular_stream(data, sector_size, fat, start_sector)?;
-    out.truncate(size);
-    Ok(out)
-}
-
-fn read_regular_stream(
-    data: &[u8],
-    sector_size: usize,
-    fat: &[u32],
-    start_sector: u32,
-) -> CfbResult<Vec<u8>> {
-    let chain = sector_chain(fat, start_sector)?;
-    let mut out = Vec::new();
-    for sector_id in chain {
-        out.extend_from_slice(stream_sector_slice(data, sector_size, sector_id)?);
-    }
-    Ok(out)
-}
-
-fn read_difat(
-    data: &[u8],
-    sector_size: usize,
-    first_difat_sector: u32,
-    num_difat_sectors: usize,
-) -> CfbResult<Vec<u32>> {
-    let mut fat_sector_ids = Vec::new();
-    for index in 0..109 {
-        let sector_id = read_u32(data, 0x4c + index * 4)?;
-        if sector_id != FREE_SECTOR && sector_id != END_OF_CHAIN {
-            fat_sector_ids.push(sector_id);
-        }
+fn read_stream(
+    compound: &mut ::cfb::CompoundFile<Cursor<Vec<u8>>>,
+    entry: &::cfb::Entry,
+) -> CfbResult<StreamData> {
+    let expected_len = usize::try_from(entry.len()).map_err(|_| {
+        format!(
+            "CFB stream `{}` is too large to fit in memory: {} bytes",
+            entry.path().display(),
+            entry.len()
+        )
+    })?;
+    let mut stream = compound.open_stream(entry.path()).map_err(|error| {
+        format!(
+            "failed to open CFB stream `{}`: {error}",
+            entry.path().display()
+        )
+    })?;
+    let mut data = Vec::with_capacity(expected_len);
+    stream.read_to_end(&mut data).map_err(|error| {
+        format!(
+            "failed to read CFB stream `{}`: {error}",
+            entry.path().display()
+        )
+    })?;
+    if data.len() != expected_len {
+        return Err(format!(
+            "CFB stream `{}` declared {expected_len} bytes but yielded {} bytes",
+            entry.path().display(),
+            data.len()
+        ));
     }
 
-    let mut next_difat_sector = first_difat_sector;
-    for _ in 0..num_difat_sectors {
-        if next_difat_sector == FREE_SECTOR || next_difat_sector == END_OF_CHAIN {
-            break;
-        }
-
-        let sector = sector_slice(data, sector_size, next_difat_sector)?;
-        let entries_per_sector = sector_size / 4;
-        for index in 0..entries_per_sector - 1 {
-            let sector_id = u32::from_le_bytes(
-                sector[index * 4..index * 4 + 4]
-                    .try_into()
-                    .expect("4-byte chunk"),
-            );
-            if sector_id != FREE_SECTOR && sector_id != END_OF_CHAIN {
-                fat_sector_ids.push(sector_id);
-            }
-        }
-        next_difat_sector = u32::from_le_bytes(
-            sector[(entries_per_sector - 1) * 4..entries_per_sector * 4]
-                .try_into()
-                .expect("4-byte chunk"),
-        );
-    }
-
-    Ok(fat_sector_ids)
-}
-
-fn read_fat(data: &[u8], sector_size: usize, fat_sector_ids: &[u32]) -> CfbResult<Vec<u32>> {
-    let mut fat = Vec::new();
-    for sector_id in fat_sector_ids {
-        let sector = sector_slice(data, sector_size, *sector_id)?;
-        fat.extend(
-            sector
-                .chunks_exact(4)
-                .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("4-byte chunk"))),
-        );
-    }
-    Ok(fat)
-}
-
-fn sector_slice(data: &[u8], sector_size: usize, sector_id: u32) -> CfbResult<&[u8]> {
-    let offset = (sector_id as usize + 1)
-        .checked_mul(sector_size)
-        .ok_or_else(|| "sector offset overflow".to_string())?;
-    let end = offset
-        .checked_add(sector_size)
-        .ok_or_else(|| "sector end overflow".to_string())?;
-    data.get(offset..end)
-        .ok_or_else(|| format!("sector {sector_id} is out of bounds"))
-}
-
-fn stream_sector_slice(data: &[u8], sector_size: usize, sector_id: u32) -> CfbResult<&[u8]> {
-    let offset = (sector_id as usize + 1)
-        .checked_mul(sector_size)
-        .ok_or_else(|| "sector offset overflow".to_string())?;
-    if offset >= data.len() {
-        return Err(format!("sector {sector_id} is out of bounds"));
-    }
-    let end = offset
-        .checked_add(sector_size)
-        .ok_or_else(|| "sector end overflow".to_string())?
-        .min(data.len());
-    Ok(&data[offset..end])
-}
-
-fn parse_directory(directory_stream: &[u8]) -> CfbResult<Vec<DirectoryEntry>> {
-    let mut entries = Vec::new();
-    for chunk in directory_stream.chunks_exact(128) {
-        let object_type = chunk[66];
-        if object_type == 0 {
-            continue;
-        }
-
-        let name_len = u16::from_le_bytes(chunk[64..66].try_into().expect("2-byte chunk"));
-        let name = if name_len >= 2 && name_len as usize <= 64 {
-            decode_utf16_lossy(&chunk[..name_len as usize - 2])
-        } else {
-            String::new()
-        };
-
-        entries.push(DirectoryEntry {
-            name,
-            object_type,
-            start_sector: u32::from_le_bytes(chunk[116..120].try_into().expect("4-byte chunk")),
-            stream_size: u64::from_le_bytes(chunk[120..128].try_into().expect("8-byte chunk")),
-        });
-    }
-    Ok(entries)
+    Ok(StreamData {
+        name: entry.name().to_string(),
+        path: entry.path().to_path_buf(),
+        data,
+    })
 }
 
 pub(super) fn decode_utf16_lossy(bytes: &[u8]) -> String {
@@ -369,12 +175,11 @@ pub(super) fn read_u64(data: &[u8], offset: usize) -> CfbResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn rejects_wrong_magic() {
-        let mut data = vec![0u8; 512];
-        // Wrong magic bytes
-        data[0..8].copy_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        let data = vec![0u8; 512];
         let result = CompoundFile::parse(data);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("OLE Compound File Binary"));
@@ -385,70 +190,37 @@ mod tests {
         let data = vec![0u8; 100];
         let result = CompoundFile::parse(data);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("too small"));
+        assert!(result.unwrap_err().contains("OLE Compound File Binary"));
     }
 
     #[test]
-    fn sector_chain_detects_loop() {
-        // fat[0] -> 1, fat[1] -> 0 (loop)
-        let fat = vec![1u32, 0u32];
-        let result = sector_chain(&fat, 0);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("loop detected"));
-    }
+    fn reads_every_stream_from_v3_container() {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ::cfb::CompoundFile::create_with_version(::cfb::Version::V3, cursor)
+            .expect("failed to create test CFB");
 
-    #[test]
-    fn sector_chain_empty_for_free_sector() {
-        let fat = vec![END_OF_CHAIN];
-        let result = sector_chain(&fat, FREE_SECTOR);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
-    }
+        writer
+            .create_stream("/DestList")
+            .expect("failed to create DestList")
+            .write_all(b"dest-list")
+            .expect("failed to write DestList");
+        writer
+            .create_stream("/1")
+            .expect("failed to create numeric stream")
+            .write_all(b"shell-link")
+            .expect("failed to write numeric stream");
+        writer.flush().expect("failed to flush test CFB");
 
-    #[test]
-    fn sector_chain_out_of_bounds() {
-        let fat = vec![END_OF_CHAIN];
-        // sector 5 is outside fat of length 1
-        let result = sector_chain(&fat, 5);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("outside the FAT"));
-    }
+        let parsed = CompoundFile::parse(writer.into_inner().into_inner())
+            .expect("failed to parse test CFB");
 
-    #[test]
-    fn regular_stream_allows_short_final_physical_sector() {
-        let mut data = vec![0u8; 512];
-        data.extend(std::iter::repeat_n(1u8, 512));
-        data.extend(std::iter::repeat_n(2u8, 10));
-        let fat = vec![1, END_OF_CHAIN];
-
-        let stream = read_regular_stream_sized(&data, 512, &fat, 0, 522).unwrap();
-
-        assert_eq!(stream.len(), 522);
-        assert!(stream[..512].iter().all(|byte| *byte == 1));
-        assert!(stream[512..].iter().all(|byte| *byte == 2));
-    }
-
-    #[test]
-    fn fat_sector_slice_still_requires_full_sector() {
-        let data = vec![0u8; 512 + 10];
-
-        let result = sector_slice(&data, 512, 0);
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("sector 0 is out of bounds"));
-    }
-
-    #[test]
-    fn rejects_invalid_sector_size() {
-        let mut data = vec![0u8; 512];
-        data[0..8].copy_from_slice(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
-        data[0x1a..0x1c].copy_from_slice(&3u16.to_le_bytes());
-        data[0x1c..0x1e].copy_from_slice(&0xFFFEu16.to_le_bytes());
-        // Sector size shift of 1 → sector_size = 2, which is neither 512 nor 4096.
-        data[0x1e..0x20].copy_from_slice(&1u16.to_le_bytes());
-        data[0x20..0x22].copy_from_slice(&6u16.to_le_bytes()); // mini: 64
-        let result = CompoundFile::parse(data);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unsupported CFB sector size"));
+        assert_eq!(parsed.major_version, 3);
+        assert_eq!(parsed.streams.len(), 2);
+        assert_eq!(parsed.stream("DestList"), Some(b"dest-list".as_slice()));
+        assert_eq!(parsed.stream("1"), Some(b"shell-link".as_slice()));
+        assert_eq!(
+            parsed.stream_at(Path::new("/DestList")),
+            Some(b"dest-list".as_slice())
+        );
     }
 }

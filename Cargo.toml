@@ -15,6 +15,7 @@ A library for handling windows quick access
 """
 
 [dependencies]
+cfb = "0.15.0"
 md5 = "0.8.0"
 thiserror = "2.0.18"
 rand = "0.10.1"

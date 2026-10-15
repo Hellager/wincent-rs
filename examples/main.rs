@@ -829,7 +829,9 @@ fn reveal_in_explorer(path: &Path) -> WincentResult<()> {
     let mut child = std::process::Command::new("explorer.exe")
         .arg(select)
         .spawn()
-        .map_err(|error| WincentError::SystemError(format!("failed to launch explorer: {error}")))?;
+        .map_err(|error| {
+            WincentError::SystemError(format!("failed to launch explorer: {error}"))
+        })?;
 
     // explorer.exe exits with status 1 even when /select succeeds, so exit
     // status is unreliable; only a spawn failure counts as an error.
@@ -1068,17 +1070,28 @@ fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
     let cfb = parsed.cfb_info();
     let dest = parsed.dest_list();
 
+    println!("cfb.major_version: {}", cfb.major_version());
     println!("cfb.sector_size: {}", cfb.sector_size());
     println!("cfb.mini_sector_size: {}", cfb.mini_sector_size());
     println!("cfb.mini_cutoff_size: {}", cfb.mini_cutoff_size());
     println!("cfb.directory_entries: {}", cfb.directory_entries().len());
     for entry in cfb.directory_entries().iter().take(limit) {
         println!(
-            "cfb.entry name={} type={} start_sector={} stream_size={}",
+            "cfb.entry name={} path={} type={} start_sector={:?} stream_size={}",
             entry.name(),
+            entry.path().display(),
             entry.object_type(),
             entry.start_sector(),
             entry.stream_size()
+        );
+    }
+    println!("cfb.streams: {}", cfb.streams().len());
+    for stream in cfb.streams().iter().take(limit) {
+        println!(
+            "cfb.stream name={} path={} size={}",
+            stream.name(),
+            stream.path().display(),
+            stream.len()
         );
     }
 

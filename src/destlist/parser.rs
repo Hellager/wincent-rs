@@ -125,21 +125,16 @@ impl AutomaticDestinations {
 
     fn has_shell_link_stream(&self, entry: &DestListEntry) -> bool {
         self.cfb_info
-            .directory_entries
-            .iter()
-            .any(|directory_entry| {
-                directory_entry.object_type == 2
-                    && directory_entry.stream_size > 0
-                    && directory_entry
-                        .name
-                        .eq_ignore_ascii_case(entry.stream_name())
-            })
+            .stream(entry.stream_name())
+            .is_some_and(|stream| !stream.is_empty())
     }
 }
 
 /// CFB container metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfbInfo {
+    /// CFB major version (`3` or `4`).
+    pub(crate) major_version: u16,
     /// Regular sector size in bytes.
     pub(crate) sector_size: usize,
     /// Mini-sector size in bytes.
@@ -148,9 +143,17 @@ pub struct CfbInfo {
     pub(crate) mini_cutoff_size: u32,
     /// Directory entries found in the CFB container.
     pub(crate) directory_entries: Vec<CfbDirectoryEntry>,
+    /// Complete contents of every stream in the CFB container.
+    pub(crate) streams: Vec<CfbStream>,
 }
 
 impl CfbInfo {
+    /// CFB major version (`3` or `4`).
+    #[must_use]
+    pub fn major_version(&self) -> u16 {
+        self.major_version
+    }
+
     /// Regular sector size in bytes.
     #[must_use]
     pub fn sector_size(&self) -> usize {
@@ -174,6 +177,27 @@ impl CfbInfo {
     pub fn directory_entries(&self) -> &[CfbDirectoryEntry] {
         &self.directory_entries
     }
+
+    /// Complete contents of every stream in the CFB container.
+    #[must_use]
+    pub fn streams(&self) -> &[CfbStream] {
+        &self.streams
+    }
+
+    /// Finds a stream by its entry name using CFB's case-insensitive naming.
+    #[must_use]
+    pub fn stream(&self, name: &str) -> Option<&CfbStream> {
+        self.streams
+            .iter()
+            .find(|stream| stream.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Finds a stream by its full path inside the CFB container.
+    #[must_use]
+    pub fn stream_at(&self, path: impl AsRef<Path>) -> Option<&CfbStream> {
+        let path = path.as_ref();
+        self.streams.iter().find(|stream| stream.path == path)
+    }
 }
 
 /// A single CFB directory entry (stream or storage).
@@ -181,11 +205,13 @@ impl CfbInfo {
 pub struct CfbDirectoryEntry {
     /// Directory entry name.
     pub(crate) name: String,
+    /// Full logical path inside the CFB container.
+    pub(crate) path: PathBuf,
     /// Raw CFB object type.
     pub(crate) object_type: u8,
     /// First regular-sector id, or first mini-sector id when the stream is
     /// smaller than [`CfbInfo::mini_cutoff_size`].
-    pub(crate) start_sector: u32,
+    pub(crate) start_sector: Option<u32>,
     /// Stream size in bytes.
     pub(crate) stream_size: u64,
 }
@@ -197,6 +223,12 @@ impl CfbDirectoryEntry {
         &self.name
     }
 
+    /// Full logical path inside the CFB container.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Raw CFB object type.
     #[must_use]
     pub fn object_type(&self) -> u8 {
@@ -206,7 +238,7 @@ impl CfbDirectoryEntry {
     /// First regular-sector id, or first mini-sector id when the stream is
     /// smaller than [`CfbInfo::mini_cutoff_size`].
     #[must_use]
-    pub fn start_sector(&self) -> u32 {
+    pub fn start_sector(&self) -> Option<u32> {
         self.start_sector
     }
 
@@ -214,6 +246,49 @@ impl CfbDirectoryEntry {
     #[must_use]
     pub fn stream_size(&self) -> u64 {
         self.stream_size
+    }
+}
+
+/// A fully-read CFB stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CfbStream {
+    /// Stream entry name.
+    pub(crate) name: String,
+    /// Full logical path inside the CFB container.
+    pub(crate) path: PathBuf,
+    /// Complete stream contents.
+    pub(crate) data: Vec<u8>,
+}
+
+impl CfbStream {
+    /// Stream entry name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Full logical path inside the CFB container.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Stream length in bytes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Whether the stream is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Complete stream contents.
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
     }
 }
 
@@ -1083,6 +1158,7 @@ pub fn parse_bytes_with_kind(
     let cfb = CompoundFile::parse(data).map_err(WincentError::DestListParse)?;
     let dest_list = parse_dest_list(&cfb)?;
     let cfb_info = CfbInfo {
+        major_version: cfb.major_version,
         sector_size: cfb.sector_size,
         mini_sector_size: cfb.mini_sector_size,
         mini_cutoff_size: cfb.mini_cutoff_size,
@@ -1091,9 +1167,19 @@ pub fn parse_bytes_with_kind(
             .iter()
             .map(|e| CfbDirectoryEntry {
                 name: e.name.clone(),
+                path: e.path.clone(),
                 object_type: e.object_type,
                 start_sector: e.start_sector,
                 stream_size: e.stream_size,
+            })
+            .collect(),
+        streams: cfb
+            .streams
+            .iter()
+            .map(|stream| CfbStream {
+                name: stream.name.clone(),
+                path: stream.path.clone(),
+                data: stream.data.clone(),
             })
             .collect(),
     };
@@ -1121,7 +1207,6 @@ fn dest_list_kind_from_path(path: &Path) -> DestListKind {
 fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
     let dest_list = cfb
         .stream("DestList")
-        .map_err(WincentError::DestListParse)?
         .ok_or_else(|| WincentError::DestListParse("DestList stream not found".to_string()))?;
 
     if dest_list.is_empty() {
@@ -1149,25 +1234,24 @@ fn parse_dest_list(cfb: &CompoundFile) -> WincentResult<DestList> {
         )));
     }
 
-    let version = read_u32(&dest_list, 0).map_err(WincentError::DestListParse)?;
+    let version = read_u32(dest_list, 0).map_err(WincentError::DestListParse)?;
     if !matches!(version, 4 | 6) {
         return Err(WincentError::DestListUnsupportedVersion(version));
     }
 
-    let entry_count = read_u32(&dest_list, 4).map_err(WincentError::DestListParse)? as usize;
-    let pinned_entry_count = read_u32(&dest_list, 8).map_err(WincentError::DestListParse)?;
-    let header_counter_raw = read_u32(&dest_list, 0x0c).map_err(WincentError::DestListParse)?;
+    let entry_count = read_u32(dest_list, 4).map_err(WincentError::DestListParse)? as usize;
+    let pinned_entry_count = read_u32(dest_list, 8).map_err(WincentError::DestListParse)?;
+    let header_counter_raw = read_u32(dest_list, 0x0c).map_err(WincentError::DestListParse)?;
     let header_counter_f32 = f32::from_bits(header_counter_raw);
-    let last_entry_id = read_u64(&dest_list, 0x10).map_err(WincentError::DestListParse)?;
+    let last_entry_id = read_u64(dest_list, 0x10).map_err(WincentError::DestListParse)?;
     let last_entry_number = last_entry_id as u32;
-    let add_delete_action_count =
-        read_u64(&dest_list, 0x18).map_err(WincentError::DestListParse)?;
+    let add_delete_action_count = read_u64(dest_list, 0x18).map_err(WincentError::DestListParse)?;
     let mut offset = 32usize;
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
 
     for i in 0..entry_count {
-        let Some(entry) = parse_dest_list_entry(cfb, &dest_list, version, i, offset)
+        let Some(entry) = parse_dest_list_entry(cfb, dest_list, version, i, offset)
             .map_err(WincentError::DestListParse)?
         else {
             if i == 0 {
@@ -1381,18 +1465,11 @@ fn resolve_path(cfb: &CompoundFile, stream_name: &str, raw_path: &str) -> Resolv
     }
 
     let linked_lnk = match cfb.stream(stream_name) {
-        Ok(Some(stream)) => parse_shell_link_summary(&stream),
-        Ok(None) => {
+        Some(stream) => parse_shell_link_summary(stream),
+        None => {
             warnings.push(Diagnostic::warning(
                 "destlist.link",
                 format!("missing Shell Link stream `{stream_name}`"),
-            ));
-            None
-        }
-        Err(error) => {
-            warnings.push(Diagnostic::warning(
-                "destlist.link",
-                format!("failed to read Shell Link stream `{stream_name}`: {error}"),
             ));
             None
         }
@@ -1800,6 +1877,7 @@ fn mac_from_droid_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Write};
     use std::iter;
 
     #[test]
@@ -2126,14 +2204,54 @@ mod tests {
 
         let parsed = parse_file(&path).expect("failed to parse recent files dest");
         let all = entries(parsed.dest_list());
+        let cfb = parsed.cfb_info();
+        let directory_streams: Vec<_> = cfb
+            .directory_entries()
+            .iter()
+            .filter(|entry| entry.object_type() == 2)
+            .collect();
+
+        assert_eq!(
+            parsed.dest_list().declared_entry_count(),
+            all.len(),
+            "every declared DestList entry must be parsed"
+        );
+        assert_eq!(
+            directory_streams.len(),
+            cfb.streams().len(),
+            "every CFB stream directory entry must be fully read"
+        );
+        for directory_entry in directory_streams {
+            let stream = cfb
+                .stream_at(directory_entry.path())
+                .expect("directory stream was not captured");
+            assert_eq!(
+                directory_entry.stream_size(),
+                stream.len() as u64,
+                "captured stream length differs from directory metadata"
+            );
+        }
 
         println!(
-            "version={} declared={} pinned={} last_entry_id={:#x}",
+            "cfb_version={} directory_entries={} streams={} dest_version={} declared={} parsed={} pinned={} last_entry_id={:#x}",
+            cfb.major_version(),
+            cfb.directory_entries().len(),
+            cfb.streams().len(),
             parsed.dest_list().version(),
             parsed.dest_list().declared_entry_count(),
+            all.len(),
             parsed.dest_list().pinned_entry_count(),
             parsed.dest_list().last_entry_id(),
         );
+        println!("streams:");
+        for stream in cfb.streams() {
+            println!(
+                "  name={} path={} size={}",
+                stream.name(),
+                stream.path().display(),
+                stream.len()
+            );
+        }
         println!("entries ({}):", all.len());
         for e in &all {
             println!(
@@ -2156,11 +2274,42 @@ mod tests {
 
         let parsed = parse_file(&path).expect("failed to parse frequent folders dest");
         let all = entries(parsed.dest_list());
+        let cfb = parsed.cfb_info();
+        let directory_streams: Vec<_> = cfb
+            .directory_entries()
+            .iter()
+            .filter(|entry| entry.object_type() == 2)
+            .collect();
+
+        assert_eq!(
+            parsed.dest_list().declared_entry_count(),
+            all.len(),
+            "every declared DestList entry must be parsed"
+        );
+        assert_eq!(
+            directory_streams.len(),
+            cfb.streams().len(),
+            "every CFB stream directory entry must be fully read"
+        );
+        for directory_entry in directory_streams {
+            let stream = cfb
+                .stream_at(directory_entry.path())
+                .expect("directory stream was not captured");
+            assert_eq!(
+                directory_entry.stream_size(),
+                stream.len() as u64,
+                "captured stream length differs from directory metadata"
+            );
+        }
 
         println!(
-            "version={} declared={} pinned={} last_entry_id={:#x}",
+            "cfb_version={} directory_entries={} streams={} dest_version={} declared={} parsed={} pinned={} last_entry_id={:#x}",
+            cfb.major_version(),
+            cfb.directory_entries().len(),
+            cfb.streams().len(),
             parsed.dest_list().version(),
             parsed.dest_list().declared_entry_count(),
+            all.len(),
             parsed.dest_list().pinned_entry_count(),
             parsed.dest_list().last_entry_id(),
         );
@@ -2201,6 +2350,7 @@ mod tests {
         AutomaticDestinations {
             kind,
             cfb_info: CfbInfo {
+                major_version: 3,
                 sector_size: 512,
                 mini_sector_size: 64,
                 mini_cutoff_size: 4096,
@@ -2208,9 +2358,18 @@ mod tests {
                     .iter()
                     .map(|name| CfbDirectoryEntry {
                         name: name.clone(),
+                        path: PathBuf::from(format!("/{name}")),
                         object_type: 2,
-                        start_sector: 0,
+                        start_sector: None,
                         stream_size: 1,
+                    })
+                    .collect(),
+                streams: stream_names
+                    .iter()
+                    .map(|name| CfbStream {
+                        name: name.clone(),
+                        path: PathBuf::from(format!("/{name}")),
+                        data: vec![1],
                     })
                     .collect(),
             },
@@ -2266,64 +2425,16 @@ mod tests {
     }
 
     fn build_minimal_cfb_from_dest_list(dest_list: Vec<u8>) -> Vec<u8> {
-        let num_mini_sectors = dest_list.len().div_ceil(64);
-        let mini_stream_size = num_mini_sectors * 64;
-        let mut file = vec![0u8; 512 + 512 * 4];
-
-        file[0..8].copy_from_slice(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
-        write_u16(&mut file, 0x1a, 3);
-        write_u16(&mut file, 0x1c, 0xFFFE);
-        write_u16(&mut file, 0x1e, 9);
-        write_u16(&mut file, 0x20, 6);
-        write_u32(&mut file, 0x30, 0);
-        write_u32(&mut file, 0x38, 0x1000);
-        write_u32(&mut file, 0x3c, 2); // mini FAT at sector 2
-        write_u32(&mut file, 0x40, 1);
-        write_u32(&mut file, 0x44, 0xFFFF_FFFF);
-        write_u32(&mut file, 0x48, 0);
-        for index in 0..109 {
-            write_u32(&mut file, 0x4c + index * 4, 0xFFFF_FFFF);
-        }
-        write_u32(&mut file, 0x4c, 3); // regular FAT at sector 3
-
-        // Directory at sector 0: Root Entry (mini stream container at sector 1), DestList in mini sector 0
-        write_directory_entry(&mut file, 512, "Root Entry", 5, 1, mini_stream_size as u64);
-        write_directory_entry(
-            &mut file,
-            512 + 128,
-            "DestList",
-            2,
-            0,
-            dest_list.len() as u64,
-        );
-
-        // Mini stream container at sector 1
-        file[512 + 512..512 + 512 + dest_list.len()].copy_from_slice(&dest_list);
-
-        // Mini FAT at sector 2: chain num_mini_sectors mini sectors then END_OF_CHAIN
-        let mini_fat_offset = 512 + 512 * 2;
-        for i in 0..128usize {
-            let val = if i + 1 < num_mini_sectors {
-                i as u32 + 1
-            } else if i + 1 == num_mini_sectors {
-                0xFFFF_FFFE
-            } else {
-                0xFFFF_FFFF
-            };
-            write_u32(&mut file, mini_fat_offset + i * 4, val);
-        }
-
-        // Regular FAT at sector 3
-        let fat_offset = 512 + 512 * 3;
-        for index in 0..128 {
-            write_u32(&mut file, fat_offset + index * 4, 0xFFFF_FFFF);
-        }
-        write_u32(&mut file, fat_offset, 0xFFFF_FFFE); // sector 0: directory
-        write_u32(&mut file, fat_offset + 4, 0xFFFF_FFFE); // sector 1: mini stream container
-        write_u32(&mut file, fat_offset + 8, 0xFFFF_FFFE); // sector 2: mini FAT
-        write_u32(&mut file, fat_offset + 12, 0xFFFF_FFFD); // sector 3: FAT sector
-
-        file
+        let cursor = Cursor::new(Vec::new());
+        let mut compound = ::cfb::CompoundFile::create_with_version(::cfb::Version::V3, cursor)
+            .expect("failed to create test CFB");
+        compound
+            .create_stream("/DestList")
+            .expect("failed to create DestList stream")
+            .write_all(&dest_list)
+            .expect("failed to write DestList stream");
+        compound.flush().expect("failed to flush test CFB");
+        compound.into_inner().into_inner()
     }
 
     fn build_dest_list(path: &str) -> Vec<u8> {
@@ -2435,22 +2546,6 @@ mod tests {
             append_lnk_string(&mut lnk, relative_path);
         }
         lnk
-    }
-
-    fn write_directory_entry(
-        data: &mut [u8],
-        offset: usize,
-        name: &str,
-        object_type: u8,
-        start_sector: u32,
-        stream_size: u64,
-    ) {
-        let name_bytes = utf16_bytes(&format!("{name}\0"));
-        data[offset..offset + name_bytes.len()].copy_from_slice(&name_bytes);
-        write_u16(data, offset + 64, name_bytes.len() as u16);
-        data[offset + 66] = object_type;
-        write_u32(data, offset + 116, start_sector);
-        write_u64(data, offset + 120, stream_size);
     }
 
     fn append_lnk_string(data: &mut Vec<u8>, value: &str) {
