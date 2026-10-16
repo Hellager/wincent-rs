@@ -1,5 +1,8 @@
 use crate::{
-    destlist::{frequent_folders_dest_path, parse_file, DestListEntry},
+    destlist::{
+        frequent_folders_dest_path, parse_file, recent_files_dest_path, DestListEntry,
+        DEFAULT_RECENT_FILES_RESULT_LIMIT,
+    },
     empty,
     handle::{
         add_file_to_recent_native, add_to_frequent_folders_with_timeout,
@@ -48,6 +51,43 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     fn refresh_explorer(&self, timeout: Duration) -> WincentResult<()>;
 }
 
+/// Tries the CFB rule parser first so the returned path order and filtering
+/// match the custom CAutoList rule result instead of a live Shell query.
+///
+/// Recent Files results are additionally truncated to the same default
+/// 20-item window the observed Shell query uses. Any parse, I/O, or path
+/// resolution error falls back to the caller so the original Shell query
+/// path still runs.
+fn rule_based_items(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+    let (parsed, apply_limit) = match qa_type {
+        QuickAccess::RecentFiles => (parse_file(recent_files_dest_path()?)?, true),
+        QuickAccess::FrequentFolders => (parse_file(frequent_folders_dest_path()?)?, false),
+        QuickAccess::All => {
+            let recent = rule_based_items(QuickAccess::RecentFiles)?;
+            let frequent = rule_based_items(QuickAccess::FrequentFolders)?;
+            let mut merged = recent;
+            for path in frequent {
+                if !merged
+                    .iter()
+                    .any(|existing| crate::utils::paths_equal(existing, &path))
+                {
+                    merged.push(path);
+                }
+            }
+            return Ok(merged);
+        }
+    };
+
+    let mut entries = parsed.rule_entries();
+    if apply_limit {
+        entries.truncate(DEFAULT_RECENT_FILES_RESULT_LIMIT);
+    }
+    Ok(entries
+        .into_iter()
+        .map(|entry| entry.path().to_string())
+        .collect())
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct SystemQuickAccessBackend;
 
@@ -57,7 +97,7 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
     }
 
     fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>> {
-        query::query_recent_with_timeout(qa_type, timeout)
+        rule_based_items(qa_type).or_else(|_| query::query_recent_with_timeout(qa_type, timeout))
     }
 
     fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {

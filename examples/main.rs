@@ -2,15 +2,16 @@ use std::env;
 use std::io::{self, Write};
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wincent::error::{InvalidPathError, PowerShellError, PowerShellErrorKind, WincentError};
 use wincent::prelude::*;
 
 use wincent::destlist::{
     entries as dest_entries, filetime_to_system_time, frequent_folders_dest_path,
-    parse_bytes as parse_dest_bytes, parse_file as parse_dest_file, recent_files_dest_path,
-    AutomaticDestinations,
+    parse_bytes as parse_dest_bytes, parse_file as parse_dest_file,
+    parse_file_with_kind as parse_dest_file_with_kind, recent_files_dest_path,
+    AutomaticDestinations, DestListKind,
 };
 
 fn main() {
@@ -107,6 +108,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "visible" => cmd_visible(&manager, &args[1..]),
         "restore" => cmd_restore(&manager, &args[1..]),
         "dest" => cmd_dest(&manager, &args[1..]),
+        "bench" => cmd_bench(&manager, &args[1..]),
         other => Err(WincentError::InvalidArgument(format!(
             "unknown command: {other}"
         ))),
@@ -199,9 +201,12 @@ DestList APIs:
   dest path <recent|frequent>
   dest reveal <recent|frequent>
   dest parse <recent|frequent|file> [path] [--limit N]
+  dest cfb <recent|frequent|file> [path] [recent|frequent]
+  dest rules <recent|frequent|file> [path] [recent|frequent]
   dest parse-bytes <path> [--limit N]
   dest manager <recent|frequent> [--limit N]
   dest filetime <value>
+  bench <recent|frequent> [--limit N]
 "#
     );
 }
@@ -794,6 +799,8 @@ fn cmd_dest(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> 
             cmd_dest_reveal(parse_dest_kind(&args[1])?)
         }
         "parse" => cmd_dest_parse(&args[1..]),
+        "cfb" => cmd_dest_cfb(&args[1..]),
+        "rules" => cmd_dest_rules(&args[1..]),
         "parse-bytes" => cmd_dest_parse_bytes(&args[1..]),
         "manager" => cmd_dest_manager(manager, &args[1..]),
         "filetime" => {
@@ -872,6 +879,59 @@ fn cmd_dest_parse(args: &[String]) -> WincentResult<()> {
     Ok(())
 }
 
+fn cmd_dest_cfb(args: &[String]) -> WincentResult<()> {
+    let parsed = parse_dest_target(args, "cfb")?;
+    let entries = parsed.cfb_entries();
+    println!("cfb_entries: {}", entries.len());
+    for entry in entries {
+        println!("{}", entry.path());
+    }
+    Ok(())
+}
+
+fn cmd_dest_rules(args: &[String]) -> WincentResult<()> {
+    let parsed = parse_dest_target(args, "rules")?;
+    let entries = parsed.rule_entries();
+    println!("rule_entries: {}", entries.len());
+    for entry in entries {
+        println!("{}", entry.path());
+    }
+    Ok(())
+}
+
+fn parse_dest_target(args: &[String], command: &str) -> WincentResult<AutomaticDestinations> {
+    require_len(
+        args,
+        1,
+        &format!("dest {command} <recent|frequent|file> [path] [recent|frequent]"),
+    )?;
+    let parsed = match args[0].as_str() {
+        "recent" => parse_dest_file(recent_files_dest_path()?)?,
+        "frequent" => parse_dest_file(frequent_folders_dest_path()?)?,
+        "file" => {
+            let path = args.get(1).ok_or_else(|| {
+                WincentError::InvalidArgument(format!("dest {command} file requires a path"))
+            })?;
+            match args.get(2).map(String::as_str) {
+                Some("recent") => parse_dest_file_with_kind(path, DestListKind::RecentFiles)?,
+                Some("frequent") => parse_dest_file_with_kind(path, DestListKind::FrequentFolders)?,
+                Some(other) => {
+                    return Err(WincentError::InvalidArgument(format!(
+                        "unknown DestList kind for {command} file: {other}"
+                    )))
+                }
+                None => parse_dest_file(path)?,
+            }
+        }
+        other => {
+            return Err(WincentError::InvalidArgument(format!(
+                "unknown {command} target: {other}"
+            )))
+        }
+    };
+    Ok(parsed)
+}
+
 fn cmd_dest_parse_bytes(args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "dest parse-bytes <path> [--limit N]")?;
     let limit = parse_limit(&args[1..], 20)?;
@@ -895,6 +955,58 @@ fn cmd_dest_manager(manager: &QuickAccessManager, args: &[String]) -> WincentRes
     };
     print_dest_entries(&entries, limit);
     Ok(())
+}
+
+fn cmd_bench(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 1, "bench <recent|frequent> [--limit N]")?;
+    let category = parse_category(&args[0], false)?;
+    let iterations = parse_limit(&args[1..], 100)?;
+    if iterations == 0 {
+        return Err(WincentError::InvalidArgument(
+            "bench limit must be greater than zero".to_string(),
+        ));
+    }
+
+    // Warm-up pass keeps one-time costs (COM init, file cache) out of the loop.
+    let _ = manager.get_items(category)?;
+    if category == QuickAccess::RecentFiles {
+        let _ = manager.get_recent_files_metadata()?;
+    } else {
+        let _ = manager.get_frequent_folders_metadata()?;
+    }
+
+    let mut shell_ms = Vec::with_capacity(iterations);
+    let mut rules_ms = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let start = Instant::now();
+        let _ = manager.get_items(category)?;
+        shell_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+
+        let start = Instant::now();
+        if category == QuickAccess::RecentFiles {
+            let _ = manager.get_recent_files_metadata()?;
+        } else {
+            let _ = manager.get_frequent_folders_metadata()?;
+        }
+        rules_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    print_bench_result("native shell query", &shell_ms);
+    print_bench_result("cfb rule parsing", &rules_ms);
+    println!("iterations: {iterations}");
+    Ok(())
+}
+
+fn print_bench_result(label: &str, samples_ms: &[f64]) {
+    let mut sorted = samples_ms.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    println!(
+        "{label}: median {median:.3} ms, mean {mean:.3} ms, min {:.3} ms, max {:.3} ms",
+        sorted[0],
+        sorted[sorted.len() - 1]
+    );
 }
 
 fn parse_category(value: &str, allow_all: bool) -> WincentResult<QuickAccess> {

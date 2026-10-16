@@ -773,6 +773,7 @@ mod tests {
             entry_len: 0,
             mru_position: 0,
             checksum: 0,
+            checksum_valid: true,
             entry_id: 0,
             entry_number: 0,
             entry_number_unknown: 0,

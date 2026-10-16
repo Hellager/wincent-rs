@@ -1455,6 +1455,9 @@ fn merge_batch_failures(
 impl QuickAccessManager {
     /// Parses the recent-files `.automaticDestinations-ms` file and returns all entries.
     ///
+    /// This is the raw parsed DestList, including entries Explorer may filter
+    /// out. Use [`QuickAccessManager::get_items`] for the live Shell query.
+    ///
     /// # Errors
     ///
     /// Returns I/O errors when the file cannot be read, or DestList parse errors
@@ -2631,6 +2634,7 @@ mod tests {
             entry_len: 0,
             mru_position: 0,
             checksum: 0,
+            checksum_valid: true,
             entry_id: 0,
             entry_number: 0,
             entry_number_unknown: 0,

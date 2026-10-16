@@ -40,8 +40,11 @@
 //! did not repair the stream, remove the dangling entry, or rebuild the file.
 //! [`visible_entries`] returns metadata-level candidates and does not validate
 //! stream availability or apply a caller-specific result limit. Parsed files
-//! expose [`AutomaticDestinations::visible_entries`] and
-//! [`AutomaticDestinations::shell_entries`] for stream-aware results.
+//! expose [`AutomaticDestinations::rule_entries`] for the complete custom
+//! CAutoList rule result driven by the built-in [`DestListRuleSet`] defaults,
+//! [`AutomaticDestinations::shell_entries`] for a bounded, Shell-query-shaped
+//! result, and [`AutomaticDestinations::cfb_entries`] for the raw parsed
+//! DestList entries.
 
 pub(super) mod cfb;
 /// Internal destructive tests for removing entries by rebuilding Explorer backing files.

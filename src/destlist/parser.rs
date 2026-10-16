@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,6 +31,96 @@ pub const DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS: i32 = 4;
 /// Minimum access count observed for an unpinned Frequent Folders entry to be
 /// returned by Explorer on Windows 10 1809 and 22H2.
 pub const FREQUENT_FOLDERS_MIN_ACCESS_COUNT: u32 = 3;
+
+/// Configuration for the custom CAutoList-style v4 rule evaluation.
+///
+/// The crate ships one default configuration per list kind; use
+/// \`DestListRuleSet::for_kind\` to obtain it. The defaults encode the rules
+/// observed on Windows 10 1809 and 22H2 so a future Windows version that
+/// changes one of these behaviors only needs a new default configuration, not
+/// a code change.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DestListRuleSet {
+    /// Requires every v4 entry to have a valid CRC-64 checksum; one invalid
+    /// checksum empties the whole result, matching the observed system
+    /// behavior.
+    pub require_all_checksums_valid: bool,
+    /// Requires \`score >= 0.0\` for every v4 entry; ordinary negative values,
+    /// \`-Infinity\`, and \`NaN\` invalidate the whole result while \`-0.0\` and
+    /// \`+Infinity\` remain valid, matching the observed system behavior.
+    pub require_non_negative_scores: bool,
+    /// Drops entries whose reserved field at offset \`0x78\` is nonzero.
+    pub hide_entries_with_reserved_78: bool,
+    /// Drops candidates whose numeric Shell Link stream is missing or does not
+    /// look like a valid Shell Link header.
+    pub require_shell_link_stream: bool,
+    /// Drops duplicate Windows paths after the first occurrence in MRU order.
+    pub dedupe_windows_paths: bool,
+    /// Keeps the best Jump List backing file as a Recent Files candidate.
+    pub keep_jump_list_backing_file: bool,
+    /// Minimum \`access_count\` for an unpinned Frequent Folders entry.
+    pub frequent_min_access_count: u32,
+    /// Maximum number of unpinned Frequent Folders entries returned before
+    /// pinned entries are prepended.
+    pub frequent_normal_slots: i32,
+    /// Sorts Frequent Folders candidates by \`recent_rank\` ascending, then
+    /// newest interaction first, then highest entry number first.
+    pub frequent_sort_by_rank: bool,
+}
+
+impl DestListRuleSet {
+    /// Returns the default configuration for the given list kind.
+    ///
+    /// Recent Files and Frequent Folders use different rules despite sharing
+    /// the same persisted v4 entry layout. \`Unknown\` falls back to Recent
+    /// Files rules unless pinned entries are present, matching the observed
+    /// Explorer heuristic.
+    #[must_use]
+    pub fn for_kind(kind: DestListKind) -> Self {
+        match kind {
+            DestListKind::FrequentFolders => Self::frequent_folders(),
+            DestListKind::RecentFiles | DestListKind::Unknown => Self::recent_files(),
+        }
+    }
+
+    /// Default Recent Files rules observed on Windows 10 1809 and 22H2.
+    #[must_use]
+    pub fn recent_files() -> Self {
+        Self {
+            require_all_checksums_valid: true,
+            require_non_negative_scores: true,
+            hide_entries_with_reserved_78: true,
+            require_shell_link_stream: true,
+            dedupe_windows_paths: true,
+            keep_jump_list_backing_file: true,
+            frequent_min_access_count: FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
+            frequent_normal_slots: DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
+            frequent_sort_by_rank: true,
+        }
+    }
+
+    /// Default Frequent Folders rules observed on Windows 10 1809 and 22H2.
+    #[must_use]
+    pub fn frequent_folders() -> Self {
+        Self {
+            require_all_checksums_valid: true,
+            require_non_negative_scores: true,
+            hide_entries_with_reserved_78: true,
+            require_shell_link_stream: true,
+            dedupe_windows_paths: true,
+            keep_jump_list_backing_file: false,
+            frequent_min_access_count: FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
+            frequent_normal_slots: DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
+            frequent_sort_by_rank: true,
+        }
+    }
+}
+
+impl Default for DestListRuleSet {
+    fn default() -> Self {
+        Self::recent_files()
+    }
+}
 
 /// Logical Explorer list stored in an Automatic Destinations file.
 ///
@@ -97,7 +188,33 @@ impl AutomaticDestinations {
     /// Shell-query-shaped result.
     #[must_use]
     pub fn visible_entries(&self) -> Vec<DestListEntry> {
-        self.quick_access_entries(DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS)
+        self.rule_entries()
+    }
+
+    /// Applies the observed CAutoList rules without a caller result limit.
+    ///
+    /// This is the complete custom rule-parser result. It validates v4 entry
+    /// checksums and scores, applies list-specific metadata rules, requires a
+    /// loadable numeric Shell Link stream, and preserves the resulting list
+    /// order. Raw CFB entries remain available through [`Self::cfb_entries`].
+    #[must_use]
+    pub fn rule_entries(&self) -> Vec<DestListEntry> {
+        self.entries_for_rule_set(&DestListRuleSet::for_kind(self.kind))
+    }
+
+    /// Applies a caller-supplied [`DestListRuleSet`] without a result limit.
+    ///
+    /// Most callers should prefer [`Self::rule_entries`], which applies the
+    /// built-in default configuration for the parsed list kind. This entry
+    /// point exists for advanced version-adaptation and diagnostic work; the
+    /// same filtering can always be reproduced from [`Self::cfb_entries`].
+    #[must_use]
+    pub fn entries_for_rule_set(&self, rules: &DestListRuleSet) -> Vec<DestListEntry> {
+        let mut entries = apply_v4_rule_set(&self.dest_list, self.kind, rules);
+        if rules.require_shell_link_stream {
+            entries.retain(|entry| self.has_shell_link_stream(entry));
+        }
+        entries
     }
 
     /// Returns stream-backed visibility candidates using a custom number of
@@ -118,15 +235,25 @@ impl AutomaticDestinations {
     /// Recent Files query observed on 1809 and 22H2.
     #[must_use]
     pub fn shell_entries(&self, result_limit: usize) -> Vec<DestListEntry> {
-        let mut entries = self.visible_entries();
+        let mut entries = self.rule_entries();
         entries.truncate(result_limit);
         entries
+    }
+
+    /// Returns every raw DestList entry parsed from the CFB container.
+    ///
+    /// No CAutoList validity, visibility, stream, deduplication, ordering, or
+    /// query-window rule is applied. Use [`Self::rule_entries`] for the custom
+    /// rule-parser result and [`Self::shell_entries`] for a bounded view.
+    #[must_use]
+    pub fn cfb_entries(&self) -> &[DestListEntry] {
+        self.dest_list.entries()
     }
 
     fn has_shell_link_stream(&self, entry: &DestListEntry) -> bool {
         self.cfb_info
             .stream(entry.stream_name())
-            .is_some_and(|stream| !stream.is_empty())
+            .is_some_and(|stream| looks_like_lnk_stream(stream.data()))
     }
 }
 
@@ -511,12 +638,15 @@ pub struct DestListEntry {
     /// Zero-based entry order in the logical DestList stream, normally MRU
     /// order for Explorer's v4 Recent Files and Frequent Folders lists.
     pub(crate) mru_position: usize,
-    /// Checksum or unknown signed field at entry offset `0x00`.
+    /// Stored CRC-64 at entry offset `0x00`, exposed as a signed value for
+    /// compatibility with earlier releases.
     ///
-    /// An observed Windows 10 v4 logical removal changed this field, but
-    /// Explorer also accepted direct visibility-field edits without updating
-    /// it. Its validation role is therefore not confirmed.
+    /// Windows 10 v4 validates this checksum over the first `0x70` entry
+    /// bytes, treating the checksum field itself as zero. One invalid entry
+    /// invalidates the complete v4 query result.
     pub(crate) checksum: i64,
+    /// Whether the stored CRC-64 matches the first 0x70 entry bytes.
+    pub(crate) checksum_valid: bool,
     /// Full Explorer entry id at entry offset `0x58`.
     pub(crate) entry_id: u64,
     /// Low 32 bits of [`DestListEntry::entry_id`].
@@ -560,21 +690,18 @@ pub struct DestListEntry {
     /// It is commonly `-1` in the Recent Files list and is actively updated
     /// as a sort rank in the Frequent Folders list.
     pub(crate) recent_rank: i32,
-    /// Compatibility alias for [`DestListEntry::access_count`]. Observed
-    /// Windows 10 v4 Recent Files queries exclude entries with value `0`
-    /// before loading their Shell Link streams.
+    /// Compatibility alias for [`DestListEntry::access_count`].
     pub(crate) count: u32,
     /// Access count reported by the DestList entry.
     ///
-    /// In observed Windows 10 v4 Recent Files, `0` excludes an entry before
-    /// Shell Link loading. A positive value only makes it a visibility
-    /// candidate; a missing stream, path deduplication, or a caller limit can
-    /// still prevent Explorer from returning it.
+    /// In observed Windows 10 v4 Recent Files, a value of `0` does not hide an
+    /// otherwise valid entry. Frequent Folders applies an access-count
+    /// threshold to unpinned entries.
     pub(crate) access_count: u32,
     /// Explorer score value reported by the DestList entry. Frequent Folders
     /// may recompute this value for every entry after one folder is accessed.
-    /// It is not an independent Recent Files visibility indicator: entries
-    /// directly hidden in experiments remained excluded with a positive score.
+    /// A negative score invalidates the complete observed Windows 10 v4 query
+    /// result; non-negative values do not independently control visibility.
     pub(crate) score: f32,
     /// Compatibility alias for [`DestListEntry::last_interaction_filetime`].
     pub(crate) last_access_filetime: Option<u64>,
@@ -584,11 +711,9 @@ pub struct DestListEntry {
     pub(crate) sps_size: Option<u32>,
     /// Reserved field at entry offset `0x78` for v4/v6.
     ///
-    /// An observed Windows 10 v4 Recent Files logical removal changed this
-    /// from `0` to `1` while zeroing score and access count. Directly setting
-    /// `access_count = 0` and this field to `1` also hid entries, but those
-    /// fields were not varied independently. Whether this field alone controls
-    /// visibility, and its meaning in other versions, remains unconfirmed.
+    /// In observed Windows 10 v4 Recent Files and Frequent Folders, a nonzero
+    /// value hides the entry. Its meaning in other DestList versions remains
+    /// unconfirmed.
     pub(crate) reserved_78: Option<u32>,
     /// Reserved field at entry offset `0x7c` for v4/v6.
     pub(crate) reserved_7c: Option<u32>,
@@ -621,14 +746,17 @@ impl DestListEntry {
         self.mru_position
     }
 
-    /// Checksum or unknown signed field at entry offset `0x00`.
-    ///
-    /// An observed Windows 10 v4 logical removal changed this field, but
-    /// Explorer also accepted direct visibility-field edits without updating
-    /// it. Its validation role is therefore not confirmed.
+    /// Stored CRC-64 at entry offset `0x00`, exposed as a signed value for
+    /// compatibility with earlier releases.
     #[must_use]
     pub fn checksum(&self) -> i64 {
         self.checksum
+    }
+
+    /// Whether the stored entry checksum matches Explorer's CRC-64 algorithm.
+    #[must_use]
+    pub fn checksum_valid(&self) -> bool {
+        self.checksum_valid
     }
 
     /// Full Explorer entry id at entry offset `0x58`.
@@ -874,11 +1002,9 @@ pub fn quick_access_entries_for_kind(
     kind: DestListKind,
     normal_slot_count: i32,
 ) -> Vec<DestListEntry> {
-    match dest_list.version {
-        4 => quick_access_entries_v4(&dest_list.entries, kind, normal_slot_count),
-        6 => quick_access_entries_v6(&dest_list.entries, normal_slot_count),
-        _ => dest_list.entries.clone(),
-    }
+    let mut rules = DestListRuleSet::for_kind(kind);
+    rules.frequent_normal_slots = normal_slot_count;
+    apply_v4_rule_set(dest_list, kind, &rules)
 }
 
 /// Returns metadata-level visibility candidates using the observed four normal slots.
@@ -962,19 +1088,40 @@ fn quick_access_entries_v6(
     pinned
 }
 
-fn quick_access_entries_v4(
-    entries: &[DestListEntry],
+fn apply_v4_rule_set(
+    dest_list: &DestList,
     kind: DestListKind,
-    normal_slot_count: i32,
+    rules: &DestListRuleSet,
 ) -> Vec<DestListEntry> {
+    if dest_list.version < 4 {
+        return dest_list.entries.clone();
+    }
+    if dest_list.version > 4 {
+        return quick_access_entries_v6(&dest_list.entries, rules.frequent_normal_slots);
+    }
+    if rules.require_all_checksums_valid
+        && dest_list.entries.iter().any(|entry| !entry.checksum_valid)
+    {
+        return Vec::new();
+    }
+    if rules.require_non_negative_scores
+        && dest_list
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.score.partial_cmp(&0.0), None | Some(Ordering::Less),))
+    {
+        return Vec::new();
+    }
+
+    let entries = &dest_list.entries;
     match kind {
-        DestListKind::RecentFiles => recent_file_entries_v4(entries),
-        DestListKind::FrequentFolders => frequent_folder_entries_v4(entries, normal_slot_count),
+        DestListKind::RecentFiles => recent_file_entries_v4(entries, rules),
+        DestListKind::FrequentFolders => frequent_folder_entries_v4(entries, rules),
         DestListKind::Unknown => {
             if entries.iter().any(|entry| entry.pin_order.is_some()) {
-                frequent_folder_entries_v4(entries, normal_slot_count)
+                frequent_folder_entries_v4(entries, rules)
             } else {
-                recent_file_entries_v4(entries)
+                recent_file_entries_v4(entries, rules)
             }
         }
     }
@@ -982,11 +1129,11 @@ fn quick_access_entries_v4(
 
 fn frequent_folder_entries_v4(
     entries: &[DestListEntry],
-    normal_slot_count: i32,
+    rules: &DestListRuleSet,
 ) -> Vec<DestListEntry> {
     let mut pinned: Vec<_> = entries
         .iter()
-        .filter(|entry| entry.pin_order.is_some())
+        .filter(|entry| entry.pin_order.is_some() && entry_is_v4_visible(entry, rules))
         .cloned()
         .collect();
     pinned.sort_by_key(|entry| entry.pin_order.unwrap_or(i32::MAX));
@@ -1000,44 +1147,53 @@ fn frequent_folder_entries_v4(
         .iter()
         .filter(|entry| {
             entry.pin_order.is_none()
-                && entry.access_count >= FREQUENT_FOLDERS_MIN_ACCESS_COUNT
+                && entry_is_v4_visible(entry, rules)
+                && entry.access_count >= rules.frequent_min_access_count
                 && entry.recent_rank >= 0
         })
         .cloned()
         .collect();
-    frequent_candidates.sort_by(|left, right| {
-        left.recent_rank
-            .cmp(&right.recent_rank)
-            .then_with(|| {
-                right
-                    .last_interaction_filetime
-                    .cmp(&left.last_interaction_filetime)
-            })
-            .then_with(|| right.entry_number.cmp(&left.entry_number))
-    });
-    frequent_candidates.retain(|entry| used_paths.insert(visible_entry_path_key(&entry.path)));
-    frequent_candidates.truncate(usize::try_from(normal_slot_count).unwrap_or_default());
+    if rules.frequent_sort_by_rank {
+        frequent_candidates.sort_by(|left, right| {
+            left.recent_rank
+                .cmp(&right.recent_rank)
+                .then_with(|| {
+                    right
+                        .last_interaction_filetime
+                        .cmp(&left.last_interaction_filetime)
+                })
+                .then_with(|| right.entry_number.cmp(&left.entry_number))
+        });
+    }
+    if rules.dedupe_windows_paths {
+        frequent_candidates.retain(|entry| used_paths.insert(visible_entry_path_key(&entry.path)));
+    }
+    let normal_slot_limit = usize::try_from(rules.frequent_normal_slots).unwrap_or_default();
+    frequent_candidates.truncate(normal_slot_limit);
 
     pinned.extend(frequent_candidates);
     pinned
 }
 
-fn recent_file_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
+fn recent_file_entries_v4(
+    entries: &[DestListEntry],
+    rules: &DestListRuleSet,
+) -> Vec<DestListEntry> {
     let mut visible = Vec::new();
     let mut used_paths = HashSet::new();
     let mut jump_list_backing_files = Vec::new();
 
     for entry in entries {
-        if entry.access_count == 0 {
+        if !entry_is_v4_visible(entry, rules) {
             continue;
         }
 
-        if is_automatic_destinations_path(&entry.path) {
+        if rules.keep_jump_list_backing_file && is_automatic_destinations_path(&entry.path) {
             jump_list_backing_files.push(entry.clone());
             continue;
         }
 
-        if used_paths.insert(visible_entry_path_key(&entry.path)) {
+        if !rules.dedupe_windows_paths || used_paths.insert(visible_entry_path_key(&entry.path)) {
             visible.push(entry.clone());
         }
     }
@@ -1057,6 +1213,10 @@ fn recent_file_entries_v4(entries: &[DestListEntry]) -> Vec<DestListEntry> {
     }
 
     visible
+}
+
+fn entry_is_v4_visible(entry: &DestListEntry, rules: &DestListRuleSet) -> bool {
+    !rules.hide_entries_with_reserved_78 || entry.reserved_78.unwrap_or(0) == 0
 }
 
 fn is_automatic_destinations_path(path: &str) -> bool {
@@ -1383,13 +1543,22 @@ fn build_entry(
 ) -> DestListEntry {
     let raw_path = decode_utf16_lossy(raw_path_bytes);
     let stream_name = format!("{entry_number:x}");
-    let resolved = resolve_path(cfb, &stream_name, &raw_path);
+    let mut resolved = resolve_path(cfb, &stream_name, &raw_path);
+    let checksum = read_u64(dest_list, entry_offset).unwrap_or_default();
+    let checksum_valid = entry_checksum(dest_list, entry_offset) == Some(checksum);
+    if !checksum_valid {
+        resolved.warnings.push(Diagnostic::warning(
+            "destlist.checksum",
+            "entry CRC-64 does not match the stored checksum",
+        ));
+    }
 
     DestListEntry {
         entry_offset,
         entry_len,
         mru_position,
-        checksum: read_i64(dest_list, entry_offset).unwrap_or_default(),
+        checksum: checksum as i64,
+        checksum_valid,
         entry_id,
         entry_number,
         entry_number_unknown,
@@ -1423,6 +1592,25 @@ fn build_entry(
         path_sources: resolved.path_sources,
         warnings: resolved.warnings,
     }
+}
+
+fn entry_checksum(data: &[u8], offset: usize) -> Option<u64> {
+    const SPAN: usize = 0x70;
+    const POLYNOMIAL: u64 = 0x92C6_4265_D321_39A4;
+
+    let prefix = data.get(offset..offset.checked_add(SPAN)?)?;
+    let mut crc = u64::MAX;
+    for (index, byte) in prefix.iter().copied().enumerate() {
+        crc ^= u64::from(if index < 8 { 0 } else { byte });
+        for _ in 0..8 {
+            crc = if crc & 1 == 0 {
+                crc >> 1
+            } else {
+                (crc >> 1) ^ POLYNOMIAL
+            };
+        }
+    }
+    Some(crc)
 }
 
 struct ResolvedPath {
@@ -1804,13 +1992,6 @@ fn read_c_string(data: &[u8], offset: usize) -> Option<String> {
     Some(String::from_utf8_lossy(&data[offset..end]).to_string())
 }
 
-fn read_i64(data: &[u8], offset: usize) -> Result<i64, String> {
-    let bytes = data
-        .get(offset..offset + 8)
-        .ok_or_else(|| format!("unexpected end of data at offset {offset}"))?;
-    Ok(i64::from_le_bytes(bytes.try_into().expect("8-byte chunk")))
-}
-
 fn read_utf16_z_string(data: &[u8], offset: usize) -> Option<String> {
     if offset + 1 >= data.len() {
         return None;
@@ -2046,8 +2227,10 @@ mod tests {
 
     #[test]
     fn visible_entries_v4_recent_files_skips_hidden_and_dedupes() {
+        let mut hidden = destlist_entry_for_test("C:\\Hidden.txt", 1, 1, 0, 0, None);
+        hidden.reserved_78 = Some(1);
         let entries = vec![
-            destlist_entry_for_test("C:\\Hidden.txt", 1, 1, 0, 0, None),
+            hidden,
             destlist_entry_for_test("C:\\Report.txt", 2, 2, 0, 1, None),
             destlist_entry_for_test("c:\\report.txt", 3, 3, 0, 5, None),
             destlist_entry_for_test("C:/Folder/İtem.txt/", 5, 5, 0, 3, None),
@@ -2065,6 +2248,34 @@ mod tests {
             visible,
             vec!["C:\\Report.txt", "C:/Folder/İtem.txt/", "C:\\Other.txt"]
         );
+    }
+
+    #[test]
+    fn recent_v4_visibility_uses_reserved_flag_and_score_not_access_count() {
+        let mut hidden = destlist_entry_for_test("C:\\Hidden.txt", 1, 1, 0, 10, None);
+        hidden.reserved_78 = Some(1);
+        let mut zero_count = destlist_entry_for_test("C:\\Zero.txt", 2, 2, 0, 0, None);
+        zero_count.score = 1.0;
+        let visible = visible_entries_for_kind(
+            &dest_list_for_test(4, vec![hidden, zero_count]),
+            DestListKind::RecentFiles,
+        );
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].path(), "C:\\Zero.txt");
+
+        let mut negative_score = destlist_entry_for_test("C:\\Negative.txt", 3, 3, 0, 10, None);
+        negative_score.score = -1.0;
+        assert!(visible_entries_for_kind(
+            &dest_list_for_test(4, vec![negative_score]),
+            DestListKind::RecentFiles,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn entry_checksum_matches_recovered_crc64_vector() {
+        assert_eq!(entry_checksum(&[0; 0x70], 0), Some(0xA612_2109_D6C9_39F4));
     }
 
     #[test]
@@ -2093,6 +2304,102 @@ mod tests {
         assert_eq!(shell[0].entry_number(), 1);
         assert_eq!(shell[19].entry_number(), 20);
         assert!(!visible.iter().any(|entry| entry.entry_number() == 25));
+    }
+
+    #[test]
+    fn cfb_entries_are_raw_while_rule_entries_are_unbounded_and_stream_aware() {
+        let entries: Vec<_> = (1..=25)
+            .map(|number| {
+                destlist_entry_for_test(
+                    &format!("C:\\Recent\\item-{number:02}.txt"),
+                    number,
+                    0,
+                    -1,
+                    1,
+                    None,
+                )
+            })
+            .collect();
+        let stream_names: Vec<_> = (1..=24).map(|number| format!("{number:x}")).collect();
+        let parsed =
+            automatic_destinations_for_test(DestListKind::RecentFiles, entries, &stream_names);
+
+        assert_eq!(parsed.cfb_entries().len(), 25);
+        assert_eq!(parsed.rule_entries().len(), 24);
+        assert_eq!(
+            parsed
+                .shell_entries(DEFAULT_RECENT_FILES_RESULT_LIMIT)
+                .len(),
+            20
+        );
+    }
+
+    #[test]
+    fn rule_entries_invalidate_v4_list_without_hiding_raw_cfb_entries() {
+        let valid = destlist_entry_for_test("C:\\Valid.txt", 1, 1, 0, 1, None);
+        let mut invalid = destlist_entry_for_test("C:\\Invalid.txt", 2, 2, 0, 1, None);
+        invalid.checksum_valid = false;
+        let parsed = automatic_destinations_for_test(
+            DestListKind::RecentFiles,
+            vec![valid, invalid],
+            &["1".to_string(), "2".to_string()],
+        );
+
+        assert_eq!(parsed.cfb_entries().len(), 2);
+        assert!(parsed.rule_entries().is_empty());
+        assert!(parsed
+            .shell_entries(DEFAULT_RECENT_FILES_RESULT_LIMIT)
+            .is_empty());
+    }
+
+    #[test]
+    fn rule_entries_match_observed_v4_score_float_boundaries() {
+        for invalid_score in [f32::NAN, f32::NEG_INFINITY, -1.0] {
+            let mut entry = destlist_entry_for_test("C:\\Invalid.txt", 1, 1, 0, 1, None);
+            entry.score = invalid_score;
+            let parsed = automatic_destinations_for_test(
+                DestListKind::RecentFiles,
+                vec![entry],
+                &["1".to_string()],
+            );
+            assert!(parsed.rule_entries().is_empty());
+        }
+
+        for valid_score in [-0.0, 0.0, 100.0, f32::INFINITY] {
+            let mut entry = destlist_entry_for_test("C:\\Valid.txt", 1, 1, 0, 1, None);
+            entry.score = valid_score;
+            let parsed = automatic_destinations_for_test(
+                DestListKind::RecentFiles,
+                vec![entry],
+                &["1".to_string()],
+            );
+            assert_eq!(parsed.rule_entries().len(), 1);
+        }
+    }
+
+    #[test]
+    fn rule_entries_require_a_valid_shell_link_header() {
+        let entries = vec![
+            destlist_entry_for_test("C:\\Valid.txt", 1, 1, 0, 1, None),
+            destlist_entry_for_test("C:\\Invalid.txt", 2, 2, 0, 1, None),
+        ];
+        let mut parsed = automatic_destinations_for_test(
+            DestListKind::RecentFiles,
+            entries,
+            &["1".to_string(), "2".to_string()],
+        );
+        let stream = parsed
+            .cfb_info
+            .streams
+            .iter_mut()
+            .find(|stream| stream.name == "2")
+            .expect("test stream");
+        stream.data[0..4].copy_from_slice(&0u32.to_le_bytes());
+
+        assert_eq!(parsed.cfb_entries().len(), 2);
+        let rules = parsed.rule_entries();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].path(), "C:\\Valid.txt");
     }
 
     #[test]
@@ -2369,7 +2676,15 @@ mod tests {
                     .map(|name| CfbStream {
                         name: name.clone(),
                         path: PathBuf::from(format!("/{name}")),
-                        data: vec![1],
+                        data: {
+                            let mut data = vec![0u8; 0x4c];
+                            data[0..4].copy_from_slice(&0x4cu32.to_le_bytes());
+                            data[4..20].copy_from_slice(&[
+                                0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x46,
+                            ]);
+                            data
+                        },
                     })
                     .collect(),
             },
@@ -2391,6 +2706,7 @@ mod tests {
             entry_len: 0,
             mru_position: 0,
             checksum: 0,
+            checksum_valid: true,
             entry_id,
             entry_number,
             entry_number_unknown,
