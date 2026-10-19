@@ -929,6 +929,8 @@ impl std::fmt::Display for PowerShellError {
 pub enum QuickAccessPostMutationStep {
     /// Failed to delete Explorer's Recent Files backing data after adding a recent file.
     DeleteRecentFilesBackingData,
+    /// Failed to delete matching shortcuts from the Windows Recent directory.
+    DeleteRecentLinks,
     /// Failed to refresh open Explorer windows after a successful mutation.
     RefreshExplorer,
 }

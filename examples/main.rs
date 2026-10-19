@@ -98,6 +98,8 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "add" => cmd_add(&manager, &args[1..]),
         "pin" => cmd_pin(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
+        "remove-direct" => cmd_remove_direct(&manager, &args[1..]),
+        "remove-timed" => cmd_remove_timed(&manager, &args[1..]),
         "batch-add" => cmd_batch_add(&manager, &args[1..]),
         "batch-remove" => cmd_batch_remove(&manager, &args[1..]),
         "lock" => cmd_lock(&manager, &args[1..]),
@@ -173,6 +175,10 @@ Core:
   pin <path>
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
     frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
+  remove-direct <recent|frequent> <path>
+    rewrites DestList v4, removes the numeric stream and Recent shortcut, then refreshes Explorer.
+  remove-timed <shell|direct> <recent|frequent> <path>
+    prints successful removal phase timings as one JSON object.
   batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
@@ -380,6 +386,54 @@ fn cmd_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()
 
     manager.remove_item_with_options(&args[1], qa_type, options)?;
     println!("removed {}", args[1]);
+    Ok(())
+}
+
+fn cmd_remove_direct(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 2, "remove-direct <recent|frequent> <path>")?;
+    let qa_type = parse_category(&args[0], false)?;
+
+    manager.remove_item_direct(&args[1], qa_type)?;
+    println!("directly removed {}", args[1]);
+    Ok(())
+}
+
+fn cmd_remove_timed(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(
+        args,
+        3,
+        "remove-timed <shell|direct> <recent|frequent> <path>",
+    )?;
+    let qa_type = parse_category(&args[1], false)?;
+    let report = match args[0].as_str() {
+        "shell" => manager.remove_item_with_options_timed(
+            &args[2],
+            qa_type,
+            RemoveOptions::new()
+                .deep_clean_recent_links()
+                .refresh_explorer(),
+        )?,
+        "direct" => manager.remove_item_direct_timed(&args[2], qa_type)?,
+        mode => {
+            return Err(WincentError::InvalidArgument(format!(
+                "unknown remove timing mode: {mode}"
+            )))
+        }
+    };
+    println!(
+        concat!(
+            "{{\"mode\":\"{}\",\"category\":\"{}\",",
+            "\"mutation_ns\":{},\"lnk_cleanup_ns\":{},",
+            "\"explorer_refresh_ns\":{},\"other_ns\":{},\"total_ns\":{}}}"
+        ),
+        args[0],
+        args[1],
+        report.mutation().as_nanos(),
+        report.recent_link_cleanup().as_nanos(),
+        report.explorer_refresh().as_nanos(),
+        report.other().as_nanos(),
+        report.total().as_nanos(),
+    );
     Ok(())
 }
 

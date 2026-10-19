@@ -18,7 +18,7 @@ use crate::{
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn path_to_shell_string(path: &Path) -> WincentResult<String> {
     if path.as_os_str().is_empty() {
@@ -159,6 +159,49 @@ impl RemoveOptions {
             qa_type,
             QuickAccess::RecentFiles | QuickAccess::FrequentFolders
         ) && self.deep_clean_recent_links
+    }
+}
+
+/// Phase timings for a successful Quick Access removal.
+///
+/// `mutation` measures the backing-data mutation. For direct removal this is
+/// the CFB rewrite and atomic replacement. For Shell removal it includes the
+/// Shell verb and the system's persistence work. `total` also includes path
+/// conversion, validation, presence checks, retries, and report construction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemoveTimingReport {
+    mutation: Duration,
+    recent_link_cleanup: Duration,
+    explorer_refresh: Duration,
+    total: Duration,
+}
+
+impl RemoveTimingReport {
+    #[must_use]
+    pub fn mutation(&self) -> Duration {
+        self.mutation
+    }
+
+    #[must_use]
+    pub fn recent_link_cleanup(&self) -> Duration {
+        self.recent_link_cleanup
+    }
+
+    #[must_use]
+    pub fn explorer_refresh(&self) -> Duration {
+        self.explorer_refresh
+    }
+
+    #[must_use]
+    pub fn total(&self) -> Duration {
+        self.total
+    }
+
+    /// Time spent outside the three explicitly measured mutation phases.
+    #[must_use]
+    pub fn other(&self) -> Duration {
+        self.total
+            .saturating_sub(self.mutation + self.recent_link_cleanup + self.explorer_refresh)
     }
 }
 
@@ -802,6 +845,18 @@ impl QuickAccessManager {
         qa_type: QuickAccess,
         options: RemoveOptions,
     ) -> WincentResult<()> {
+        self.remove_item_with_options_timed(path, qa_type, options)
+            .map(|_| ())
+    }
+
+    /// Removes an item through the Shell path and returns phase timings.
+    pub fn remove_item_with_options_timed<P: AsRef<Path>>(
+        &self,
+        path: P,
+        qa_type: QuickAccess,
+        options: RemoveOptions,
+    ) -> WincentResult<RemoveTimingReport> {
+        let total_started = Instant::now();
         let path = path_to_shell_string(path.as_ref())?;
 
         match qa_type {
@@ -809,34 +864,124 @@ impl QuickAccessManager {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::File)?;
                 self.ensure_present(&path, qa_type)?;
+                let mutation_started = Instant::now();
                 self.execute_with_retry(|| self.backend.remove_recent_file(&path, self.timeout))?;
+                let mutation = mutation_started.elapsed();
+                let mut explorer_refresh = Duration::ZERO;
                 if options.refresh_explorer_enabled() {
+                    let refresh_started = Instant::now();
                     self.refresh_explorer_after_mutation(&path, qa_type)?;
+                    explorer_refresh = refresh_started.elapsed();
                 }
+                let mut recent_link_cleanup = Duration::ZERO;
                 if options.should_deep_clean_links_for(qa_type) {
+                    let cleanup_started = Instant::now();
                     self.backend
                         .delete_recent_links_for_target(&path, self.timeout)?;
+                    recent_link_cleanup = cleanup_started.elapsed();
                 }
-                Ok(())
+                Ok(RemoveTimingReport {
+                    mutation,
+                    recent_link_cleanup,
+                    explorer_refresh,
+                    total: total_started.elapsed(),
+                })
             }
             QuickAccess::FrequentFolders => {
                 self.backend
                     .validate_path(&path, crate::utils::PathType::Directory)?;
                 self.ensure_present(&path, qa_type)?;
+                let mutation_started = Instant::now();
                 self.execute_with_retry(|| {
                     self.backend.remove_frequent_folder(&path, self.timeout)
                 })?;
+                let mutation = mutation_started.elapsed();
+                let mut explorer_refresh = Duration::ZERO;
                 if options.refresh_explorer_enabled() {
+                    let refresh_started = Instant::now();
                     self.refresh_explorer_after_mutation(&path, qa_type)?;
+                    explorer_refresh = refresh_started.elapsed();
                 }
+                let mut recent_link_cleanup = Duration::ZERO;
                 if options.should_deep_clean_links_for(qa_type) {
+                    let cleanup_started = Instant::now();
                     self.backend
                         .delete_recent_links_for_target(&path, self.timeout)?;
+                    recent_link_cleanup = cleanup_started.elapsed();
                 }
-                Ok(())
+                Ok(RemoveTimingReport {
+                    mutation,
+                    recent_link_cleanup,
+                    explorer_refresh,
+                    total: total_started.elapsed(),
+                })
             }
             unsupported => Err(unsupported_remove(unsupported)),
         }
+    }
+
+    /// Physically removes an item from Explorer's DestList v4 backing file.
+    ///
+    /// Unlike [`QuickAccessManager::remove_item`], this method does not invoke
+    /// Shell removal APIs. It rewrites the matching v4 `DestList` stream,
+    /// removes the entry's numeric Shell Link stream, deletes matching `.lnk`
+    /// files from the Windows Recent directory, and refreshes Explorer.
+    ///
+    /// This operation can remove hidden, blocked, dangling, or missing-target
+    /// records because it does not require the target file or directory to
+    /// exist. `QuickAccess::All` is not supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::DestListUnsupportedVersion`] for formats other
+    /// than v4, [`WincentError::NotInQuickAccess`] when no raw entry matches,
+    /// or CFB/I/O errors when the backing file cannot be validated and replaced.
+    /// A [`WincentError::PostMutationFailure`] means the CFB removal completed,
+    /// but Recent-link cleanup or Explorer refresh failed.
+    pub fn remove_item_direct<P: AsRef<Path>>(
+        &self,
+        path: P,
+        qa_type: QuickAccess,
+    ) -> WincentResult<()> {
+        self.remove_item_direct_timed(path, qa_type).map(|_| ())
+    }
+
+    /// Physically removes a DestList v4 item and returns phase timings.
+    pub fn remove_item_direct_timed<P: AsRef<Path>>(
+        &self,
+        path: P,
+        qa_type: QuickAccess,
+    ) -> WincentResult<RemoveTimingReport> {
+        let total_started = Instant::now();
+        let path = path_to_shell_string(path.as_ref())?;
+        if qa_type == QuickAccess::All {
+            return Err(unsupported_remove(qa_type));
+        }
+
+        let mutation_started = Instant::now();
+        self.backend.remove_destlist_entry(&path, qa_type)?;
+        let mutation = mutation_started.elapsed();
+        let cleanup_started = Instant::now();
+        self.backend
+            .delete_recent_links_for_target(&path, self.timeout)
+            .map_err(|source| {
+                WincentError::post_mutation_failure(
+                    &path,
+                    qa_type,
+                    QuickAccessPostMutationStep::DeleteRecentLinks,
+                    source,
+                )
+            })?;
+        let recent_link_cleanup = cleanup_started.elapsed();
+        let refresh_started = Instant::now();
+        self.refresh_explorer_after_mutation(&path, qa_type)?;
+        let explorer_refresh = refresh_started.elapsed();
+        Ok(RemoveTimingReport {
+            mutation,
+            recent_link_cleanup,
+            explorer_refresh,
+            total: total_started.elapsed(),
+        })
     }
 
     /// Adds multiple items to Quick Access, collecting per-item failures.
@@ -1632,6 +1777,11 @@ mod tests {
             Ok(())
         }
 
+        fn remove_destlist_entry(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
+            self.record(format!("remove_destlist_entry:{qa_type:?}:{path}"));
+            Ok(())
+        }
+
         fn delete_recent_links_for_target(
             &self,
             path: &str,
@@ -2306,6 +2456,43 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn direct_remove_rewrites_cfb_cleans_links_and_refreshes() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(7), backend.clone());
+
+        manager.remove_item_direct("C:\\missing-report.docx", QuickAccess::RecentFiles)?;
+
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "remove_destlist_entry:RecentFiles:C:\\missing-report.docx".to_string(),
+                "delete_recent_links:C:\\missing-report.docx".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+        assert_eq!(
+            backend.refresh_explorer_timeouts.lock().unwrap().as_slice(),
+            &[Duration::from_secs(7)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn direct_remove_rejects_all_before_mutation() {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let error = manager
+            .remove_item_direct("C:\\report.docx", QuickAccess::All)
+            .unwrap_err();
+
+        assert!(matches!(error, WincentError::UnsupportedOperation(_)));
+        assert!(backend.calls().is_empty());
     }
 
     #[test]

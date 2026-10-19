@@ -8,6 +8,7 @@
 //! ### Core Operations
 //! - Query Quick Access items (recent files and frequent folders)
 //! - Add/Remove items to/from Quick Access
+//! - Direct DestList v4 entry and stream removal for targeted cleanup
 //! - Clear Quick Access categories
 //! - Check item existence
 //!
@@ -100,6 +101,7 @@ pub mod prelude {
     };
     pub use crate::manager::{
         AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
+        RemoveTimingReport,
     };
     pub use crate::monitor::{
         QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions,
@@ -146,7 +148,7 @@ use crate::error::WincentError;
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::empty::EmptyOptions;
 pub use crate::error::QuickAccessPostMutationStep;
-pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions};
+pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions, RemoveTimingReport};
 pub use crate::monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions};
 pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
