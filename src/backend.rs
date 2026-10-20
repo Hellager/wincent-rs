@@ -25,6 +25,17 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
 
     fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
+    fn add_destlist_entry(
+        &self,
+        path: &str,
+        qa_type: QuickAccess,
+        timeout: Duration,
+    ) -> WincentResult<()> {
+        let _ = (path, qa_type, timeout);
+        Err(crate::error::WincentError::UnsupportedOperation(
+            "direct DestList addition is not implemented by this backend".to_string(),
+        ))
+    }
 
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
@@ -111,6 +122,15 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
 
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
         add_to_frequent_folders_with_timeout(path, timeout)
+    }
+
+    fn add_destlist_entry(
+        &self,
+        path: &str,
+        qa_type: QuickAccess,
+        timeout: Duration,
+    ) -> WincentResult<()> {
+        crate::destlist::add::add_entry_path(qa_type, path, timeout)
     }
 
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {

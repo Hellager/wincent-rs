@@ -96,6 +96,8 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "find" => cmd_find(&manager, &args[1..]),
         "watch" => cmd_watch(&manager, &args[1..]),
         "add" => cmd_add(&manager, &args[1..]),
+        "add-direct" => cmd_add_direct(&manager, &args[1..]),
+        "add-timed" => cmd_add_timed(&manager, &args[1..]),
         "pin" => cmd_pin(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
         "remove-direct" => cmd_remove_direct(&manager, &args[1..]),
@@ -172,6 +174,10 @@ Core:
   find <recent|frequent|all> <keyword>
   watch <recent|frequent|all> [--poll-ms N]
   add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
+  add-direct <recent|frequent> <path>
+    writes a DestList v4 entry, numeric stream, and Recent shortcuts when applicable.
+  add-timed <shell|direct> <recent|frequent> <path>
+    prints successful addition time including Explorer refresh as one JSON object.
   pin <path>
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
     frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
@@ -364,6 +370,36 @@ fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
 
     manager.add_item(&args[1], qa_type, options)?;
     println!("added {}", args[1]);
+    Ok(())
+}
+
+fn cmd_add_direct(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 2, "add-direct <recent|frequent> <path>")?;
+    let qa_type = parse_category(&args[0], false)?;
+    manager.add_item_direct(&args[1], qa_type)?;
+    println!("directly added {}", args[1]);
+    Ok(())
+}
+
+fn cmd_add_timed(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 3, "add-timed <shell|direct> <recent|frequent> <path>")?;
+    let qa_type = parse_category(&args[1], false)?;
+    let started = std::time::Instant::now();
+    match args[0].as_str() {
+        "direct" => manager.add_item_direct(&args[2], qa_type)?,
+        "shell" => manager.add_item(&args[2], qa_type, AddOptions::new().refresh_explorer())?,
+        other => {
+            return Err(WincentError::InvalidArgument(format!(
+                "unknown add timing mode: {other}"
+            )));
+        }
+    }
+    println!(
+        "{{\"mode\":\"{}\",\"category\":\"{}\",\"total_ns\":{}}}",
+        args[0],
+        args[1],
+        started.elapsed().as_nanos()
+    );
     Ok(())
 }
 

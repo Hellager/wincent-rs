@@ -46,6 +46,7 @@
 //! result, and [`AutomaticDestinations::cfb_entries`] for the raw parsed
 //! DestList entries.
 
+pub(crate) mod add;
 pub(super) mod cfb;
 /// Internal destructive tests for removing entries by rebuilding Explorer backing files.
 ///
@@ -67,4 +68,7 @@ pub use parser::{
     DiagnosticSeverity, FrequentFolderPinStatus, PathSource, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
     DEFAULT_RECENT_FILES_RESULT_LIMIT, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
 };
+use std::sync::Mutex;
 pub use time::filetime_to_system_time;
+
+pub(super) static DIRECT_DESTLIST_LOCK: Mutex<()> = Mutex::new(());

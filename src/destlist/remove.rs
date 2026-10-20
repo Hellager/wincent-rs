@@ -9,7 +9,6 @@ use std::io::{Cursor, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 
 use windows::core::PCWSTR;
 use windows::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
@@ -29,7 +28,6 @@ const PINNED_COUNT_OFFSET: usize = 0x08;
 const SCORE_COUNTER_OFFSET: usize = 0x0c;
 const ACTION_COUNT_OFFSET: usize = 0x18;
 
-static DIRECT_REMOVE_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
@@ -63,7 +61,7 @@ fn remove_entry_path_from_file(
     qa_type: QuickAccess,
     target_path: &str,
 ) -> WincentResult<()> {
-    let _guard = DIRECT_REMOVE_LOCK.lock().map_err(|_| {
+    let _guard = super::DIRECT_DESTLIST_LOCK.lock().map_err(|_| {
         WincentError::SystemError("direct DestList removal lock was poisoned".to_string())
     })?;
     let original = fs::read(dest_path).map_err(WincentError::Io)?;

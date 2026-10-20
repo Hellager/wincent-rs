@@ -764,6 +764,53 @@ impl QuickAccessManager {
         }
     }
 
+    /// Adds an item by directly updating the DestList v4 backing file.
+    ///
+    /// Recent Files also receives the corresponding file and parent-folder
+    /// shortcuts in the Windows Recent directory. Frequent Folders is created
+    /// as a visible unpinned entry (`access_count = 3`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidPath`] for a missing path or wrong target
+    /// type, [`WincentError::AlreadyExists`] when a matching raw entry exists,
+    /// [`WincentError::DestListUnsupportedVersion`] for non-v4 backing data,
+    /// [`WincentError::UnsupportedOperation`] for [`QuickAccess::All`], or a
+    /// [`WincentError::PostMutationFailure`] when backing-data addition succeeded
+    /// but shortcut creation or Explorer refresh failed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// manager.add_item_direct("C:\\Work\\report.docx", QuickAccess::RecentFiles)?;
+    /// manager.add_item_direct("C:\\Work", QuickAccess::FrequentFolders)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn add_item_direct<P: AsRef<Path>>(
+        &self,
+        path: P,
+        qa_type: QuickAccess,
+    ) -> WincentResult<()> {
+        let path = path_to_shell_string(path.as_ref())?;
+        match qa_type {
+            QuickAccess::RecentFiles => self
+                .backend
+                .validate_path(&path, crate::utils::PathType::File)?,
+            QuickAccess::FrequentFolders => self
+                .backend
+                .validate_path(&path, crate::utils::PathType::Directory)?,
+            QuickAccess::All => return Err(unsupported_add(qa_type)),
+        }
+        self.backend
+            .add_destlist_entry(&path, qa_type, self.timeout)?;
+        self.refresh_explorer_after_mutation(&path, qa_type)
+    }
+
     /// Pins a directory to Quick Access Frequent Folders.
     ///
     /// This is a convenience wrapper around [`QuickAccessManager::add_item`] for
@@ -1764,6 +1811,16 @@ mod tests {
             Ok(())
         }
 
+        fn add_destlist_entry(
+            &self,
+            path: &str,
+            qa_type: QuickAccess,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
+            self.record(format!("add_destlist_entry:{qa_type:?}:{path}"));
+            Ok(())
+        }
+
         fn remove_recent_file(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
             self.record(format!("remove_recent_file:{path}"));
             Ok(())
@@ -2479,6 +2536,42 @@ mod tests {
             &[Duration::from_secs(7)]
         );
         Ok(())
+    }
+
+    #[test]
+    fn direct_add_rewrites_cfb_and_refreshes() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(7), backend.clone());
+
+        manager.add_item_direct("C:\\report.docx", QuickAccess::RecentFiles)?;
+
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "add_destlist_entry:RecentFiles:C:\\report.docx".to_string(),
+                "refresh_explorer".to_string(),
+            ]
+        );
+        assert_eq!(
+            backend.refresh_explorer_timeouts.lock().unwrap().as_slice(),
+            &[Duration::from_secs(7)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn direct_add_rejects_all_before_mutation() {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let error = manager
+            .add_item_direct("C:\\report.docx", QuickAccess::All)
+            .unwrap_err();
+
+        assert!(matches!(error, WincentError::UnsupportedOperation(_)));
+        assert!(backend.calls().is_empty());
     }
 
     #[test]

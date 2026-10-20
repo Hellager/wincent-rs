@@ -931,6 +931,8 @@ pub enum QuickAccessPostMutationStep {
     DeleteRecentFilesBackingData,
     /// Failed to delete matching shortcuts from the Windows Recent directory.
     DeleteRecentLinks,
+    /// Failed to create matching shortcuts in the Windows Recent directory.
+    CreateRecentLinks,
     /// Failed to refresh open Explorer windows after a successful mutation.
     RefreshExplorer,
 }
