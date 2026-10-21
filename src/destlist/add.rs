@@ -1,15 +1,13 @@
 //! Direct DestList v4 creation for Recent Files and Frequent Folders.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{Cursor, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use windows::core::{Interface, GUID, PCWSTR};
 use windows::Win32::Foundation::{PROPERTYKEY, VARIANT_BOOL};
-use windows::Win32::Storage::FileSystem::ReplaceFileW;
 use windows::Win32::System::Com::StructuredStorage::{
     CreateStreamOnHGlobal, IStorage, StgOpenStorage, PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0,
     PROPVARIANT_0_0_0,
@@ -45,8 +43,6 @@ const PKEY_APP_USER_MODEL_IS_DEST_LIST_LINK: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
     pid: 7,
 };
-
-static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 struct AddPlan {
@@ -112,13 +108,15 @@ pub(crate) fn add_entry_path(
 
     let entry_id = next_entry_id(&parsed)?;
     let numeric_stream = create_destlist_shell_link(target_path, timeout)?;
+    let old_dest = parsed
+        .cfb_info()
+        .stream("DestList")
+        .ok_or_else(|| WincentError::DestListParse("missing DestList stream".to_string()))?
+        .data()
+        .to_vec();
     let (dest_bytes, stream_name) = build_destlist_v4(
         parsed.dest_list().entries(),
-        parsed
-            .cfb_info()
-            .stream("DestList")
-            .ok_or_else(|| WincentError::DestListParse("missing DestList stream".to_string()))?
-            .data(),
+        &old_dest,
         target_path,
         &numeric_stream,
         plan.kind,
@@ -126,17 +124,14 @@ pub(crate) fn add_entry_path(
     )?;
     let rewritten = replace_cfb_streams(original, &dest_bytes, &stream_name, &numeric_stream)?;
     validate_rewritten(&rewritten, plan.kind, target_path, &stream_name)?;
-    match replace_file_atomically(&plan.dest_path, &rewritten) {
-        Ok(()) => {}
-        Err(error) if is_sharing_violation(&error) => write_streams_in_place(
-            &plan.dest_path,
-            &dest_bytes,
-            &stream_name,
-            &numeric_stream,
-            timeout,
-        )?,
-        Err(error) => return Err(error),
-    }
+    insert_streams_in_place(
+        &plan.dest_path,
+        &old_dest,
+        &dest_bytes,
+        &stream_name,
+        &numeric_stream,
+        timeout,
+    )?;
     let live = fs::read(&plan.dest_path).map_err(WincentError::Io)?;
     validate_rewritten(&live, plan.kind, target_path, &stream_name)?;
 
@@ -445,14 +440,16 @@ fn replace_cfb_streams(
     Ok(compound.into_inner().into_inner())
 }
 
-fn write_streams_in_place(
+fn insert_streams_in_place(
     dest_path: &Path,
+    old_dest: &[u8],
     dest_bytes: &[u8],
     stream_name: &str,
     numeric: &[u8],
     timeout: Duration,
 ) -> WincentResult<()> {
     let dest_path = dest_path.to_path_buf();
+    let old_dest = old_dest.to_vec();
     let dest_bytes = dest_bytes.to_vec();
     let stream_name = stream_name.to_string();
     let numeric = numeric.to_vec();
@@ -473,31 +470,72 @@ fn write_streams_in_place(
                 WincentError::SystemError(format!("StgOpenStorage failed: {error}"))
             })?;
             let dest_name = wide("DestList");
-            let dest_stream = storage
-                .OpenStream(PCWSTR::from_raw(dest_name.as_ptr()), None, mode, 0)
-                .map_err(|error| {
-                    WincentError::SystemError(format!("open DestList stream failed: {error}"))
-                })?;
-            write_istream(&dest_stream, &dest_bytes)?;
-
             let numeric_name = wide(&stream_name);
-            let numeric_stream = storage
-                .CreateStream(
-                    PCWSTR::from_raw(numeric_name.as_ptr()),
-                    STGM(mode.0 | STGM_CREATE.0),
-                    0,
-                    0,
-                )
-                .map_err(|error| {
-                    WincentError::SystemError(format!(
-                        "create numeric stream {stream_name} failed: {error}"
-                    ))
+            let mut numeric_created = false;
+            let operation: WincentResult<()> = (|| {
+                {
+                    let numeric_stream = storage
+                        .CreateStream(
+                            PCWSTR::from_raw(numeric_name.as_ptr()),
+                            STGM(mode.0 | STGM_CREATE.0),
+                            0,
+                            0,
+                        )
+                        .map_err(|error| {
+                            WincentError::SystemError(format!(
+                                "create numeric stream {stream_name} failed: {error}"
+                            ))
+                        })?;
+                    numeric_created = true;
+                    write_istream(&numeric_stream, &numeric)?;
+                }
+                {
+                    let dest_stream = storage
+                        .OpenStream(PCWSTR::from_raw(dest_name.as_ptr()), None, mode, 0)
+                        .map_err(|error| {
+                            WincentError::SystemError(format!(
+                                "open DestList stream failed: {error}"
+                            ))
+                        })?;
+                    write_istream(&dest_stream, &dest_bytes)?;
+                }
+                storage.Commit(0).map_err(|error| {
+                    WincentError::SystemError(format!("IStorage::Commit failed: {error}"))
                 })?;
-            write_istream(&numeric_stream, &numeric)?;
-            storage.Commit(0).map_err(|error| {
-                WincentError::SystemError(format!("IStorage::Commit failed: {error}"))
-            })?;
-            Ok(())
+                Ok(())
+            })();
+            let Err(operation_error) = operation else {
+                return Ok(());
+            };
+            if !numeric_created {
+                return Err(operation_error);
+            }
+
+            let mut rollback_errors = Vec::new();
+            match storage.OpenStream(PCWSTR::from_raw(dest_name.as_ptr()), None, mode, 0) {
+                Ok(dest_stream) => {
+                    if let Err(error) = write_istream(&dest_stream, &old_dest) {
+                        rollback_errors.push(format!("restore DestList failed: {error}"));
+                    }
+                }
+                Err(error) => {
+                    rollback_errors.push(format!("open DestList failed: {error}"));
+                }
+            }
+            if let Err(error) = storage.DestroyElement(PCWSTR::from_raw(numeric_name.as_ptr())) {
+                rollback_errors.push(format!("destroy stream {stream_name} failed: {error}"));
+            }
+            if let Err(error) = storage.Commit(0) {
+                rollback_errors.push(format!("commit failed: {error}"));
+            }
+            if rollback_errors.is_empty() {
+                Err(operation_error)
+            } else {
+                Err(WincentError::SystemError(format!(
+                    "direct insertion failed: {operation_error}; rollback failed: {}",
+                    rollback_errors.join("; ")
+                )))
+            }
         },
         timeout,
     )
@@ -533,10 +571,6 @@ unsafe fn write_istream(stream: &IStream, bytes: &[u8]) -> WincentResult<()> {
         })?;
         Ok(())
     }
-}
-
-fn is_sharing_violation(error: &WincentError) -> bool {
-    matches!(error, WincentError::WindowsApi(code) if matches!((*code as u32) & 0xffff, 32 | 33))
 }
 
 fn create_destlist_shell_link(
@@ -756,49 +790,6 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
 
-fn replace_file_atomically(path: &Path, data: &[u8]) -> WincentResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| WincentError::InvalidArgument("DestList path has no parent".to_string()))?;
-    let name = path.file_name().ok_or_else(|| {
-        WincentError::InvalidArgument("DestList path has no file name".to_string())
-    })?;
-    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = parent.join(format!(
-        ".{}.wincent-add-{}-{counter}.tmp",
-        name.to_string_lossy(),
-        std::process::id()
-    ));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)
-            .map_err(WincentError::Io)?;
-        file.write_all(data).map_err(WincentError::Io)?;
-        file.sync_all().map_err(WincentError::Io)?;
-        let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let temp_wide: Vec<u16> = temp_path.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe {
-            // SAFETY: Both UTF-16 buffers are valid and remain alive for ReplaceFileW; the
-            // temporary file is on the same volume and has been flushed.
-            ReplaceFileW(
-                PCWSTR::from_raw(path_wide.as_ptr()),
-                PCWSTR::from_raw(temp_wide.as_ptr()),
-                PCWSTR::null(),
-                windows::Win32::Storage::FileSystem::REPLACEFILE_WRITE_THROUGH,
-                None,
-                None,
-            )
-        }
-        .map_err(|error| WincentError::WindowsApi(error.code().0))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    result
-}
-
 fn read_u32(data: &[u8], offset: usize) -> WincentResult<u32> {
     data.get(offset..offset + 4)
         .ok_or_else(|| WincentError::DestListParse(format!("missing u32 at 0x{offset:x}")))
@@ -826,6 +817,7 @@ fn write_i32(data: &mut [u8], offset: usize, value: i32) -> WincentResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn builds_recent_v4_entry_and_header() -> WincentResult<()> {
@@ -903,6 +895,93 @@ mod tests {
         assert!(
             matches!(error, WincentError::DestListParse(message) if message.contains("TrackerDataBlock"))
         );
+    }
+
+    #[test]
+    fn inserts_streams_in_place_and_preserves_existing_streams() -> WincentResult<()> {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("direct-add.cfb");
+        let old_dest = empty_destlist(2.0, 4);
+        let new_dest = empty_destlist(3.0, 6);
+        let numeric = b"numeric-stream";
+        {
+            let mut compound = cfb::create(&path).expect("create test CFB");
+            compound
+                .create_stream("/DestList")
+                .expect("create DestList")
+                .write_all(&old_dest)
+                .expect("write old DestList");
+            compound
+                .create_stream("/Keep")
+                .expect("create unrelated stream")
+                .write_all(b"keep")
+                .expect("write unrelated stream");
+            compound.flush().expect("flush test CFB");
+        }
+
+        insert_streams_in_place(
+            &path,
+            &old_dest,
+            &new_dest,
+            "4",
+            numeric,
+            Duration::from_secs(5),
+        )?;
+
+        let mut compound = cfb::open(&path).expect("open inserted CFB");
+        let mut actual_dest = Vec::new();
+        compound
+            .open_stream("/DestList")
+            .expect("open DestList")
+            .read_to_end(&mut actual_dest)
+            .expect("read DestList");
+        let mut actual_numeric = Vec::new();
+        compound
+            .open_stream("/4")
+            .expect("open numeric stream")
+            .read_to_end(&mut actual_numeric)
+            .expect("read numeric stream");
+        let mut unrelated = Vec::new();
+        compound
+            .open_stream("/Keep")
+            .expect("open unrelated stream")
+            .read_to_end(&mut unrelated)
+            .expect("read unrelated stream");
+
+        assert_eq!(actual_dest, new_dest);
+        assert_eq!(actual_numeric, numeric);
+        assert_eq!(unrelated, b"keep");
+        Ok(())
+    }
+
+    #[test]
+    fn failed_in_place_insert_removes_created_numeric_stream() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("rollback.cfb");
+        {
+            let mut compound = cfb::create(&path).expect("create test CFB");
+            compound
+                .create_stream("/Keep")
+                .expect("create unrelated stream")
+                .write_all(b"keep")
+                .expect("write unrelated stream");
+            compound.flush().expect("flush test CFB");
+        }
+
+        let error = insert_streams_in_place(
+            &path,
+            &empty_destlist(2.0, 4),
+            &empty_destlist(3.0, 6),
+            "4",
+            b"numeric-stream",
+            Duration::from_secs(5),
+        )
+        .expect_err("missing DestList must fail");
+
+        assert!(error.to_string().contains("direct insertion failed"));
+        let mut compound = cfb::open(&path).expect("open rolled-back CFB");
+        assert!(compound.open_stream("/4").is_err());
+        assert!(compound.open_stream("/Keep").is_ok());
     }
 
     fn empty_destlist(counter: f32, action_count: u64) -> Vec<u8> {
