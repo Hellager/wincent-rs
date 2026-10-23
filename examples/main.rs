@@ -98,6 +98,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "add" => cmd_add(&manager, &args[1..]),
         "add-direct" => cmd_add_direct(&manager, &args[1..]),
         "add-timed" => cmd_add_timed(&manager, &args[1..]),
+        "modify-direct" => cmd_modify_direct(&manager, &args[1..]),
         "pin" => cmd_pin(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
         "remove-direct" => cmd_remove_direct(&manager, &args[1..]),
@@ -178,6 +179,9 @@ Core:
     writes a DestList v4 entry, numeric stream, and Recent shortcuts when applicable.
   add-timed <shell|direct> <recent|frequent> <path>
     prints successful addition time including Explorer refresh as one JSON object.
+  modify-direct <recent|frequent> <path> [--show|--hide] [--pin|--unpin]
+    [--position <first|last|N>]
+    updates DestList v4 visibility, Frequent pin state, or zero-based group position.
   pin <path>
   remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
     frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
@@ -400,6 +404,20 @@ fn cmd_add_timed(manager: &QuickAccessManager, args: &[String]) -> WincentResult
         args[1],
         started.elapsed().as_nanos()
     );
+    Ok(())
+}
+
+fn cmd_modify_direct(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(
+        args,
+        2,
+        "modify-direct <recent|frequent> <path> [--show|--hide] [--pin|--unpin] \
+         [--position <first|last|N>]",
+    )?;
+    let qa_type = parse_category(&args[0], false)?;
+    let update = parse_destlist_update(&args[2..])?;
+    manager.update_item_direct(&args[1], qa_type, update)?;
+    println!("directly updated {}", args[1]);
     Ok(())
 }
 
@@ -1196,6 +1214,45 @@ fn parse_remove_options(args: &[String]) -> WincentResult<RemoveOptions> {
     Ok(options)
 }
 
+fn parse_destlist_update(args: &[String]) -> WincentResult<DestListItemUpdate> {
+    let mut update = DestListItemUpdate::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--show" => update = update.show(),
+            "--hide" => update = update.hide(),
+            "--pin" => update = update.pin(),
+            "--unpin" => update = update.unpin(),
+            "--position" => {
+                index += 1;
+                let value = required_arg(args.get(index), "position")?;
+                let position = match value {
+                    "first" => DestListPosition::First,
+                    "last" => DestListPosition::Last,
+                    value => DestListPosition::Index(value.parse::<usize>().map_err(|_| {
+                        WincentError::InvalidArgument(format!(
+                            "position must be first, last, or a non-negative integer: {value}"
+                        ))
+                    })?),
+                };
+                update = update.with_position(position);
+            }
+            other => {
+                return Err(WincentError::InvalidArgument(format!(
+                    "unknown modify-direct option: {other}"
+                )));
+            }
+        }
+        index += 1;
+    }
+    if update.is_empty() {
+        return Err(WincentError::InvalidArgument(
+            "modify-direct requires at least one update option".to_string(),
+        ));
+    }
+    Ok(update)
+}
+
 fn split_batch_add_options(args: &[String]) -> WincentResult<(BatchOptions, Vec<String>)> {
     let mut options = BatchOptions::new();
     let mut rest = Vec::new();
@@ -1602,6 +1659,30 @@ mod tests {
 
         assert!(
             matches!(error, WincentError::InvalidArgument(message) if message == "pinned-timeout-ms requires a value")
+        );
+    }
+
+    #[test]
+    fn parse_destlist_update_combines_supported_changes() {
+        let update = parse_destlist_update(&[
+            "--show".to_string(),
+            "--unpin".to_string(),
+            "--position".to_string(),
+            "2".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(update.visible_value(), Some(true));
+        assert_eq!(update.pinned_value(), Some(false));
+        assert_eq!(update.position_value(), Some(DestListPosition::Index(2)));
+    }
+
+    #[test]
+    fn parse_destlist_update_requires_a_change() {
+        let error = parse_destlist_update(&[]).unwrap_err();
+
+        assert!(
+            matches!(error, WincentError::InvalidArgument(message) if message.contains("at least one"))
         );
     }
 

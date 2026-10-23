@@ -44,6 +44,16 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
             "direct DestList removal is not implemented by this backend".to_string(),
         ))
     }
+    fn update_destlist_entry(
+        &self,
+        _path: &str,
+        _qa_type: QuickAccess,
+        _update: crate::destlist::DestListItemUpdate,
+    ) -> WincentResult<()> {
+        Err(crate::error::WincentError::UnsupportedOperation(
+            "direct DestList update is not implemented by this backend".to_string(),
+        ))
+    }
 
     fn delete_recent_links_for_target(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn list_recent_lnk_files(&self) -> WincentResult<Vec<PathBuf>>;
@@ -143,6 +153,15 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
 
     fn remove_destlist_entry(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
         crate::destlist::remove::remove_entry_path(qa_type, path)
+    }
+
+    fn update_destlist_entry(
+        &self,
+        path: &str,
+        qa_type: QuickAccess,
+        update: crate::destlist::DestListItemUpdate,
+    ) -> WincentResult<()> {
+        crate::destlist::update::update_entry_path(qa_type, path, update)
     }
 
     fn delete_recent_links_for_target(&self, path: &str, timeout: Duration) -> WincentResult<()> {

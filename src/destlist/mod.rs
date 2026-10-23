@@ -58,6 +58,8 @@ pub mod parser;
 pub(crate) mod remove;
 /// FILETIME conversion helpers for DestList timestamps.
 pub mod time;
+mod transaction;
+pub(crate) mod update;
 
 pub(crate) use parser::frequent_folder_pin_status;
 pub use parser::{
@@ -68,7 +70,115 @@ pub use parser::{
     DiagnosticSeverity, FrequentFolderPinStatus, PathSource, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
     DEFAULT_RECENT_FILES_RESULT_LIMIT, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
 };
-use std::sync::Mutex;
 pub use time::filetime_to_system_time;
 
-pub(super) static DIRECT_DESTLIST_LOCK: Mutex<()> = Mutex::new(());
+/// Zero-based destination for a direct DestList item move.
+///
+/// Recent Files positions address the raw DestList entry sequence. Frequent
+/// Folders positions address the item's current pin group: pinned entries use
+/// pin order, while unpinned entries use rank order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DestListPosition {
+    /// Move the item to the first position in its list or pin group.
+    First,
+    /// Move the item to the last position in its list or pin group.
+    Last,
+    /// Move the item to a zero-based position in its list or pin group.
+    Index(usize),
+}
+
+/// Requested changes for one DestList v4 entry.
+///
+/// Score and last-interaction time are intentionally not writable through this
+/// API. Pin changes are accepted only for Frequent Folders.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct DestListItemUpdate {
+    visible: Option<bool>,
+    pinned: Option<bool>,
+    position: Option<DestListPosition>,
+}
+
+impl DestListItemUpdate {
+    /// Creates an empty update.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            visible: None,
+            pinned: None,
+            position: None,
+        }
+    }
+
+    /// Returns the requested visibility change, if any.
+    #[must_use]
+    pub const fn visible_value(&self) -> Option<bool> {
+        self.visible
+    }
+
+    /// Sets whether the entry is eligible for display.
+    #[must_use]
+    pub const fn with_visible(mut self, visible: bool) -> Self {
+        self.visible = Some(visible);
+        self
+    }
+
+    /// Marks the entry for display.
+    #[must_use]
+    pub const fn show(self) -> Self {
+        self.with_visible(true)
+    }
+
+    /// Hides the entry without deleting its DestList entry or numeric stream.
+    ///
+    /// A pinned Frequent Folder cannot be hidden. Combine this with
+    /// [`Self::unpin`] to hide it while retaining it as an unpinned entry.
+    #[must_use]
+    pub const fn hide(self) -> Self {
+        self.with_visible(false)
+    }
+
+    /// Returns the requested Frequent Folders pin change, if any.
+    #[must_use]
+    pub const fn pinned_value(&self) -> Option<bool> {
+        self.pinned
+    }
+
+    /// Sets the Frequent Folders pinned state.
+    #[must_use]
+    pub const fn with_pinned(mut self, pinned: bool) -> Self {
+        self.pinned = Some(pinned);
+        self
+    }
+
+    /// Pins a Frequent Folders entry.
+    #[must_use]
+    pub const fn pin(self) -> Self {
+        self.with_pinned(true)
+    }
+
+    /// Converts a pinned Frequent Folders entry to an unpinned entry.
+    #[must_use]
+    pub const fn unpin(self) -> Self {
+        self.with_pinned(false)
+    }
+
+    /// Returns the requested position change, if any.
+    #[must_use]
+    pub const fn position_value(&self) -> Option<DestListPosition> {
+        self.position
+    }
+
+    /// Sets the destination position.
+    #[must_use]
+    pub const fn with_position(mut self, position: DestListPosition) -> Self {
+        self.position = Some(position);
+        self
+    }
+
+    /// Returns whether no changes were requested.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.visible.is_none() && self.pinned.is_none() && self.position.is_none()
+    }
+}

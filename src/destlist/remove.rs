@@ -61,12 +61,11 @@ fn remove_entry_path_from_file(
     qa_type: QuickAccess,
     target_path: &str,
 ) -> WincentResult<()> {
-    let _guard = super::DIRECT_DESTLIST_LOCK.lock().map_err(|_| {
-        WincentError::SystemError("direct DestList removal lock was poisoned".to_string())
-    })?;
-    let original = fs::read(dest_path).map_err(WincentError::Io)?;
+    let write_guard = super::transaction::DirectWriteGuard::acquire(dest_path)?;
+    let snapshot = write_guard.read_snapshot(dest_path)?;
+    let original = snapshot.bytes().to_vec();
     let rewritten = rewrite_cfb_bytes(original, kind, qa_type, target_path)?;
-    replace_file_atomically(dest_path, &rewritten)
+    replace_file_atomically(dest_path, &rewritten, &write_guard, &snapshot)
 }
 
 fn rewrite_cfb_bytes(
@@ -307,7 +306,12 @@ fn validate_rewritten(
     Ok(())
 }
 
-fn replace_file_atomically(path: &Path, data: &[u8]) -> WincentResult<()> {
+pub(super) fn replace_file_atomically(
+    path: &Path,
+    data: &[u8],
+    write_guard: &super::transaction::DirectWriteGuard,
+    snapshot: &super::transaction::BackingFileSnapshot,
+) -> WincentResult<()> {
     let temp_path = temporary_replacement_path(path)?;
     let result = (|| {
         let mut temp = OpenOptions::new()
@@ -318,6 +322,8 @@ fn replace_file_atomically(path: &Path, data: &[u8]) -> WincentResult<()> {
         temp.write_all(data).map_err(WincentError::Io)?;
         temp.sync_all().map_err(WincentError::Io)?;
         drop(temp);
+
+        let _verification = write_guard.verify_unchanged(path, snapshot)?;
 
         let path_wide = wide_null(path);
         let temp_wide = wide_null(&temp_path);

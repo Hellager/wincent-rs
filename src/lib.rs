@@ -137,15 +137,17 @@ pub mod prelude {
         parse_file as parse_dest_file, parse_file_with_kind as parse_dest_file_with_kind,
         quick_access_entries, quick_access_entries_for_kind, recent_files_dest_path,
         visible_entries, visible_entries_for_kind, AutomaticDestinations, CfbInfo, CfbStream,
-        DestList, DestListEntry, DestListKind, Diagnostic, DiagnosticSeverity,
-        FrequentFolderPinStatus, PathSource, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
-        DEFAULT_RECENT_FILES_RESULT_LIMIT, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
+        DestList, DestListEntry, DestListItemUpdate, DestListKind, DestListPosition, Diagnostic,
+        DiagnosticSeverity, FrequentFolderPinStatus, PathSource,
+        DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS, DEFAULT_RECENT_FILES_RESULT_LIMIT,
+        FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
     };
 }
 
 use crate::error::WincentError;
 
 pub use crate::batch::{BatchOptions, BatchResult};
+pub use crate::destlist::{DestListItemUpdate, DestListPosition};
 pub use crate::empty::EmptyOptions;
 pub use crate::error::QuickAccessPostMutationStep;
 pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions, RemoveTimingReport};

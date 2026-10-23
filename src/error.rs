@@ -1091,6 +1091,10 @@ pub enum WincentError {
     #[error("DestList parse error: {0}")]
     DestListParse(String),
 
+    /// The backing file changed after a direct DestList mutation took its snapshot.
+    #[error("DestList backing file changed during direct mutation: {0}")]
+    DestListConcurrentModification(PathBuf),
+
     /// The DestList file uses a version that this parser does not support.
     #[error("Unsupported DestList version: {0}")]
     DestListUnsupportedVersion(u32),

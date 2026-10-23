@@ -811,6 +811,68 @@ impl QuickAccessManager {
         self.refresh_explorer_after_mutation(&path, qa_type)
     }
 
+    /// Updates visibility, pin state, or order in a DestList v4 backing file.
+    ///
+    /// Recent Files ordering rewrites the raw entry sequence. Frequent Folders
+    /// ordering updates pin order for pinned entries and rank plus candidate
+    /// sequence for unpinned entries. Pin changes are supported only for
+    /// Frequent Folders; unpinning retains the entry and numeric stream as an
+    /// unpinned item.
+    ///
+    /// This operation never changes score or last-interaction time. Showing an
+    /// unpinned Frequent Folder raises its access count to the observed minimum
+    /// and assigns a non-negative rank when needed. Capacity limits can still
+    /// keep an eligible unpinned folder outside Explorer's visible window. A
+    /// pinned Frequent Folder cannot be hidden; explicitly unpin it in the same
+    /// update when hiding it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidArgument`] for an empty update or an
+    /// out-of-range position, [`WincentError::UnsupportedOperation`] for
+    /// [`QuickAccess::All`] or a Recent Files pin change,
+    /// [`WincentError::NotInQuickAccess`] when no raw entry matches, or a
+    /// DestList/CFB error when the v4 backing file cannot be validated and
+    /// replaced.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// manager.update_item_direct(
+    ///     "C:\\Work\\report.docx",
+    ///     QuickAccess::RecentFiles,
+    ///     DestListItemUpdate::new()
+    ///         .show()
+    ///         .with_position(DestListPosition::First),
+    /// )?;
+    /// manager.update_item_direct(
+    ///     "C:\\Work",
+    ///     QuickAccess::FrequentFolders,
+    ///     DestListItemUpdate::new().unpin(),
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn update_item_direct<P: AsRef<Path>>(
+        &self,
+        path: P,
+        qa_type: QuickAccess,
+        update: crate::destlist::DestListItemUpdate,
+    ) -> WincentResult<()> {
+        let path = path_to_shell_string(path.as_ref())?;
+        if qa_type == QuickAccess::All {
+            return Err(WincentError::UnsupportedOperation(
+                "QuickAccess::All is not valid for direct DestList updates".to_string(),
+            ));
+        }
+        self.backend.update_destlist_entry(&path, qa_type, update)?;
+        self.refresh_explorer_after_mutation(&path, qa_type)
+    }
+
     /// Pins a directory to Quick Access Frequent Folders.
     ///
     /// This is a convenience wrapper around [`QuickAccessManager::add_item`] for
@@ -1839,6 +1901,18 @@ mod tests {
             Ok(())
         }
 
+        fn update_destlist_entry(
+            &self,
+            path: &str,
+            qa_type: QuickAccess,
+            update: crate::destlist::DestListItemUpdate,
+        ) -> WincentResult<()> {
+            self.record(format!(
+                "update_destlist_entry:{qa_type:?}:{path}:{update:?}"
+            ));
+            Ok(())
+        }
+
         fn delete_recent_links_for_target(
             &self,
             path: &str,
@@ -2561,6 +2635,31 @@ mod tests {
     }
 
     #[test]
+    fn direct_update_rewrites_cfb_and_refreshes() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(7), backend.clone());
+        let update = crate::destlist::DestListItemUpdate::new()
+            .show()
+            .with_position(crate::destlist::DestListPosition::First);
+
+        manager.update_item_direct("C:\\report.docx", QuickAccess::RecentFiles, update)?;
+
+        assert_eq!(
+            backend.calls(),
+            vec![
+                format!("update_destlist_entry:RecentFiles:C:\\report.docx:{update:?}"),
+                "refresh_explorer".to_string(),
+            ]
+        );
+        assert_eq!(
+            backend.refresh_explorer_timeouts.lock().unwrap().as_slice(),
+            &[Duration::from_secs(7)]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn direct_add_rejects_all_before_mutation() {
         let backend = Arc::new(FakeBackend::default());
         let manager =
@@ -2582,6 +2681,24 @@ mod tests {
 
         let error = manager
             .remove_item_direct("C:\\report.docx", QuickAccess::All)
+            .unwrap_err();
+
+        assert!(matches!(error, WincentError::UnsupportedOperation(_)));
+        assert!(backend.calls().is_empty());
+    }
+
+    #[test]
+    fn direct_update_rejects_all_before_mutation() {
+        let backend = Arc::new(FakeBackend::default());
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let error = manager
+            .update_item_direct(
+                "C:\\report.docx",
+                QuickAccess::All,
+                crate::destlist::DestListItemUpdate::new().hide(),
+            )
             .unwrap_err();
 
         assert!(matches!(error, WincentError::UnsupportedOperation(_)));

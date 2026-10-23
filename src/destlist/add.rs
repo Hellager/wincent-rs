@@ -74,9 +74,7 @@ pub(crate) fn add_entry_path(
         }
     };
 
-    let _guard = super::DIRECT_DESTLIST_LOCK.lock().map_err(|_| {
-        WincentError::SystemError("direct DestList addition lock was poisoned".to_string())
-    })?;
+    let write_guard = super::transaction::DirectWriteGuard::acquire(&plan.dest_path)?;
     let target = Path::new(target_path);
     if !target.exists() {
         return Err(WincentError::invalid_path(
@@ -95,7 +93,8 @@ pub(crate) fn add_entry_path(
         ));
     }
 
-    let original = fs::read(&plan.dest_path).map_err(WincentError::Io)?;
+    let snapshot = write_guard.read_snapshot(&plan.dest_path)?;
+    let original = snapshot.bytes().to_vec();
     let parsed = parse_bytes_with_kind(original.clone(), plan.kind)?;
     validate_original(&parsed)?;
     let target_key = normalize_path_lightweight(target_path);
@@ -124,6 +123,10 @@ pub(crate) fn add_entry_path(
     )?;
     let rewritten = replace_cfb_streams(original, &dest_bytes, &stream_name, &numeric_stream)?;
     validate_rewritten(&rewritten, plan.kind, target_path, &stream_name)?;
+    let verification = write_guard.verify_unchanged(&plan.dest_path, &snapshot)?;
+    // StgOpenStorage needs a writable handle. Its exclusive open below performs one final
+    // DestList comparison before changing either stream.
+    drop(verification);
     insert_streams_in_place(
         &plan.dest_path,
         &old_dest,
@@ -473,6 +476,16 @@ fn insert_streams_in_place(
             let numeric_name = wide(&stream_name);
             let mut numeric_created = false;
             let operation: WincentResult<()> = (|| {
+                let dest_stream = storage
+                    .OpenStream(PCWSTR::from_raw(dest_name.as_ptr()), None, mode, 0)
+                    .map_err(|error| {
+                        WincentError::SystemError(format!("open DestList stream failed: {error}"))
+                    })?;
+                if read_istream(&dest_stream)? != old_dest {
+                    return Err(WincentError::DestListConcurrentModification(
+                        dest_path.clone(),
+                    ));
+                }
                 {
                     let numeric_stream = storage
                         .CreateStream(
@@ -489,16 +502,7 @@ fn insert_streams_in_place(
                     numeric_created = true;
                     write_istream(&numeric_stream, &numeric)?;
                 }
-                {
-                    let dest_stream = storage
-                        .OpenStream(PCWSTR::from_raw(dest_name.as_ptr()), None, mode, 0)
-                        .map_err(|error| {
-                            WincentError::SystemError(format!(
-                                "open DestList stream failed: {error}"
-                            ))
-                        })?;
-                    write_istream(&dest_stream, &dest_bytes)?;
-                }
+                write_istream(&dest_stream, &dest_bytes)?;
                 storage.Commit(0).map_err(|error| {
                     WincentError::SystemError(format!("IStorage::Commit failed: {error}"))
                 })?;
@@ -539,6 +543,34 @@ fn insert_streams_in_place(
         },
         timeout,
     )
+}
+
+unsafe fn read_istream(stream: &IStream) -> WincentResult<Vec<u8>> {
+    unsafe {
+        // SAFETY: The caller owns a readable COM stream on this apartment. Stat, Seek, and Read
+        // operate on that live interface, and the output buffers remain valid for each call.
+        let mut stat = std::mem::zeroed();
+        stream
+            .Stat(&mut stat, windows::Win32::System::Com::STATFLAG_NONAME)
+            .map_err(|error| WincentError::SystemError(format!("IStream::Stat failed: {error}")))?;
+        let len = usize::try_from(stat.cbSize).map_err(|_| {
+            WincentError::DestListParse("DestList stream exceeds usize length".to_string())
+        })?;
+        let read_len = u32::try_from(len).map_err(|_| {
+            WincentError::DestListParse("DestList stream exceeds u32 length".to_string())
+        })?;
+        stream
+            .Seek(0, STREAM_SEEK_SET, None)
+            .map_err(|error| WincentError::SystemError(format!("IStream::Seek failed: {error}")))?;
+        let mut bytes = vec![0_u8; len];
+        let mut read = 0_u32;
+        stream
+            .Read(bytes.as_mut_ptr().cast(), read_len, Some(&mut read))
+            .ok()
+            .map_err(|error| WincentError::SystemError(format!("IStream::Read failed: {error}")))?;
+        bytes.truncate(read as usize);
+        Ok(bytes)
+    }
 }
 
 unsafe fn write_istream(stream: &IStream, bytes: &[u8]) -> WincentResult<()> {
@@ -955,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_in_place_insert_removes_created_numeric_stream() {
+    fn missing_destlist_fails_before_numeric_stream_creation() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("rollback.cfb");
         {
@@ -978,7 +1010,7 @@ mod tests {
         )
         .expect_err("missing DestList must fail");
 
-        assert!(error.to_string().contains("direct insertion failed"));
+        assert!(error.to_string().contains("open DestList stream failed"));
         let mut compound = cfb::open(&path).expect("open rolled-back CFB");
         assert!(compound.open_stream("/4").is_err());
         assert!(compound.open_stream("/Keep").is_ok());
