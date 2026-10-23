@@ -93,7 +93,7 @@ pub(crate) fn add_entry_path(
     let snapshot = write_guard.read_snapshot(&plan.dest_path)?;
     let original = snapshot.bytes().to_vec();
     let parsed = parse_bytes_with_kind(original.clone(), plan.kind)?;
-    validate_original(&parsed)?;
+    super::validation::validate_writer_input(&parsed, plan.kind)?;
     let target_key = normalize_path_lightweight(target_path);
     if parsed.dest_list().entries().iter().any(|entry| {
         normalize_path_lightweight(entry.path()) == target_key
@@ -199,34 +199,6 @@ fn choose_link_path(recent_folder: &Path, stem: &str, target: &str) -> WincentRe
     )))
 }
 
-fn validate_original(parsed: &AutomaticDestinations) -> WincentResult<()> {
-    let dest_list = parsed.dest_list();
-    if dest_list.version() != 4 {
-        return Err(WincentError::DestListUnsupportedVersion(
-            dest_list.version(),
-        ));
-    }
-    if dest_list.declared_entry_count() != dest_list.entries().len() {
-        return Err(WincentError::DestListParse(format!(
-            "cannot rewrite a partial DestList: declared {}, parsed {}",
-            dest_list.declared_entry_count(),
-            dest_list.entries().len()
-        )));
-    }
-    if dest_list.entries().iter().any(|entry| {
-        !entry.checksum_valid()
-            || matches!(
-                entry.score().partial_cmp(&0.0),
-                Some(std::cmp::Ordering::Less) | None
-            )
-    }) {
-        return Err(WincentError::DestListParse(
-            "cannot rewrite an invalid DestList v4 table".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 fn next_entry_id(parsed: &AutomaticDestinations) -> WincentResult<u64> {
     let mut id = parsed
         .dest_list()
@@ -257,7 +229,7 @@ fn validate_rewritten(
     stream_name: &str,
 ) -> WincentResult<()> {
     let parsed = parse_bytes_with_kind(rewritten.to_vec(), kind)?;
-    validate_original(&parsed)?;
+    super::validation::validate_writer_input(&parsed, kind)?;
     if parsed.cfb_info().stream(stream_name).is_none() {
         return Err(WincentError::DestListParse(format!(
             "rewritten CFB is missing numeric stream {stream_name}"
@@ -351,17 +323,19 @@ fn build_destlist_v4(
 
     let mut adjusted = old_dest.to_vec();
     if kind == DestListKind::FrequentFolders {
-        for existing in entries.iter().filter(|existing| !existing.is_pinned()) {
+        for existing in entries {
             let rank = existing.recent_rank();
-            if rank >= 0 {
-                write_i32(
-                    &mut adjusted,
-                    existing.entry_offset() + 0x70,
-                    rank.checked_add(1).ok_or_else(|| {
-                        WincentError::DestListParse("Frequent Folder rank overflow".to_string())
-                    })?,
-                )?;
-            }
+            write_i32(
+                &mut adjusted,
+                existing.entry_offset() + 0x70,
+                rank.checked_add(1).ok_or_else(|| {
+                    WincentError::DestListParse("Frequent Folder rank overflow".to_string())
+                })?,
+            )?;
+            let checksum = crc64(
+                &adjusted[existing.entry_offset()..existing.entry_offset() + existing.entry_len()],
+            );
+            write_u64(&mut adjusted, existing.entry_offset(), checksum)?;
         }
     }
 

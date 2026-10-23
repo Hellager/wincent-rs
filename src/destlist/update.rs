@@ -1,6 +1,5 @@
 //! Direct DestList v4 entry visibility, pin-state, and ordering updates.
 
-use std::cmp::Ordering;
 use std::io::{Cursor, Write};
 use std::path::Path;
 
@@ -83,11 +82,7 @@ fn rewrite_cfb_bytes(
     update: DestListItemUpdate,
 ) -> WincentResult<Vec<u8>> {
     let parsed = parse_bytes_with_kind(original.clone(), kind)?;
-    validate_original(
-        parsed.dest_list().entries(),
-        parsed.dest_list().version(),
-        parsed.dest_list().declared_entry_count(),
-    )?;
+    super::validation::validate_writer_input(&parsed, kind)?;
 
     let old_dest = parsed
         .cfb_info()
@@ -131,6 +126,9 @@ fn rewrite_cfb_bytes(
     if let Some(position) = update.position_value() {
         set_position(&mut entries, target_id, kind, position)?;
     }
+    if kind == DestListKind::FrequentFolders {
+        normalize_frequent_ranks(&mut entries)?;
+    }
 
     let dest_bytes = build_destlist(old_dest, &mut entries)?;
     let rewritten = replace_destlist_stream(original, &dest_bytes)?;
@@ -142,31 +140,6 @@ fn rewrite_cfb_bytes(
         update,
     )?;
     Ok(rewritten)
-}
-
-fn validate_original(
-    entries: &[DestListEntry],
-    version: u32,
-    declared_entry_count: usize,
-) -> WincentResult<()> {
-    if version != 4 {
-        return Err(WincentError::DestListUnsupportedVersion(version));
-    }
-    if declared_entry_count != entries.len() {
-        return Err(WincentError::DestListParse(format!(
-            "cannot rewrite a partial DestList: declared {declared_entry_count}, parsed {}",
-            entries.len()
-        )));
-    }
-    if entries.iter().any(|entry| {
-        !entry.checksum_valid()
-            || matches!(entry.score().partial_cmp(&0.0), Some(Ordering::Less) | None)
-    }) {
-        return Err(WincentError::DestListParse(
-            "cannot rewrite an invalid DestList v4 table".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 fn mutable_entries(
@@ -364,6 +337,30 @@ fn assign_pin_order(entries: &mut [MutableEntry], ids: &[u64]) -> WincentResult<
     Ok(())
 }
 
+fn normalize_frequent_ranks(entries: &mut [MutableEntry]) -> WincentResult<()> {
+    let mut unpinned: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.pin_status < 0)
+        .map(|entry| (entry.rank, entry.entry_id))
+        .collect();
+    unpinned.sort_unstable();
+
+    let mut pinned: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.pin_status >= 0)
+        .map(|entry| (entry.pin_status, entry.entry_id))
+        .collect();
+    pinned.sort_unstable();
+
+    for (rank, (_, entry_id)) in unpinned.into_iter().chain(pinned).enumerate() {
+        let index = entry_index(entries, entry_id)?;
+        entries[index].rank = i32::try_from(rank).map_err(|_| {
+            WincentError::DestListParse("Frequent Folder rank overflow".to_string())
+        })?;
+    }
+    Ok(())
+}
+
 fn next_unpinned_rank(entries: &[MutableEntry], target_id: u64) -> WincentResult<i32> {
     entries
         .iter()
@@ -465,11 +462,7 @@ fn validate_rewritten(
 ) -> WincentResult<()> {
     let parsed = parse_bytes_with_kind(rewritten.to_vec(), kind)?;
     let entries = parsed.dest_list().entries();
-    validate_original(
-        entries,
-        parsed.dest_list().version(),
-        parsed.dest_list().declared_entry_count(),
-    )?;
+    super::validation::validate_writer_input(&parsed, kind)?;
     if entries.len() != original_entries.len() {
         return Err(WincentError::DestListParse(
             "direct update changed the DestList entry count".to_string(),
@@ -620,7 +613,7 @@ mod tests {
     #[test]
     fn frequent_update_pins_entry_and_preserves_usage_metadata() -> WincentResult<()> {
         let source = build_test_cfb(&[
-            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 3, 4),
+            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 1, 4),
             test_entry(2, "C:\\Frequent", 3.0, 200, -1, 0, 3),
         ]);
 
@@ -645,7 +638,7 @@ mod tests {
     #[test]
     fn frequent_update_unpins_without_deleting_entry_or_stream() -> WincentResult<()> {
         let source = build_test_cfb(&[
-            test_entry(1, "C:\\Pinned", 0.0, 0, 0, -1, 0),
+            test_entry(1, "C:\\Pinned", 0.0, 0, 0, 1, 0),
             test_entry(2, "C:\\Frequent", 3.0, 200, -1, 0, 3),
         ]);
 
@@ -673,7 +666,7 @@ mod tests {
     #[test]
     fn frequent_update_rejects_hidden_pinned_final_state() {
         let source = build_test_cfb(&[
-            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 3, 4),
+            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 1, 4),
             test_entry(2, "C:\\Frequent", 3.0, 200, -1, 0, 3),
         ]);
 
@@ -696,7 +689,7 @@ mod tests {
     #[test]
     fn frequent_update_can_unpin_and_hide_without_deleting() -> WincentResult<()> {
         let source = build_test_cfb(&[
-            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 3, 4),
+            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 1, 4),
             test_entry(2, "C:\\Frequent", 3.0, 200, -1, 0, 3),
         ]);
 
@@ -719,7 +712,7 @@ mod tests {
     #[test]
     fn frequent_unpinned_move_updates_rank_and_candidate_sequence() -> WincentResult<()> {
         let source = build_test_cfb(&[
-            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 4, 4),
+            test_entry(1, "C:\\Pinned", 5.0, 100, 0, 2, 4),
             test_entry(2, "C:\\First", 3.0, 200, -1, 0, 3),
             test_entry(3, "C:\\Second", 3.0, 300, -1, 1, 3),
         ]);

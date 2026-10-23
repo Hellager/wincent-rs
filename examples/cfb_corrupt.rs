@@ -123,9 +123,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .create_stream(format!("/{second_stream}"))?
                 .write_all(&numeric)?;
         }
+        "duplicate-stream" => {
+            let second = entries.get(1).ok_or("duplicate-stream needs two entries")?;
+            let duplicated_id =
+                (second.entry_id() & !u64::from(u32::MAX)) | u64::from(first.entry_number());
+            write_u64(&mut dest, second.entry_offset() + 0x58, duplicated_id)?;
+            let checksum = entry_checksum(&dest, second.entry_offset())?;
+            write_u64(&mut dest, second.entry_offset(), checksum)?;
+        }
         "illegal-pin-rank" => {
             write_i32(&mut dest, first_offset + PIN_STATUS_OFFSET, 99)?;
             write_i32(&mut dest, first_offset + RANK_OFFSET, -42)?;
+            let checksum = entry_checksum(&dest, first_offset)?;
+            write_u64(&mut dest, first_offset, checksum)?;
+        }
+        "pin-gap" => {
+            let pinned = entries
+                .iter()
+                .find(|entry| entry.is_pinned())
+                .ok_or("pin-gap needs a pinned entry")?;
+            write_i32(&mut dest, pinned.entry_offset() + PIN_STATUS_OFFSET, 99)?;
+            let checksum = entry_checksum(&dest, pinned.entry_offset())?;
+            write_u64(&mut dest, pinned.entry_offset(), checksum)?;
+        }
+        "rank-gap" => {
+            let invalid_rank = i32::try_from(entries.len())?
+                .checked_add(10)
+                .ok_or("rank gap overflow")?;
+            write_i32(&mut dest, first_offset + RANK_OFFSET, invalid_rank)?;
             let checksum = entry_checksum(&dest, first_offset)?;
             write_u64(&mut dest, first_offset, checksum)?;
         }

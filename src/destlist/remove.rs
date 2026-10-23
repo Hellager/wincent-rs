@@ -36,6 +36,8 @@ struct RemovedEntry {
     len: usize,
     stream_name: String,
     pinned: bool,
+    pin_order: Option<i32>,
+    rank: i32,
     score: f32,
 }
 
@@ -75,30 +77,8 @@ fn rewrite_cfb_bytes(
     target_path: &str,
 ) -> WincentResult<Vec<u8>> {
     let parsed = parse_bytes_with_kind(original.clone(), kind)?;
+    super::validation::validate_writer_input(&parsed, kind)?;
     let dest_list = parsed.dest_list();
-    if dest_list.version() != 4 {
-        return Err(WincentError::DestListUnsupportedVersion(
-            dest_list.version(),
-        ));
-    }
-    if dest_list.declared_entry_count() != dest_list.entries().len() {
-        return Err(WincentError::DestListParse(format!(
-            "cannot rewrite a partial DestList: declared {}, parsed {}",
-            dest_list.declared_entry_count(),
-            dest_list.entries().len()
-        )));
-    }
-    if dest_list.entries().iter().any(|entry| {
-        !entry.checksum_valid()
-            || matches!(
-                entry.score().partial_cmp(&0.0),
-                Some(std::cmp::Ordering::Less) | None
-            )
-    }) {
-        return Err(WincentError::DestListParse(
-            "cannot rewrite an invalid DestList v4 table".to_string(),
-        ));
-    }
 
     let target_key = normalize_path_lightweight(target_path);
     let removed: Vec<RemovedEntry> = dest_list
@@ -110,6 +90,8 @@ fn rewrite_cfb_bytes(
             len: entry.entry_len(),
             stream_name: entry.stream_name().to_string(),
             pinned: entry.is_pinned(),
+            pin_order: entry.pin_order(),
+            rank: entry.recent_rank(),
             score: entry.score(),
         })
         .collect();
@@ -139,6 +121,9 @@ fn rewrite_cfb_bytes(
         .data()
         .to_vec();
     update_header(&mut dest_bytes, dest_list.entries(), &removed, kind)?;
+    if kind == DestListKind::FrequentFolders {
+        compact_frequent_ordering(&mut dest_bytes, dest_list.entries(), &removed)?;
+    }
     for entry in removed.iter().rev() {
         let end = entry.offset.checked_add(entry.len).ok_or_else(|| {
             WincentError::DestListParse("DestList entry range overflow".to_string())
@@ -267,6 +252,75 @@ fn update_header(
     Ok(())
 }
 
+fn compact_frequent_ordering(
+    dest_bytes: &mut [u8],
+    entries: &[DestListEntry],
+    removed: &[RemovedEntry],
+) -> WincentResult<()> {
+    for entry in entries.iter().filter(|entry| {
+        !removed.iter().any(|removed| {
+            removed.offset == entry.entry_offset() && removed.len == entry.entry_len()
+        })
+    }) {
+        let rank_shift = removed
+            .iter()
+            .filter(|removed| removed.rank < entry.recent_rank())
+            .count();
+        let rank_shift = i32::try_from(rank_shift)
+            .map_err(|_| WincentError::DestListParse("rank shift overflow".to_string()))?;
+        write_i32_at(
+            dest_bytes,
+            entry.entry_offset() + 0x70,
+            entry.recent_rank() - rank_shift,
+        )?;
+
+        if let Some(pin_order) = entry.pin_order() {
+            let pin_shift = removed
+                .iter()
+                .filter_map(|removed| removed.pin_order)
+                .filter(|removed_order| *removed_order < pin_order)
+                .count();
+            let pin_shift = i32::try_from(pin_shift)
+                .map_err(|_| WincentError::DestListParse("pin order shift overflow".to_string()))?;
+            write_i32_at(
+                dest_bytes,
+                entry.entry_offset() + 0x6c,
+                pin_order - pin_shift,
+            )?;
+        }
+
+        let end = entry
+            .entry_offset()
+            .checked_add(entry.entry_len())
+            .ok_or_else(|| WincentError::DestListParse("entry range overflow".to_string()))?;
+        let checksum =
+            entry_checksum(dest_bytes.get(entry.entry_offset()..end).ok_or_else(|| {
+                WincentError::DestListParse("entry range exceeds DestList stream".to_string())
+            })?)?;
+        write_u64_at(dest_bytes, entry.entry_offset(), checksum)?;
+    }
+    Ok(())
+}
+
+fn entry_checksum(entry: &[u8]) -> WincentResult<u64> {
+    const POLYNOMIAL: u64 = 0x92c6_4265_d321_39a4;
+    let protected = entry.get(..0x70).ok_or_else(|| {
+        WincentError::DestListParse("DestList entry is shorter than CRC span".to_string())
+    })?;
+    let mut crc = u64::MAX;
+    for (index, byte) in protected.iter().copied().enumerate() {
+        crc ^= u64::from(if index < 8 { 0 } else { byte });
+        for _ in 0..8 {
+            crc = if crc & 1 == 0 {
+                crc >> 1
+            } else {
+                (crc >> 1) ^ POLYNOMIAL
+            };
+        }
+    }
+    Ok(crc)
+}
+
 fn validate_rewritten(
     rewritten: &[u8],
     kind: DestListKind,
@@ -274,18 +328,7 @@ fn validate_rewritten(
     removed: &[RemovedEntry],
 ) -> WincentResult<()> {
     let parsed = parse_bytes_with_kind(rewritten.to_vec(), kind)?;
-    if parsed.dest_list().version() != 4
-        || parsed.dest_list().declared_entry_count() != parsed.dest_list().entries().len()
-        || parsed
-            .dest_list()
-            .entries()
-            .iter()
-            .any(|entry| !entry.checksum_valid())
-    {
-        return Err(WincentError::DestListParse(
-            "rewritten DestList failed structural validation".to_string(),
-        ));
-    }
+    super::validation::validate_writer_input(&parsed, kind)?;
     if parsed
         .dest_list()
         .entries()
@@ -408,6 +451,10 @@ fn write_u64_at(data: &mut [u8], offset: usize, value: u64) -> WincentResult<()>
     Ok(())
 }
 
+fn write_i32_at(data: &mut [u8], offset: usize, value: i32) -> WincentResult<()> {
+    write_u32_at(data, offset, value as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,8 +463,8 @@ mod tests {
     #[test]
     fn removes_entry_stream_and_updates_v4_header() -> WincentResult<()> {
         let source = build_test_cfb(&[
-            (1, "C:\\Work\\keep.txt", 2.0, -1),
-            (2, "C:\\Work\\remove.txt", 3.0, 4),
+            (1, "C:\\Work\\keep.txt", 2.0, -1, -1),
+            (2, "C:\\Work\\remove.txt", 3.0, -1, -1),
         ]);
 
         let rewritten = rewrite_cfb_bytes(
@@ -440,7 +487,7 @@ mod tests {
 
     #[test]
     fn frequent_removal_increments_action_counter() -> WincentResult<()> {
-        let source = build_test_cfb(&[(1, "C:\\Work", 0.0, 4)]);
+        let source = build_test_cfb(&[(1, "C:\\Work", 0.0, 0, 0)]);
 
         let rewritten = rewrite_cfb_bytes(
             source,
@@ -458,7 +505,7 @@ mod tests {
 
     #[test]
     fn missing_path_does_not_modify_image() {
-        let source = build_test_cfb(&[(1, "C:\\Work\\keep.txt", 1.0, -1)]);
+        let source = build_test_cfb(&[(1, "C:\\Work\\keep.txt", 1.0, -1, -1)]);
         let error = rewrite_cfb_bytes(
             source,
             DestListKind::RecentFiles,
@@ -472,7 +519,7 @@ mod tests {
 
     #[test]
     fn rejects_non_v4_destlist() {
-        let mut source = build_test_cfb(&[(1, "C:\\Work\\keep.txt", 1.0, -1)]);
+        let mut source = build_test_cfb(&[(1, "C:\\Work\\keep.txt", 1.0, -1, -1)]);
         let mut compound = ::cfb::CompoundFile::open(Cursor::new(source)).expect("open test CFB");
         let mut dest_list = Vec::new();
         compound
@@ -499,7 +546,7 @@ mod tests {
         assert!(matches!(error, WincentError::DestListUnsupportedVersion(6)));
     }
 
-    fn build_test_cfb(entries: &[(u32, &str, f32, i32)]) -> Vec<u8> {
+    fn build_test_cfb(entries: &[(u32, &str, f32, i32, i32)]) -> Vec<u8> {
         let mut dest_list = vec![0_u8; DEST_LIST_HEADER_LEN];
         write_test_u32(&mut dest_list, 0, 4);
         write_test_u32(&mut dest_list, ENTRY_COUNT_OFFSET, entries.len() as u32);
@@ -517,8 +564,8 @@ mod tests {
         write_test_u64(&mut dest_list, 0x10, last_id);
         write_test_u64(&mut dest_list, ACTION_COUNT_OFFSET, 7);
 
-        for (id, path, score, pin_status) in entries {
-            dest_list.extend_from_slice(&build_test_entry(*id, path, *score, *pin_status));
+        for (id, path, score, pin_status, rank) in entries {
+            dest_list.extend_from_slice(&build_test_entry(*id, path, *score, *pin_status, *rank));
         }
 
         let cursor = Cursor::new(Vec::new());
@@ -529,7 +576,7 @@ mod tests {
             .expect("create DestList")
             .write_all(&dest_list)
             .expect("write DestList");
-        for (id, _, _, _) in entries {
+        for (id, _, _, _, _) in entries {
             compound
                 .create_stream(format!("/{id:x}"))
                 .expect("create numeric stream")
@@ -540,13 +587,13 @@ mod tests {
         compound.into_inner().into_inner()
     }
 
-    fn build_test_entry(id: u32, path: &str, score: f32, pin_status: i32) -> Vec<u8> {
+    fn build_test_entry(id: u32, path: &str, score: f32, pin_status: i32, rank: i32) -> Vec<u8> {
         let path_bytes: Vec<u8> = path.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let mut entry = vec![0_u8; 0x82 + path_bytes.len() + 4];
         write_test_u64(&mut entry, 0x58, u64::from(id));
         write_test_u32(&mut entry, 0x60, score.to_bits());
         write_test_u32(&mut entry, 0x6c, pin_status as u32);
-        write_test_u32(&mut entry, 0x70, u32::MAX);
+        write_test_u32(&mut entry, 0x70, rank as u32);
         write_test_u32(&mut entry, 0x74, 3);
         let path_chars = u16::try_from(path.encode_utf16().count()).expect("test path length");
         entry[0x80..0x82].copy_from_slice(&path_chars.to_le_bytes());
