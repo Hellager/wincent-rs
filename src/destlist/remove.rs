@@ -7,8 +7,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
 use std::os::windows::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 use windows::core::PCWSTR;
 use windows::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
@@ -27,8 +26,6 @@ const ENTRY_COUNT_OFFSET: usize = 0x04;
 const PINNED_COUNT_OFFSET: usize = 0x08;
 const SCORE_COUNTER_OFFSET: usize = 0x0c;
 const ACTION_COUNT_OFFSET: usize = 0x18;
-
-static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 struct RemovedEntry {
@@ -355,7 +352,7 @@ pub(super) fn replace_file_atomically(
     write_guard: &super::transaction::DirectWriteGuard,
     snapshot: &super::transaction::BackingFileSnapshot,
 ) -> WincentResult<()> {
-    let temp_path = temporary_replacement_path(path)?;
+    let temp_path = super::transaction::temporary_replacement_path(path)?;
     let result = (|| {
         let mut temp = OpenOptions::new()
             .create_new(true)
@@ -394,27 +391,6 @@ pub(super) fn replace_file_atomically(
         let _ = fs::remove_file(&temp_path);
     }
     result
-}
-
-fn temporary_replacement_path(path: &Path) -> WincentResult<PathBuf> {
-    let parent = path.parent().ok_or_else(|| {
-        WincentError::InvalidArgument(format!(
-            "DestList path has no parent directory: {}",
-            path.display()
-        ))
-    })?;
-    let name = path.file_name().ok_or_else(|| {
-        WincentError::InvalidArgument(format!(
-            "DestList path has no file name: {}",
-            path.display()
-        ))
-    })?;
-    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    Ok(parent.join(format!(
-        ".{}.wincent-{}-{counter}.tmp",
-        name.to_string_lossy(),
-        std::process::id()
-    )))
 }
 
 fn wide_null(path: &Path) -> Vec<u16> {
