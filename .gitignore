@@ -27,5 +27,6 @@ temp/
 .rust-skills
 .testagent
 
-# Local VM credentials for the add_item latency test
+# Local VM credentials for the latency tests
 tests/add_item_latency/.env
+tests/get_item_latency/.env
