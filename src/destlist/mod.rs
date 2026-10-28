@@ -56,6 +56,8 @@ pub(crate) mod experimental_remove;
 /// Parser for Explorer `.automaticDestinations-ms` Jump List files.
 pub mod parser;
 pub(crate) mod remove;
+#[cfg(test)]
+pub(crate) mod test_support;
 /// FILETIME conversion helpers for DestList timestamps.
 pub mod time;
 mod transaction;

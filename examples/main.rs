@@ -92,6 +92,7 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "list-paths" => cmd_list_paths(&manager, &args[1..]),
         "contains-path" => cmd_contains_path(&manager, &args[1..]),
         "pin-status" => cmd_pin_status(&manager, &args[1..]),
+        "status" => cmd_status(&manager, &args[1..]),
         "contains-keyword" => cmd_contains_keyword(&manager, &args[1..]),
         "find" => cmd_find(&manager, &args[1..]),
         "watch" => cmd_watch(&manager, &args[1..]),
@@ -171,6 +172,9 @@ Core:
   list-paths <recent|frequent|all>
   contains-path <recent|frequent|all> <path>
   pin-status <path>
+  status <path>
+    prints where the DestList rules place the path in a default Shell query:
+    recent position, frequent position and pin state, or none.
   contains-keyword <recent|frequent|all> <keyword>
   find <recent|frequent|all> <keyword>
   watch <recent|frequent|all> [--poll-ms N]
@@ -302,6 +306,34 @@ fn cmd_contains_path(manager: &QuickAccessManager, args: &[String]) -> WincentRe
 fn cmd_pin_status(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "pin-status <path>")?;
     println!("{:?}", manager.frequent_folder_pin_status(&args[0])?);
+    Ok(())
+}
+
+fn cmd_status(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 1, "status <path>")?;
+    let path = &args[0];
+    let status = manager.quick_access_status(path)?;
+    let recent_file = match status.recent_file() {
+        Some(position) => position.to_string(),
+        None => "null".to_string(),
+    };
+    let frequent_folder = match status.frequent_folder() {
+        Some(slot) => format!(
+            "{{\"position\":{},\"pinned\":{}}}",
+            slot.position(),
+            slot.is_pinned()
+        ),
+        None => "null".to_string(),
+    };
+    let lists = match status.lists() {
+        Some(QuickAccess::RecentFiles) => "recent",
+        Some(QuickAccess::FrequentFolders) => "frequent",
+        Some(QuickAccess::All) => "all",
+        _ => "none",
+    };
+    println!(
+        "{{\"path\":{path:?},\"recent_file\":{recent_file},\"frequent_folder\":{frequent_folder},\"lists\":\"{lists}\"}}"
+    );
     Ok(())
 }
 

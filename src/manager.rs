@@ -12,6 +12,7 @@ use crate::{
         self, FrequentRestoreReport, RecentRestoreReport, RestoreDefaultsOptions,
         RestoreDefaultsReport,
     },
+    status::{FrequentFolderSlot, QuickAccessStatus},
     utils::paths_equal,
     QuickAccess, RetryPolicy, WincentResult,
 };
@@ -595,6 +596,122 @@ impl QuickAccessManager {
     ) -> WincentResult<crate::destlist::FrequentFolderPinStatus> {
         let path = path_to_shell_string(path.as_ref())?;
         crate::destlist::frequent_folder_pin_status(&path)
+    }
+
+    /// Returns where a path appears in a default Quick Access Shell query.
+    ///
+    /// Both lists are read from Explorer's `.automaticDestinations-ms` backing
+    /// files and evaluated with the same rules as the DestList API. The result
+    /// mirrors the observed default Shell query without running Shell/COM code
+    /// or modifying state. It does not inspect the currently rendered Explorer
+    /// window, which may remain stale until refreshed.
+    ///
+    /// A path omitted by both rule-based results returns the default
+    /// [`QuickAccessStatus`], for which
+    /// [`QuickAccessStatus::is_visible`] is `false`. This does not distinguish
+    /// "absent from the backing file" from "present but filtered out"; use
+    /// [`QuickAccessManager::get_recent_files_metadata`] or
+    /// [`QuickAccessManager::get_frequent_folders_metadata`] to inspect the raw
+    /// entries.
+    ///
+    /// Explorer persists its own changes asynchronously, so a path that was
+    /// just added through the Shell can be absent from the rule-based result for
+    /// a short time. A missing backing file is treated as an empty list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Returns I/O or
+    /// DestList parse errors when an existing backing file cannot be read or
+    /// parsed, and [`WincentError::DestListUnsupportedVersion`] when Explorer
+    /// uses an unsupported DestList version.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// let status = manager.quick_access_status(r"C:\Work\report.docx")?;
+    /// if let Some(position) = status.recent_file() {
+    ///     println!("recent file at position {position}");
+    /// }
+    /// if let Some(slot) = status.frequent_folder() {
+    ///     println!("frequent folder pinned={}", slot.is_pinned());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn quick_access_status<P: AsRef<Path>>(&self, path: P) -> WincentResult<QuickAccessStatus> {
+        let path = path_to_shell_string(path.as_ref())?;
+        crate::status::status_for_path(&path)
+    }
+
+    /// Returns a path's position in the rule-based Recent Files result.
+    ///
+    /// This reads only the Recent Files backing file. See
+    /// [`QuickAccessManager::quick_access_status`] for the visibility contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Returns I/O or
+    /// DestList parse errors when the backing file exists but cannot be read or
+    /// parsed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// if let Some(position) = manager.recent_file_position(r"C:\Work\report.docx")? {
+    ///     println!("position {position}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn recent_file_position<P: AsRef<Path>>(&self, path: P) -> WincentResult<Option<usize>> {
+        let path = path_to_shell_string(path.as_ref())?;
+        crate::status::recent_position_for_path(&path)
+    }
+
+    /// Returns a path's position and pin state in the rule-based Frequent Folders result.
+    ///
+    /// This reads only the Frequent Folders backing file. A pinned entry is
+    /// included regardless of its access count; an unpinned entry must meet the
+    /// access-count threshold and fit in the unpinned slot window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Returns I/O or
+    /// DestList parse errors when the backing file exists but cannot be read or
+    /// parsed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// match manager.frequent_folder_slot(r"C:\Work")? {
+    ///     Some(slot) => println!(
+    ///         "position {} pinned {}",
+    ///         slot.position(),
+    ///         slot.is_pinned()
+    ///     ),
+    ///     None => println!("not in the rule-based result"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn frequent_folder_slot<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> WincentResult<Option<FrequentFolderSlot>> {
+        let path = path_to_shell_string(path.as_ref())?;
+        crate::status::frequent_slot_for_path(&path)
     }
 
     /// Finds Quick Access items containing the given keyword.
@@ -2599,6 +2716,24 @@ mod tests {
         let result = manager.frequent_folder_pin_status("");
 
         assert!(matches!(result, Err(WincentError::InvalidPath(_))));
+    }
+
+    #[test]
+    fn status_queries_reject_empty_path_before_reading_destlist() {
+        let manager = QuickAccessManager::new();
+
+        assert!(matches!(
+            manager.quick_access_status(""),
+            Err(WincentError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            manager.recent_file_position(""),
+            Err(WincentError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            manager.frequent_folder_slot(""),
+            Err(WincentError::InvalidPath(_))
+        ));
     }
 
     #[test]

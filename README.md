@@ -79,6 +79,16 @@ fn main() -> WincentResult<()> {
     let pin_status = manager.frequent_folder_pin_status("C:\\Projects")?;
     println!("Projects Frequent Folders pin status: {pin_status:?}");
 
+    // Predict the default Shell query result from persisted DestList data:
+    // Recent Files position, Frequent Folders position and pin state, or neither.
+    let status = manager.quick_access_status("C:\\Projects\\report.docx")?;
+    if let Some(position) = status.recent_file() {
+        println!("Recent Files position: {position}");
+    }
+    if let Some(slot) = status.frequent_folder() {
+        println!("Frequent Folders position {} pinned {}", slot.position(), slot.is_pinned());
+    }
+
     // Watch snapshot changes. Keep the guard alive while monitoring.
     // This reports changes from Explorer and from this crate's own operations.
     let _monitor = manager.watch_quick_access(

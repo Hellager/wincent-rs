@@ -79,6 +79,20 @@ fn main() -> WincentResult<()> {
     let pin_status = manager.frequent_folder_pin_status("C:\\Projects")?;
     println!("Projects 常用文件夹固定状态：{pin_status:?}");
 
+    // 根据持久化的 DestList 数据预测默认 Shell 查询结果：
+    // 最近文件序号、常用文件夹序号与固定状态，或均未被规则选中。
+    let status = manager.quick_access_status("C:\\Projects\\report.docx")?;
+    if let Some(position) = status.recent_file() {
+        println!("最近文件序号：{position}");
+    }
+    if let Some(slot) = status.frequent_folder() {
+        println!(
+            "常用文件夹序号 {} 已固定 {}",
+            slot.position(),
+            slot.is_pinned()
+        );
+    }
+
     // 监控快照变化。监控期间需要保持 guard 存活。
     // 这会报告 Explorer 和本 crate 自身操作造成的变化。
     let _monitor = manager.watch_quick_access(

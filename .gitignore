@@ -26,8 +26,3 @@ Cargo.lock
 temp/
 .rust-skills
 .testagent
-
-# Local VM credentials for the latency/refresh tests
-tests/add_item_latency/.env
-tests/get_item_latency/.env
-tests/refresh_sync/.env

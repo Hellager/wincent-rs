@@ -93,6 +93,8 @@ pub mod visible;
 
 pub mod destlist;
 
+pub mod status;
+
 #[allow(unused)]
 /// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
@@ -115,6 +117,8 @@ pub mod prelude {
         FrequentRawPathRemoveReport, FrequentRestoreReport, RecentRestoreReport,
         RestoreDefaultsOptions, RestoreDefaultsReport,
     };
+
+    pub use crate::status::{FrequentFolderSlot, QuickAccessStatus};
 
     pub use crate::visible::{
         hide_start_recommended_section, hide_start_recommended_section_with_options,
