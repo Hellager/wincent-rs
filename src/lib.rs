@@ -13,13 +13,13 @@
 //! - Check item existence
 //!
 //! ### Advanced Management
-//! - Native Windows API fast paths with PowerShell fallbacks
+//! - On-disk DestList queries using rules recovered from Shell behavior
 //! - Timeout protection for shell operations
 //! - Force refresh support
 //!
 //! ### System Integration
 //! - Windows API integration for reliable operations
-//! - PowerShell script execution for complex tasks
+//! - PowerShell fallbacks for selected Shell mutations and Explorer refreshes
 //! - Cross-version Windows support
 //!
 //! ## Quick Start
@@ -51,7 +51,8 @@
 //! ## Implementation Details
 //!
 //! - Implements timeout mechanism to prevent deadlocks
-//! - Supports both Windows API and PowerShell operations
+//! - Reads Quick Access directly from DestList data without Shell or PowerShell queries
+//! - Applies rule-based filtering recovered from observed Shell query behavior
 //! - Handles system-specific edge cases
 //!
 //! ## Safety and Reliability

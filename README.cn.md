@@ -10,18 +10,18 @@
 
 ## 概述
 
-Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库，提供对最近使用文件和常用文件夹的安全操作接口，底层采用原生 Windows API 优先、PowerShell 兜底的双路策略。
+Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库。查询操作直接解析 Explorer 的 DestList 文件，并应用从 Shell 查询行为逆向得到的规则；修改操作优先使用原生 Windows API，仅在兼容的 Shell 操作和 Explorer 刷新场景中使用有针对性的 PowerShell 兜底。
 
 ## 功能特性
 
-- 查询最近文件和常用文件夹
+- 直接从 DestList 后端数据查询最近文件和常用文件夹
 - 添加和删除项目，自动检测重复项，包括已固定和未固定的常用文件夹
 - 清空分类（可选同时移除已固定文件夹）
 - 以保守 `.lnk` 清理恢复默认快速访问状态，并提供可选深度清理
 - 精确路径或关键词检查项目是否存在
 - 查询常用文件夹是已固定、未固定还是不存在
 - 批量添加/删除，逐项收集错误
-- Shell 和 PowerShell 操作具备调用方等待超时保护
+- Shell 修改、刷新和 PowerShell 兜底操作具备调用方等待超时保护
 - 快速访问分区可见性控制
 - Windows 推荐的项目中最近使用文件可见性控制
 - DestList 元数据访问
@@ -65,11 +65,11 @@ fn main() -> WincentResult<()> {
     }
 
     // 精确成员检查（Windows 路径语义：不区分大小写）。
-    let exists = manager.check_item_exact("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
+    let exists = manager.contains_path("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
     println!("report.docx 在最近文件中：{exists}");
 
     // 模糊检查：任意项目的路径字符串不区分大小写地包含指定关键词。
-    let any_match = manager.contains_item("projects", QuickAccess::All)?;
+    let any_match = manager.contains_keyword("projects", QuickAccess::All)?;
     println!("快速访问中存在包含 'projects' 的项目：{any_match}");
     for item in manager.find_items_containing("projects", QuickAccess::All)? {
         println!("匹配的快速访问项目：{item}");
@@ -107,7 +107,8 @@ fn main() -> WincentResult<()> {
 
 - **操作系统**：Windows 10 或 Windows 11。
 - **Rust**：1.85.0 或更高版本。
-- **状态一致性**：快速访问状态由 Windows Explorer 维护，修改操作后结果可能有短暂延迟，Explorer 也可能在不同版本间以异步方式重建状态。
+- **查询语义**：查询 API 返回根据持久化 DestList 数据计算出的 rule-based 结果。相关规则来自对 Shell 查询行为的逆向，匹配已观察到的过滤、排序、去重和结果数量限制，无需调用实时 Shell 查询。
+- **UI 一致性**：已打开的 Explorer 视图可能在 UI 缓存刷新前与持久化的 rule-based 结果短暂不同。Explorer 也可能在不同 Windows 版本上异步重建状态。
 - **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
 - **常用文件夹删除**：`remove_item(..., QuickAccess::FrequentFolders)` 支持删除已固定和未固定的常用文件夹条目。Explorer Shell verb 的实际效果会随当前状态变化，可能添加也可能移除状态，因此 wincent 会在每次修改后验证结果，而不是只信任 verb 名称或返回值。
 - **固定文件夹清理超时**：在 `empty` 操作中显式移除可见固定文件夹时，可用 `EmptyOptions::with_pinned_folders_timeout()` 覆盖 snapshot/unpin 超时。未设置时使用 manager timeout。

@@ -8,7 +8,7 @@ use crate::{
         add_file_to_recent_native, add_to_frequent_folders_with_timeout,
         remove_from_frequent_folders_with_timeout, remove_from_recent_files_with_timeout,
     },
-    query, recent_links,
+    recent_links,
     script_executor::QuickAccessDataFiles,
     utils::{
         get_windows_recent_folder, refresh_explorer_window_with_timeout, validate_path, PathType,
@@ -77,13 +77,11 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     fn refresh_explorer(&self, timeout: Duration) -> WincentResult<()>;
 }
 
-/// Tries the CFB rule parser first so the returned path order and filtering
-/// match the custom CAutoList rule result instead of a live Shell query.
+/// Parses the CFB DestList and applies the recovered CAutoList rules directly.
 ///
-/// Recent Files results are additionally truncated to the same default
-/// 20-item window the observed Shell query uses. Any parse, I/O, or path
-/// resolution error falls back to the caller so the original Shell query
-/// path still runs.
+/// The rules were derived from observed Shell query behavior so ordering,
+/// filtering, deduplication, and the Recent Files result limit match the Shell
+/// result without querying a live Shell namespace.
 fn rule_based_items(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let (parsed, apply_limit) = match qa_type {
         QuickAccess::RecentFiles => (parse_file(recent_files_dest_path()?)?, true),
@@ -122,8 +120,10 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
         validate_path(path, expected)
     }
 
-    fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>> {
-        rule_based_items(qa_type).or_else(|_| query::query_recent_with_timeout(qa_type, timeout))
+    /// Reads Quick Access items directly from Explorer's on-disk DestList and
+    /// applies the recovered Shell visibility rules.
+    fn get_items(&self, qa_type: QuickAccess, _timeout: Duration) -> WincentResult<Vec<String>> {
+        rule_based_items(qa_type)
     }
 
     fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {

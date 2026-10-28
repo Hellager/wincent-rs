@@ -281,7 +281,7 @@ mod tests {
 
         let result = ScriptExecutor::parse_output_to_strings(
             output,
-            PSScript::QueryQuickAccess,
+            PSScript::RemoveRecentFile,
             PathBuf::from("test.ps1"),
             None,
             Duration::from_millis(100),
@@ -303,7 +303,7 @@ mod tests {
 
         let result = ScriptExecutor::parse_output_to_strings(
             output,
-            PSScript::QueryQuickAccess,
+            PSScript::RemoveRecentFile,
             PathBuf::from("test.ps1"),
             None,
             Duration::from_millis(100),
@@ -312,7 +312,7 @@ mod tests {
         if let Err(WincentError::PowerShellExecution(ps_err)) = result {
             assert_eq!(ps_err.raw_stderr(), "Error message");
             assert_eq!(ps_err.exit_code(), Some(1));
-            assert_eq!(ps_err.operation(), PowerShellOperation::QueryQuickAccess);
+            assert_eq!(ps_err.operation(), PowerShellOperation::RemoveRecentFile);
             assert_eq!(
                 ps_err.kind(),
                 crate::error::PowerShellErrorKind::ProcessFailed
@@ -332,7 +332,7 @@ mod tests {
 
         let result = ScriptExecutor::parse_output_to_strings(
             output,
-            PSScript::QueryQuickAccess,
+            PSScript::RemoveRecentFile,
             PathBuf::from("test.ps1"),
             None,
             Duration::from_millis(10),
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn test_execute_ps_script_with_timeout_returns_timeout_error() {
         let result = ScriptExecutor::execute_ps_script_with_timeout(
-            PSScript::QueryQuickAccess,
+            PSScript::RefreshExplorer,
             None,
             Duration::from_nanos(1),
         );
@@ -363,7 +363,7 @@ mod tests {
             Err(WincentError::PowerShellExecution(err)) => {
                 assert_eq!(err.kind(), crate::error::PowerShellErrorKind::Timeout);
                 assert!(err.is_transient());
-                assert_eq!(err.operation(), PowerShellOperation::QueryQuickAccess);
+                assert_eq!(err.operation(), PowerShellOperation::RefreshExplorer);
             }
             other => panic!("Expected PowerShell timeout error, got: {:?}", other),
         }

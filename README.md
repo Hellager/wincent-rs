@@ -10,18 +10,18 @@ Read this in other languages: [English](README.md) | [中文](README.cn.md)
 
 ## Overview
 
-Wincent is a Rust library for managing Windows Quick Access functionality. It provides a safe interface for querying, adding, removing, and clearing recent files and frequent folders, with native Windows API fast paths and PowerShell fallbacks.
+Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Shell query behavior. Mutations use native Windows APIs where possible, with targeted PowerShell fallbacks for compatible Shell operations and Explorer refreshes.
 
 ## Features
 
-- Query recent files and frequent folders
+- Query recent files and frequent folders directly from DestList backing data
 - Add and remove items with duplicate detection, including pinned and unpinned frequent folders
 - Clear categories with optional explicit pinned-folder cleanup
 - Restore default Quick Access state with conservative `.lnk` cleanup and opt-in deep cleanup
 - Check item existence by exact path or keyword
 - Query whether a frequent folder is pinned, unpinned, or absent
 - Batch add/remove with per-item error collection
-- Caller-side timeout protection for Shell and PowerShell operations
+- Caller-side timeout protection for Shell mutations, refreshes, and PowerShell fallbacks
 - Visibility control for Quick Access sections
 - Recent files visibility control in Windows Recommended items
 - DestList metadata access
@@ -65,11 +65,11 @@ fn main() -> WincentResult<()> {
     }
 
     // Check exact membership (Windows path semantics: case-insensitive).
-    let exists = manager.check_item_exact("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
+    let exists = manager.contains_path("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
     println!("report.docx in Recent Files: {exists}");
 
     // Fuzzy check: any item whose path string contains the keyword, case-insensitively.
-    let any_match = manager.contains_item("projects", QuickAccess::All)?;
+    let any_match = manager.contains_keyword("projects", QuickAccess::All)?;
     println!("Any Quick Access item contains 'projects': {any_match}");
     for item in manager.find_items_containing("projects", QuickAccess::All)? {
         println!("Matched Quick Access item: {item}");
@@ -107,7 +107,8 @@ fn main() -> WincentResult<()> {
 
 - **OS**: Windows 10 or Windows 11.
 - **Rust**: 1.85.0 or later.
-- **Consistency**: Quick Access state is maintained by Windows Explorer. Results may lag behind mutations by a short interval, and Explorer may rebuild state asynchronously across versions.
+- **Query semantics**: Query APIs return the rule-based result calculated from persisted DestList data. The recovered rules match observed Shell query filtering, ordering, deduplication, and result limits without invoking a live Shell query.
+- **UI consistency**: An already-open Explorer view may temporarily differ from the persisted rule-based result while its UI cache refreshes. Explorer may also rebuild state asynchronously across Windows versions.
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
 - **Frequent Folders removal**: `remove_item(..., QuickAccess::FrequentFolders)` handles both pinned and unpinned frequent entries. Explorer Shell verbs can add or remove state depending on current status, so wincent verifies after each mutation instead of trusting verb names or return values.
 - **Pinned-folder cleanup timeout**: when explicitly removing visible pinned folders during an `empty` operation, `EmptyOptions::with_pinned_folders_timeout()` can override the snapshot/unpin timeout. If unset, the operation uses the manager timeout.

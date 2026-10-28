@@ -225,7 +225,7 @@ fn get_items(
     backend.get_items(qa_type, timeout)
 }
 
-fn check_item_exact(
+fn item_is_present(
     path: &str,
     qa_type: QuickAccess,
     timeout: Duration,
@@ -351,7 +351,7 @@ fn ensure_not_present(
 ) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if check_item_exact(path, qa_type, timeout, backend)? {
+    if item_is_present(path, qa_type, timeout, backend)? {
         return Err(WincentError::already_exists(path, qa_type));
     }
 
@@ -366,7 +366,7 @@ fn ensure_present(
 ) -> WincentResult<()> {
     // This preflight check is best-effort; Explorer state may still change
     // before the shell operation runs.
-    if !check_item_exact(path, qa_type, timeout, backend)? {
+    if !item_is_present(path, qa_type, timeout, backend)? {
         return Err(WincentError::not_in_quick_access(path, qa_type));
     }
 

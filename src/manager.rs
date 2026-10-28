@@ -343,7 +343,8 @@ impl QuickAccessManagerBuilder {
         Ok(self)
     }
 
-    /// Sets the retry policy for transient PowerShell fallback failures.
+    /// Sets the retry policy for transient PowerShell fallback failures raised
+    /// by mutation paths.
     pub fn retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
         self
@@ -444,7 +445,8 @@ impl QuickAccessManager {
         self.timeout
     }
 
-    /// Returns the configured retry policy for transient PowerShell fallback failures.
+    /// Returns the configured retry policy for transient PowerShell fallback
+    /// failures raised by mutation paths.
     #[must_use]
     pub fn retry_policy(&self) -> &RetryPolicy {
         &self.retry_policy
@@ -464,15 +466,19 @@ impl QuickAccessManager {
 
     /// Retrieves Quick Access items as strings.
     ///
-    /// The returned values reflect Explorer's current Quick Access state and
-    /// may include paths that no longer exist on disk.
+    /// This reads Explorer's on-disk DestList directly and applies the
+    /// `CAutoList` visibility rules recovered from observed Shell query
+    /// behavior. Queries do not invoke Shell COM or PowerShell.
+    ///
+    /// The returned values are the rule-based result from persisted backing
+    /// data. An already-open Explorer view may temporarily show different
+    /// content while its UI cache refreshes. Returned paths may also point to
+    /// files or folders that no longer exist on disk.
     ///
     /// # Errors
     ///
-    /// Returns an error if both the native COM query path and the PowerShell
-    /// fallback fail. Common causes include an unavailable desktop session,
-    /// inaccessible Shell namespaces, PowerShell execution failure, or registry
-    /// and I/O failures while resolving system locations.
+    /// Returns I/O, path-resolution, unsupported-version, or DestList parse
+    /// errors when the persisted backing data cannot be read and evaluated.
     ///
     /// # Examples
     ///
@@ -487,12 +493,12 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn get_items(&self, qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-        self.execute_with_retry(|| self.backend.get_items(qa_type, self.timeout))
+        self.backend.get_items(qa_type, self.timeout)
     }
 
     /// Retrieves Quick Access items as path buffers.
     ///
-    /// The returned paths are Explorer's current path strings converted into
+    /// The returned paths are the rule-based DestList results converted into
     /// [`PathBuf`]. They may point to files or folders that no longer exist.
     ///
     /// # Errors
@@ -520,11 +526,12 @@ impl QuickAccessManager {
             .collect())
     }
 
-    /// Checks if an item exists in Quick Access using Windows path semantics.
+    /// Checks whether Quick Access contains the given path.
     ///
-    /// This performs exact path comparison with Windows-style normalization
-    /// rather than substring matching. Use [`QuickAccessManager::contains_item`]
-    /// for simple string containment.
+    /// This is exact **path** membership using Windows path semantics:
+    /// case-insensitive, slash-normalized, and canonicalized when the path
+    /// exists. It is not a substring search; use
+    /// [`QuickAccessManager::contains_keyword`] for keyword matching.
     ///
     /// # Errors
     ///
@@ -538,7 +545,7 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// let exists = manager.check_item_exact(
+    /// let exists = manager.contains_path(
     ///     "C:\\Work\\report.docx",
     ///     QuickAccess::RecentFiles,
     /// )?;
@@ -546,7 +553,7 @@ impl QuickAccessManager {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn check_item_exact<P: AsRef<Path>>(
+    pub fn contains_path<P: AsRef<Path>>(
         &self,
         path: P,
         qa_type: QuickAccess,
@@ -594,8 +601,9 @@ impl QuickAccessManager {
     ///
     /// This is a case-insensitive substring check against Explorer's path
     /// strings. It is useful for loose search, but it can produce false
-    /// positives for path membership checks. An empty keyword returns all
-    /// queried items, matching [`str::contains`] behavior.
+    /// positives. Use [`QuickAccessManager::contains_path`] for exact path
+    /// membership. An empty keyword returns all queried items, matching
+    /// [`str::contains`] behavior.
     ///
     /// # Errors
     ///
@@ -627,10 +635,15 @@ impl QuickAccessManager {
             .collect())
     }
 
-    /// Checks if any item in Quick Access contains the given keyword.
+    /// Checks whether any Quick Access item contains the given keyword.
     ///
-    /// This is a boolean wrapper around
-    /// [`QuickAccessManager::find_items_containing`].
+    /// This is a case-insensitive substring search, not exact path matching;
+    /// use [`QuickAccessManager::contains_path`] for path membership. An empty
+    /// keyword matches any non-empty list, matching [`str::contains`] behavior.
+    ///
+    /// Items are evaluated lazily without collecting a temporary match list.
+    /// Use [`QuickAccessManager::find_items_containing`] when the matching
+    /// items themselves are needed.
     ///
     /// # Errors
     ///
@@ -643,14 +656,18 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// if manager.contains_item("projects", QuickAccess::All)? {
+    /// if manager.contains_keyword("projects", QuickAccess::All)? {
     ///     println!("Found a matching Quick Access item");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub fn contains_item(&self, keyword: &str, qa_type: QuickAccess) -> WincentResult<bool> {
-        Ok(!self.find_items_containing(keyword, qa_type)?.is_empty())
+    pub fn contains_keyword(&self, keyword: &str, qa_type: QuickAccess) -> WincentResult<bool> {
+        let keyword = keyword.to_lowercase();
+        Ok(self
+            .get_items(qa_type)?
+            .iter()
+            .any(|item| item.to_lowercase().contains(&keyword)))
     }
 
     /// Monitors Quick Access for snapshot changes.
@@ -1610,7 +1627,7 @@ impl QuickAccessManager {
     fn ensure_not_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
-        if self.check_item_exact(path, qa_type)? {
+        if self.contains_path(path, qa_type)? {
             return Err(WincentError::already_exists(path, qa_type));
         }
 
@@ -1620,7 +1637,7 @@ impl QuickAccessManager {
     fn ensure_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
-        if !self.check_item_exact(path, qa_type)? {
+        if !self.contains_path(path, qa_type)? {
             return Err(WincentError::not_in_quick_access(path, qa_type));
         }
 
@@ -2137,12 +2154,29 @@ mod tests {
     }
 
     #[test]
-    fn contains_item_returns_whether_find_has_matches() -> WincentResult<()> {
+    fn contains_keyword_matches_substring_case_insensitively() -> WincentResult<()> {
         let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
         let manager = QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend);
 
-        assert!(manager.contains_item("projects", QuickAccess::All)?);
-        assert!(!manager.contains_item("Missing", QuickAccess::All)?);
+        assert!(manager.contains_keyword("projects", QuickAccess::All)?);
+        assert!(!manager.contains_keyword("Missing", QuickAccess::All)?);
+        Ok(())
+    }
+
+    #[test]
+    fn contains_keyword_empty_keyword_matches_non_empty_list() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
+        let manager = QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend);
+
+        assert!(
+            manager.contains_keyword("", QuickAccess::All)?,
+            "an empty keyword matches any item, matching str::contains behavior"
+        );
+
+        let empty_backend = Arc::new(FakeBackend::with_items(vec![]));
+        let empty_manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), empty_backend);
+        assert!(!empty_manager.contains_keyword("", QuickAccess::All)?);
         Ok(())
     }
 
@@ -2196,7 +2230,7 @@ mod tests {
         use crate::error::{PowerShellError, PowerShellErrorKind, PowerShellOperation};
 
         WincentError::PowerShellExecution(Box::new(
-            PowerShellError::builder(PowerShellOperation::QueryQuickAccess)
+            PowerShellError::builder(PowerShellOperation::RemoveRecentFile)
                 .kind(PowerShellErrorKind::Timeout)
                 .exit_code(None)
                 .stderr("timeout")
@@ -2209,7 +2243,7 @@ mod tests {
         use crate::error::{PowerShellError, PowerShellErrorKind, PowerShellOperation};
 
         WincentError::PowerShellExecution(Box::new(
-            PowerShellError::builder(PowerShellOperation::QueryQuickAccess)
+            PowerShellError::builder(PowerShellOperation::RemoveRecentFile)
                 .kind(PowerShellErrorKind::ProcessFailed)
                 .exit_code(Some(1))
                 .stderr("permanent failure")

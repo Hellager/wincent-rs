@@ -186,6 +186,10 @@ type PowerShellClassifier = dyn Fn(&str) -> Option<PowerShellErrorKind>;
 ///
 /// This describes the Quick Access operation that failed without exposing the
 /// internal script generation strategy used to implement it.
+///
+/// The `Query*` variants are retained for compatibility. wincent no longer
+/// runs PowerShell for queries: `get_items` reads DestList data directly and
+/// applies the recovered Shell visibility rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PowerShellOperation {
@@ -554,7 +558,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.get_items(QuickAccess::FrequentFolders)
+    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
     /// else {
     ///     return Ok(());
     /// };
@@ -586,7 +590,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.get_items(QuickAccess::FrequentFolders)
+    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
     /// else {
     ///     return Ok(());
     /// };
@@ -623,7 +627,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.get_items(QuickAccess::FrequentFolders)
+    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
     /// else {
     ///     return Ok(());
     /// };
@@ -643,7 +647,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.get_items(QuickAccess::FrequentFolders)
+    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
     /// else {
     ///     return Ok(());
     /// };
@@ -689,7 +693,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.get_items(QuickAccess::FrequentFolders)
+    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
     /// else {
     ///     return Ok(());
     /// };
@@ -717,7 +721,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.get_items(QuickAccess::FrequentFolders)
+    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
     /// else {
     ///     return Ok(());
     /// };

@@ -17,12 +17,6 @@ fn escape_ps_single_quoted(s: &str) -> String {
 pub(crate) enum PSScript {
     /// Refresh all Explorer windows.
     RefreshExplorer,
-    /// Query both Recent Files and Frequent Folders.
-    QueryQuickAccess,
-    /// Query Recent Files.
-    QueryRecentFile,
-    /// Query Frequent Folders.
-    QueryFrequentFolder,
     /// Remove a file from Recent Files.
     RemoveRecentFile,
     /// Pin a folder to Frequent Folders.
@@ -41,9 +35,6 @@ impl PSScript {
     pub(crate) fn operation(self) -> PowerShellOperation {
         match self {
             PSScript::RefreshExplorer => PowerShellOperation::RefreshExplorer,
-            PSScript::QueryQuickAccess => PowerShellOperation::QueryQuickAccess,
-            PSScript::QueryRecentFile => PowerShellOperation::QueryRecentFiles,
-            PSScript::QueryFrequentFolder => PowerShellOperation::QueryFrequentFolders,
             PSScript::RemoveRecentFile => PowerShellOperation::RemoveRecentFile,
             PSScript::PinToFrequentFolder => PowerShellOperation::PinFrequentFolder,
             PSScript::UnpinFromFrequentFolder => PowerShellOperation::UnpinFrequentFolder,
@@ -93,60 +84,6 @@ impl ScriptStrategy for RefreshExplorerStrategy {
     $windows | ForEach-Object {{ $_.Refresh() }}
 "#,
             BaseScriptStrategy::utf8_header()
-        ))
-    }
-}
-
-/// Strategy for querying recent files
-pub(crate) struct QueryRecentFileStrategy;
-
-impl ScriptStrategy for QueryRecentFileStrategy {
-    fn generate(&self, _: Option<&str>) -> WincentResult<String> {
-        Ok(format!(
-            r#"
-    {}
-    {}
-    $shell.Namespace('{}').Items() | where {{ $_.IsFolder -eq $false }} | ForEach-Object {{ $_.Path }};
-"#,
-            BaseScriptStrategy::utf8_header(),
-            BaseScriptStrategy::shell_com_object(),
-            ShellNamespaces::QUICK_ACCESS
-        ))
-    }
-}
-
-/// Strategy for querying frequent folders
-pub(crate) struct QueryFrequentFolderStrategy;
-
-impl ScriptStrategy for QueryFrequentFolderStrategy {
-    fn generate(&self, _: Option<&str>) -> WincentResult<String> {
-        Ok(format!(
-            r#"
-    {}
-    {}
-    $shell.Namespace('{}').Items() | ForEach-Object {{ $_.Path }};
-"#,
-            BaseScriptStrategy::utf8_header(),
-            BaseScriptStrategy::shell_com_object(),
-            ShellNamespaces::FREQUENT_FOLDERS
-        ))
-    }
-}
-
-/// Strategy for querying Quick Access
-pub(crate) struct QueryQuickAccessStrategy;
-
-impl ScriptStrategy for QueryQuickAccessStrategy {
-    fn generate(&self, _: Option<&str>) -> WincentResult<String> {
-        Ok(format!(
-            r#"
-    {}
-    {}
-    $shell.Namespace('{}').Items() | ForEach-Object {{ $_.Path }};
-"#,
-            BaseScriptStrategy::utf8_header(),
-            BaseScriptStrategy::shell_com_object(),
-            ShellNamespaces::QUICK_ACCESS
         ))
     }
 }
@@ -443,9 +380,6 @@ impl ScriptStrategyFactory {
     pub fn get_strategy(script_type: PSScript) -> WincentResult<Box<dyn ScriptStrategy>> {
         Ok(match script_type {
             PSScript::RefreshExplorer => Box::new(RefreshExplorerStrategy),
-            PSScript::QueryQuickAccess => Box::new(QueryQuickAccessStrategy),
-            PSScript::QueryRecentFile => Box::new(QueryRecentFileStrategy),
-            PSScript::QueryFrequentFolder => Box::new(QueryFrequentFolderStrategy),
             PSScript::RemoveRecentFile => Box::new(RemoveRecentFileStrategy),
             PSScript::PinToFrequentFolder => Box::new(PinToFrequentFolderStrategy),
             PSScript::UnpinFromFrequentFolder => Box::new(UnpinFromFrequentFolderStrategy),
@@ -583,22 +517,6 @@ mod tests {
         assert!(refresh.contains("Refresh()"));
         assert!(refresh.contains("Windows()"));
 
-        // QueryQuickAccess: must enumerate Quick Access namespace
-        let qqa = ScriptStrategyFactory::generate_script(PSScript::QueryQuickAccess, None).unwrap();
-        assert!(qqa.contains(ShellNamespaces::QUICK_ACCESS));
-        assert!(qqa.contains("$_.Path"));
-
-        // QueryRecentFile: must filter IsFolder == false
-        let qrf = ScriptStrategyFactory::generate_script(PSScript::QueryRecentFile, None).unwrap();
-        assert!(qrf.contains("IsFolder -eq $false"));
-        assert!(qrf.contains(ShellNamespaces::QUICK_ACCESS));
-
-        // QueryFrequentFolder: must enumerate FrequentFolders namespace
-        let qff =
-            ScriptStrategyFactory::generate_script(PSScript::QueryFrequentFolder, None).unwrap();
-        assert!(qff.contains(ShellNamespaces::FREQUENT_FOLDERS));
-        assert!(qff.contains("$_.Path"));
-
         // RemoveRecentFile: must invoke 'remove' verb
         let rrf =
             ScriptStrategyFactory::generate_script(PSScript::RemoveRecentFile, Some(path)).unwrap();
@@ -662,9 +580,6 @@ mod tests {
     fn test_factory_covers_all_variants() {
         let no_param_variants = [
             PSScript::RefreshExplorer,
-            PSScript::QueryQuickAccess,
-            PSScript::QueryRecentFile,
-            PSScript::QueryFrequentFolder,
             PSScript::EmptyPinnedFolders,
             PSScript::CheckQueryFeasible,
             PSScript::CheckPinUnpinFeasible,

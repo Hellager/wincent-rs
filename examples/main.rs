@@ -90,9 +90,9 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "features" => cmd_features(),
         "list" => cmd_list(&manager, &args[1..]),
         "list-paths" => cmd_list_paths(&manager, &args[1..]),
-        "check" => cmd_check(&manager, &args[1..]),
+        "contains-path" => cmd_contains_path(&manager, &args[1..]),
         "pin-status" => cmd_pin_status(&manager, &args[1..]),
-        "contains" => cmd_contains(&manager, &args[1..]),
+        "contains-keyword" => cmd_contains_keyword(&manager, &args[1..]),
         "find" => cmd_find(&manager, &args[1..]),
         "watch" => cmd_watch(&manager, &args[1..]),
         "add" => cmd_add(&manager, &args[1..]),
@@ -169,9 +169,9 @@ Core:
   features
   list <recent|frequent|all> [--paths]
   list-paths <recent|frequent|all>
-  check <recent|frequent|all> <path>
+  contains-path <recent|frequent|all> <path>
   pin-status <path>
-  contains <recent|frequent|all> <keyword>
+  contains-keyword <recent|frequent|all> <keyword>
   find <recent|frequent|all> <keyword>
   watch <recent|frequent|all> [--poll-ms N]
   add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
@@ -291,10 +291,10 @@ fn cmd_list_paths(manager: &QuickAccessManager, args: &[String]) -> WincentResul
     Ok(())
 }
 
-fn cmd_check(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 2, "check <recent|frequent|all> <path>")?;
+fn cmd_contains_path(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 2, "contains-path <recent|frequent|all> <path>")?;
     let qa_type = parse_category(&args[0], true)?;
-    let exists = manager.check_item_exact(&args[1], qa_type)?;
+    let exists = manager.contains_path(&args[1], qa_type)?;
     println!("{exists}");
     Ok(())
 }
@@ -305,10 +305,10 @@ fn cmd_pin_status(manager: &QuickAccessManager, args: &[String]) -> WincentResul
     Ok(())
 }
 
-fn cmd_contains(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 2, "contains <recent|frequent|all> <keyword>")?;
+fn cmd_contains_keyword(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 2, "contains-keyword <recent|frequent|all> <keyword>")?;
     let qa_type = parse_category(&args[0], true)?;
-    let exists = manager.contains_item(&args[1], qa_type)?;
+    let exists = manager.contains_keyword(&args[1], qa_type)?;
     println!("{exists}");
     Ok(())
 }
