@@ -10,9 +10,7 @@ use crate::{
     },
     recent_links,
     script_executor::QuickAccessDataFiles,
-    utils::{
-        get_windows_recent_folder, refresh_explorer_window_with_timeout, validate_path, PathType,
-    },
+    utils::{get_windows_recent_folder, validate_path, PathType},
     QuickAccess, WincentResult,
 };
 use std::path::{Path, PathBuf};
@@ -73,7 +71,7 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     ) -> WincentResult<Vec<DestListEntry>>;
 
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()>;
-    fn clear_frequent_folders_jumplist(&self) -> WincentResult<()>;
+    fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()>;
     fn refresh_explorer(&self, timeout: Duration) -> WincentResult<()>;
 }
 
@@ -229,12 +227,12 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
         empty::empty_recent_files_with_api(timeout)
     }
 
-    fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
-        empty::empty_user_folders_with_jumplist_file()
+    fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()> {
+        empty::clear_frequent_folders_with_destlist_reset(timeout)
     }
 
     fn refresh_explorer(&self, timeout: Duration) -> WincentResult<()> {
-        refresh_explorer_window_with_timeout(timeout)
+        crate::explorer_window::refresh_explorer_with_timeout(timeout)
     }
 }
 

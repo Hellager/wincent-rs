@@ -777,7 +777,7 @@ mod tests {
             Ok(())
         }
 
-        fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
+        fn clear_frequent_folders_jumplist(&self, _timeout: Duration) -> WincentResult<()> {
             Ok(())
         }
 

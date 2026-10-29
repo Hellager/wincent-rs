@@ -197,7 +197,7 @@ Core:
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
   lock [recent|frequent|all] [--cleanup-new-links]
     Locked targets block Explorer from adding or removing matching Quick Access items.
-  empty <recent|frequent|all> [--pinned] [--pinned-timeout-ms N] [--refresh-explorer]
+  empty <recent|frequent|all>
   restore <recent|frequent|all> [--deep] [--no-refresh-explorer] [--rebuild-delay-ms N] [--rebuild-poll-timeout-ms N] [--lnk-resolve-timeout-ms N] [--clear-timeout-ms N]
 Utility APIs:
   retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
@@ -613,43 +613,17 @@ fn parse_lock_target(value: &str) -> WincentResult<QuickAccessLockTarget> {
 }
 
 fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(
-        args,
-        1,
-        "empty <recent|frequent|all> [--pinned] [--pinned-timeout-ms N] [--refresh-explorer]",
-    )?;
+    require_len(args, 1, "empty <recent|frequent|all>")?;
+    if args.len() != 1 {
+        return Err(WincentError::InvalidArgument(
+            "usage: empty <recent|frequent|all>".to_string(),
+        ));
+    }
     let qa_type = parse_category(&args[0], true)?;
-    let options = parse_empty_options(&args[1..])?;
 
-    manager.empty_items(qa_type, options)?;
+    manager.empty_items(qa_type)?;
     println!("cleared {}", category_name(qa_type));
     Ok(())
-}
-
-fn parse_empty_options(args: &[String]) -> WincentResult<EmptyOptions> {
-    let mut options = EmptyOptions::new();
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pinned" => options = options.remove_pinned_folders(),
-            "--pinned-timeout-ms" => {
-                index += 1;
-                options = options.with_pinned_folders_timeout(Duration::from_millis(parse_u64(
-                    required_arg(args.get(index), "pinned-timeout-ms")?,
-                    "pinned-timeout-ms",
-                )?));
-            }
-            "--refresh-explorer" => options = options.refresh_explorer(),
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown empty option: {other}"
-                )))
-            }
-        }
-        index += 1;
-    }
-
-    Ok(options)
 }
 
 fn cmd_restore(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
@@ -1664,33 +1638,6 @@ mod tests {
 
         assert!(
             matches!(error, WincentError::InvalidArgument(message) if message == "unterminated quote: \"")
-        );
-    }
-
-    #[test]
-    fn parse_empty_options_accepts_pinned_timeout() {
-        let options = parse_empty_options(&[
-            "--pinned".to_string(),
-            "--pinned-timeout-ms".to_string(),
-            "2500".to_string(),
-            "--refresh-explorer".to_string(),
-        ])
-        .unwrap();
-
-        assert!(options.also_pinned_folders());
-        assert_eq!(
-            options.pinned_folders_timeout(),
-            Some(Duration::from_millis(2500))
-        );
-        assert!(options.refresh_explorer_enabled());
-    }
-
-    #[test]
-    fn parse_empty_options_requires_pinned_timeout_value() {
-        let error = parse_empty_options(&["--pinned-timeout-ms".to_string()]).unwrap_err();
-
-        assert!(
-            matches!(error, WincentError::InvalidArgument(message) if message == "pinned-timeout-ms requires a value")
         );
     }
 

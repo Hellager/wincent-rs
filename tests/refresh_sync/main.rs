@@ -6,8 +6,8 @@
 //! open, it swaps only the `.automaticDestinations-ms` bytes to the second
 //! state, with no notification and no refresh, then compares:
 //!
-//! 1. current program refresh (`QuickAccessManager::refresh_explorer_view`);
-//! 2. `SHChangeNotify(SHCNE_ASSOCCHANGED)` followed by the same refresh.
+//! 1. current program refresh (`QuickAccessManager::refresh_explorer`);
+//! 2. an explicit `SHChangeNotify(SHCNE_ASSOCCHANGED)` followed by the same refresh.
 //!
 //! Phase markers are written for the host to capture screenshots; refresh
 //! durations and Shell/rule/file observations are written to JSON.
@@ -97,9 +97,7 @@ fn refresh_sync() {
     phase(&root, "20-b-before-refresh", phase_sleep_ms);
 
     let current_refresh_started = Instant::now();
-    manager
-        .refresh_explorer_view()
-        .expect("current refresh failed");
+    manager.refresh_explorer().expect("current refresh failed");
     let current_refresh_ms = current_refresh_started.elapsed().as_secs_f64() * 1000.0;
     std::thread::sleep(Duration::from_millis(1200));
     let after_current = observe(&manager, &marker_path);
@@ -131,9 +129,7 @@ fn refresh_sync() {
     }
     let notify_us = notify_started.elapsed().as_secs_f64() * 1_000_000.0;
     let notify_refresh_started = Instant::now();
-    manager
-        .refresh_explorer_view()
-        .expect("notify refresh failed");
+    manager.refresh_explorer().expect("notify refresh failed");
     let notify_refresh_ms = notify_refresh_started.elapsed().as_secs_f64() * 1000.0;
     std::thread::sleep(Duration::from_millis(1200));
     let after_notify = observe(&manager, &marker_path);
@@ -147,9 +143,7 @@ fn refresh_sync() {
     let mut refresh_samples = Vec::new();
     for _ in 0..5 {
         let started = Instant::now();
-        manager
-            .refresh_explorer_view()
-            .expect("repeat refresh failed");
+        manager.refresh_explorer().expect("repeat refresh failed");
         refresh_samples.push(started.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -177,7 +171,7 @@ fn refresh_sync() {
 
     let notify_only_refresh_started = Instant::now();
     manager
-        .refresh_explorer_view()
+        .refresh_explorer()
         .expect("notify-only follow-up refresh failed");
     let notify_only_refresh_ms = notify_only_refresh_started.elapsed().as_secs_f64() * 1000.0;
     std::thread::sleep(Duration::from_millis(1200));
@@ -492,10 +486,10 @@ fn focus_quick_access_sta() -> Result<(), String> {
             let url = unsafe { browser.LocationURL() }
                 .map(|value| value.to_string())
                 .unwrap_or_default();
-            if !url
-                .to_ascii_lowercase()
-                .contains("679f85cb-0220-4080-b29b-5540cc05aab6")
-            {
+            let name = unsafe { browser.LocationName() }
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            if !is_quick_access_location(&name, &url) {
                 continue;
             }
             let hwnd = unsafe { browser.HWND() }.map_err(|error| format!("HWND: {error}"))?;
@@ -548,10 +542,10 @@ fn quick_access_window_count_sta() -> Result<usize, String> {
             let url = unsafe { browser.LocationURL() }
                 .map(|value| value.to_string())
                 .unwrap_or_default();
-            if url
-                .to_ascii_lowercase()
-                .contains("679f85cb-0220-4080-b29b-5540cc05aab6")
-            {
+            let name = unsafe { browser.LocationName() }
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            if is_quick_access_location(&name, &url) {
                 matching += 1;
             }
         }
@@ -560,6 +554,13 @@ fn quick_access_window_count_sta() -> Result<usize, String> {
     // SAFETY: balances the successful CoInitializeEx above.
     unsafe { CoUninitialize() };
     result
+}
+
+fn is_quick_access_location(name: &str, url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("679f85cb-0220-4080-b29b-5540cc05aab6")
+        || lower.contains("f874310e-b6b7-47dc-bc84-b9e6b38f5903")
+        || url.is_empty() && !name.is_empty()
 }
 
 fn wait_shell_count(expected: usize, attempts: usize) -> Result<(), String> {

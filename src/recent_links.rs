@@ -60,8 +60,16 @@ pub(crate) fn delete_recent_links_for_target(
     target: &str,
     timeout: Duration,
 ) -> WincentResult<Vec<PathBuf>> {
+    delete_recent_links_for_targets(&[target.to_owned()], timeout)
+}
+
+/// Deletes Recent-folder `.lnk` files whose resolved target matches any target.
+pub(crate) fn delete_recent_links_for_targets(
+    targets: &[String],
+    timeout: Duration,
+) -> WincentResult<Vec<PathBuf>> {
     let recent_folder = PathBuf::from(get_windows_recent_folder()?);
-    delete_recent_links_for_target_in(&recent_folder, target, timeout, resolve_lnk_target)
+    delete_recent_links_for_targets_in(&recent_folder, targets, timeout, resolve_lnk_target)
 }
 
 /// Finds shortcuts in the Windows Recent folder whose resolved target equals `target`.
@@ -87,9 +95,22 @@ pub fn find_windows_recent_links_for_target(target: &str) -> WincentResult<Vec<P
     Ok(matches)
 }
 
+#[cfg(test)]
 fn delete_recent_links_for_target_in<F>(
     recent_folder: &Path,
     target: &str,
+    timeout: Duration,
+    resolver: F,
+) -> WincentResult<Vec<PathBuf>>
+where
+    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+{
+    delete_recent_links_for_targets_in(recent_folder, &[target.to_owned()], timeout, resolver)
+}
+
+fn delete_recent_links_for_targets_in<F>(
+    recent_folder: &Path,
+    targets: &[String],
     timeout: Duration,
     mut resolver: F,
 ) -> WincentResult<Vec<PathBuf>>
@@ -110,7 +131,10 @@ where
             continue;
         };
 
-        if paths_equal(&resolved_target, target) {
+        if targets
+            .iter()
+            .any(|target| paths_equal(&resolved_target, target))
+        {
             fs::remove_file(&path).map_err(WincentError::Io)?;
             deleted.push(path);
         }
@@ -596,6 +620,35 @@ mod tests {
         assert!(other.exists());
         assert!(broken.exists());
         assert!(non_lnk.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn deep_clean_matches_multiple_targets_in_one_scan() -> WincentResult<()> {
+        let dir = tempdir().map_err(WincentError::Io)?;
+        let first = dir.path().join("first.lnk");
+        let second = dir.path().join("second.lnk");
+        let other = dir.path().join("other.lnk");
+        for path in [&first, &second, &other] {
+            fs::write(path, b"shortcut").map_err(WincentError::Io)?;
+        }
+
+        let mut resolved = HashMap::new();
+        resolved.insert(first.clone(), "C:\\One".to_string());
+        resolved.insert(second.clone(), "c:/two/".to_string());
+        resolved.insert(other.clone(), "C:\\Other".to_string());
+
+        let deleted = delete_recent_links_for_targets_in(
+            dir.path(),
+            &["c:/one/".to_string(), "C:\\Two".to_string()],
+            Duration::from_secs(1),
+            |path, _| Ok(resolved.get(path).cloned()),
+        )?;
+
+        assert_eq!(deleted, vec![first.clone(), second.clone()]);
+        assert!(!first.exists());
+        assert!(!second.exists());
+        assert!(other.exists());
         Ok(())
     }
 

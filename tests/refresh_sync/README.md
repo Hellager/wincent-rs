@@ -8,10 +8,11 @@ and the **on-disk file** agree?
 
 The experiment compares:
 
-1. **current program refresh**: `QuickAccessManager::refresh_explorer_view()`
-   (`IShellView::Refresh` on matching Quick Access/Home windows);
-2. **SHChangeNotify + refresh**: `SHChangeNotify(SHCNE_ASSOCCHANGED)` followed
-   by the same refresh.
+1. **current program refresh**: `QuickAccessManager::refresh_explorer()`
+   (`SHChangeNotify(SHCNE_ASSOCCHANGED)` followed by `IShellView::Refresh` on
+   matching Quick Access/Home windows);
+2. **explicit SHChangeNotify + refresh**: an additional explicit notification
+   followed by the same unified refresh.
 
 It also isolates `SHChangeNotify` alone to see whether the notification by
 itself updates the open view.
@@ -71,16 +72,17 @@ correct screenshot.
 
 ## Results (Windows 10 Home 22H2 `10.0.19045`)
 
-Three valid runs (`v2`, `v3`, `v4`). Each run uses a fresh Explorer window and
-the same A/B fixture.
+The historical baseline below contains three valid runs (`v2`, `v3`, `v4`)
+collected before the public API was unified. In this section, "view-only
+refresh" means the former `IShellView::Refresh`-only implementation.
 
 ### Observation matrix
 
 | Stage | File has marker | Rule query has marker | Live Shell has marker | Open UI shows marker |
 | --- | :---: | :---: | :---: | :---: |
 | After B replacement, no refresh | yes | yes | yes | **no (5 items)** |
-| Current refresh only | yes | yes | yes | v2: yes; v3/v4: **window blank/unavailable** |
-| SHChangeNotify + refresh | yes | yes | yes | **yes (6 items), 3/3** |
+| View-only refresh | yes | yes | yes | v2: yes; v3/v4: **window blank/unavailable** |
+| SHChangeNotify + view-only refresh | yes | yes | yes | **yes (6 items), 3/3** |
 | SHChangeNotify only | yes | yes | yes | **no (5 items), 2/2** |
 
 The open UI was stale in every A→B replacement before refresh, while file,
@@ -92,7 +94,7 @@ already synchronized with the file.
 
 | Operation | v2 | v3 | v4 | Mean |
 | --- | ---: | ---: | ---: | ---: |
-| Current refresh only (ms) | 53.253 | 79.384 | 53.128 | 61.922 |
+| View-only refresh (ms) | 53.253 | 79.384 | 53.128 | 61.922 |
 | `SHChangeNotify` only (ms) | 0.100 | 0.105 | 0.070 | 0.092 |
 | `SHChangeNotify` + refresh (ms) | 57.767 | 56.961 | 58.575 | 57.768 |
 
@@ -109,20 +111,18 @@ the notification does not materially change the measured refresh cost.
   query and a fresh Shell query already return B.
 - **`SHChangeNotify` alone is not sufficient** for this case: the open UI stayed
   on A in both notify-only trials.
-- **Current refresh alone is not reliable** for a replaced backing file: it
+- **View-only refresh is not reliable** for a replaced backing file: it
   updated the UI in one run, but in two runs the Quick Access window was not
   visible when the phase screenshot was taken (only the desktop background was
   captured, although the refresh call returned success). Do not use it as the
   sole synchronization step after raw replacement.
-- **`SHChangeNotify(SHCNE_ASSOCCHANGED)` + current refresh is the effective and
+- **`SHChangeNotify(SHCNE_ASSOCCHANGED)` + view-only refresh is the effective and
   stable combination**: it updated the open UI in 3/3 runs, with terminal and
   file already in sync. Its measured cost is about **57.8 ms**, dominated by
   the refresh; the notification adds about **0.09 ms**.
 
-Practical rule: after changing the backing file outside Explorer, send
-`SHCNE_ASSOCCHANGED`, then run the current refresh. For only refreshing an
-already-consistent view, the current refresh remains the cheaper standalone
-operation.
+The public `QuickAccessManager::refresh_explorer()` now implements that
+notification-plus-targeted-view-refresh sequence as one operation.
 
 ## Limitations
 
@@ -132,7 +132,5 @@ operation.
 - Only three valid runs, one fixture size and one Windows 10 22H2 image.
 - The test forcibly restarts Explorer and replaces Quick Access backing files;
   run it only on a dedicated VM or snapshot.
-- The current refresh path was exposed as
-  `QuickAccessManager::refresh_explorer_view()` for this experiment. It performs
-  the same native refresh used after mutations and does not send a change
-  notification.
+- The current test code calls the unified API. The historical timing table is
+  retained to document why the notification was folded into that API.

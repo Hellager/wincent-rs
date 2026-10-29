@@ -65,7 +65,6 @@
 //! ## Best Practices
 //!
 //! - Use [`AddOptions::force_recent_files_rebuild`] when adding recent files for immediate visibility
-//! - Use [`EmptyOptions::remove_pinned_folders`] only when you intend to remove user-pinned folders
 //!
 
 mod backend;
@@ -132,9 +131,7 @@ pub mod prelude {
 
     pub use crate::utils::{get_windows_version, WindowsVersion};
 
-    pub use crate::{
-        BatchOptions, BatchResult, EmptyOptions, QuickAccess, RetryPolicy, WincentResult,
-    };
+    pub use crate::{BatchOptions, BatchResult, QuickAccess, RetryPolicy, WincentResult};
 
     pub use crate::destlist::{
         entries, filetime_to_system_time, frequent_folders_dest_path,
@@ -153,7 +150,6 @@ use crate::error::WincentError;
 
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::destlist::{DestListItemUpdate, DestListPosition};
-pub use crate::empty::EmptyOptions;
 pub use crate::error::QuickAccessPostMutationStep;
 pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions, RemoveTimingReport};
 pub use crate::monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions};

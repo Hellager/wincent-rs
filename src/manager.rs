@@ -4,7 +4,7 @@ use crate::visible;
 use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     batch::{self, BatchFailure, BatchOptions, BatchResult},
-    empty::{self, EmptyOptions},
+    empty,
     error::{QuickAccessPostMutationStep, WincentError},
     monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions},
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
@@ -1348,17 +1348,28 @@ impl QuickAccessManager {
         QuickAccessLock::lock_target(QuickAccessLockTarget::FrequentFolders)
     }
 
+    /// Notifies the Shell about Quick Access changes and refreshes matching
+    /// Quick Access or Home Explorer windows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when matching Explorer windows are found but none of
+    /// their active Shell views can be refreshed, or when the refresh worker
+    /// exceeds the manager timeout.
+    pub fn refresh_explorer(&self) -> WincentResult<()> {
+        self.backend.refresh_explorer(self.timeout)
+    }
+
     /// Clears Quick Access items.
     ///
-    /// `QuickAccess::RecentFiles` clears Recent Files. `QuickAccess::FrequentFolders`
-    /// deletes Explorer's Frequent Folders backing file. `QuickAccess::All`
-    /// clears both categories.
+    /// `QuickAccess::RecentFiles` removes all Recent Files history and its
+    /// corresponding shortcuts. `QuickAccess::FrequentFolders` removes all
+    /// recorded Frequent Folders and their corresponding shortcuts.
+    /// `QuickAccess::All` clears both categories.
     ///
-    /// Deleting the Frequent Folders backing file can cause Explorer to rebuild
-    /// default folder pins and remove user-pinned folders even when
-    /// [`EmptyOptions::also_pinned_folders`] is `false`. Set
-    /// [`EmptyOptions::remove_pinned_folders`] to additionally invoke Explorer's
-    /// unpin verb for visible Frequent Folders items.
+    /// User-created Frequent Folders entries, including user-pinned folders,
+    /// are not preserved. Windows may recreate system-default pinned folders.
+    /// A successful clear refreshes matching Quick Access or Home windows.
     ///
     /// # Errors
     ///
@@ -1374,15 +1385,12 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// manager.empty_items(
-    ///     QuickAccess::All,
-    ///     EmptyOptions::new().remove_pinned_folders().refresh_explorer(),
-    /// )?;
+    /// manager.empty_items(QuickAccess::All)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn empty_items(&self, qa_type: QuickAccess, options: EmptyOptions) -> WincentResult<()> {
-        empty::empty_items_with_backend(qa_type, options, self.timeout, self.backend.as_ref())
+    pub fn empty_items(&self, qa_type: QuickAccess) -> WincentResult<()> {
+        empty::empty_items_with_backend(qa_type, self.timeout, self.backend.as_ref())
     }
 
     /// Restores Quick Access categories to their system-default state.
@@ -2109,7 +2117,7 @@ mod tests {
             Ok(())
         }
 
-        fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
+        fn clear_frequent_folders_jumplist(&self, _timeout: Duration) -> WincentResult<()> {
             self.record("clear_frequent_folders_jumplist");
             Ok(())
         }
@@ -2298,47 +2306,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_pinned_folders_uses_manager_timeout_by_default() -> WincentResult<()> {
+    fn empty_frequent_folders_refreshes_after_clear() -> WincentResult<()> {
         let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(9), backend.clone());
 
-        manager.empty_items(
-            QuickAccess::FrequentFolders,
-            EmptyOptions::new().remove_pinned_folders(),
-        )?;
+        manager.empty_items(QuickAccess::FrequentFolders)?;
 
-        assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(9)]);
+        assert!(backend.get_item_timeouts().is_empty());
         assert_eq!(
             backend.calls(),
             vec![
                 "clear_frequent_folders_jumplist".to_string(),
-                "remove_frequent_folder:C:\\Projects:9".to_string(),
+                "refresh_explorer".to_string(),
             ]
         );
         Ok(())
     }
 
     #[test]
-    fn empty_pinned_folders_option_overrides_manager_timeout() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
+    fn refresh_explorer_uses_manager_timeout() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(Vec::new()));
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(9), backend.clone());
 
-        manager.empty_items(
-            QuickAccess::FrequentFolders,
-            EmptyOptions::new()
-                .remove_pinned_folders()
-                .with_pinned_folders_timeout(Duration::from_secs(4)),
-        )?;
+        manager.refresh_explorer()?;
 
-        assert_eq!(backend.get_item_timeouts(), vec![Duration::from_secs(4)]);
+        assert_eq!(backend.calls(), vec!["refresh_explorer".to_string()]);
         assert_eq!(
-            backend.calls(),
-            vec![
-                "clear_frequent_folders_jumplist".to_string(),
-                "remove_frequent_folder:C:\\Projects:4".to_string(),
-            ]
+            *backend.refresh_explorer_timeouts.lock().unwrap(),
+            vec![Duration::from_secs(9)]
         );
         Ok(())
     }

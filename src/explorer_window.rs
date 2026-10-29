@@ -11,8 +11,9 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Ole::READYSTATE_COMPLETE;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{
-    FOLDERID_Desktop, IShellBrowser, IShellWindows, IWebBrowser2, SHGetKnownFolderPath,
-    SID_STopLevelBrowser, ShellWindows, KNOWN_FOLDER_FLAG,
+    FOLDERID_Desktop, IShellBrowser, IShellWindows, IWebBrowser2, SHChangeNotify,
+    SHGetKnownFolderPath, SID_STopLevelBrowser, ShellWindows, KNOWN_FOLDER_FLAG,
+    SHCNE_ASSOCCHANGED, SHCNF_IDLIST,
 };
 
 const QUICK_ACCESS_NAMESPACE: &str = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
@@ -27,12 +28,16 @@ pub(crate) struct NavigationCycleResult {
     pub(crate) restored: ExplorerLocation,
 }
 
-pub(crate) fn refresh_explorer_shell_views() -> WincentResult<()> {
-    refresh_explorer_shell_views_with_timeout(Duration::from_secs(10))
+pub(crate) fn refresh_explorer() -> WincentResult<()> {
+    refresh_explorer_with_timeout(Duration::from_secs(10))
 }
 
-pub(crate) fn refresh_explorer_shell_views_with_timeout(timeout: Duration) -> WincentResult<()> {
-    crate::com_thread::run_on_sta_thread(refresh_explorer_shell_views_on_sta, timeout)
+pub(crate) fn refresh_explorer_with_timeout(timeout: Duration) -> WincentResult<()> {
+    // SAFETY: SHCNE_ASSOCCHANGED with SHCNF_IDLIST accepts null item pointers.
+    unsafe {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+    }
+    crate::com_thread::run_on_sta_thread(refresh_explorer_on_sta, timeout)
 }
 
 #[allow(dead_code)]
@@ -44,26 +49,14 @@ pub(crate) fn navigate_recent_access_window_to_desktop_and_back(
     )
 }
 
-fn refresh_explorer_shell_views_on_sta() -> WincentResult<()> {
+fn refresh_explorer_on_sta() -> WincentResult<()> {
     let (shell_windows, count) = shell_windows_with_count()?;
 
     let recent_result = refresh_recent_access_shell_views(&shell_windows, count)?;
-    if recent_result.matched > 0 {
-        if recent_result.refreshed > 0 {
-            return Ok(());
-        }
-
+    if recent_result.matched > 0 && recent_result.refreshed == 0 {
         return Err(WincentError::SystemError(format!(
             "Found {} Quick Access/Home Explorer windows but failed to refresh any",
             recent_result.matched
-        )));
-    }
-
-    let explorer_result = refresh_all_explorer_shell_views(&shell_windows, count)?;
-    if explorer_result.matched > 0 && explorer_result.refreshed == 0 {
-        return Err(WincentError::SystemError(format!(
-            "Found {} Explorer windows but failed to refresh any",
-            explorer_result.matched
         )));
     }
 
@@ -152,13 +145,6 @@ fn refresh_recent_access_shell_views(
     count: i32,
 ) -> WincentResult<RefreshResult> {
     refresh_matching_shell_views(shell_windows, count, is_recent_access_location)
-}
-
-fn refresh_all_explorer_shell_views(
-    shell_windows: &IShellWindows,
-    count: i32,
-) -> WincentResult<RefreshResult> {
-    refresh_matching_shell_views(shell_windows, count, is_probable_explorer_location)
 }
 
 fn refresh_matching_shell_views(
@@ -363,6 +349,7 @@ fn is_recent_access_location(location: &ExplorerLocation) -> bool {
         || location.location_url.is_empty() && !location.location_name.is_empty()
 }
 
+#[cfg(test)]
 fn is_probable_explorer_location(location: &ExplorerLocation) -> bool {
     let lower = location.location_url.to_ascii_lowercase();
     lower.starts_with("file:///")
