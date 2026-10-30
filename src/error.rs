@@ -51,7 +51,7 @@
 //!
 //! # fn example() -> WincentResult<()> {
 //! # let manager = QuickAccessManager::new();
-//! match manager.remove_item("C:\\test.txt", QuickAccess::RecentFiles) {
+//! match manager.remove_item("C:\\test.txt") {
 //!     Ok(_) => println!("Success"),
 //!     Err(WincentError::PowerShellExecution(err)) => {
 //!         let kind = err.classification_with(classify_chinese_error);
@@ -558,7 +558,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
+    ///     manager.remove_item("C:\\path\\to\\file.txt")
     /// else {
     ///     return Ok(());
     /// };
@@ -590,7 +590,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
+    ///     manager.remove_item("C:\\path\\to\\file.txt")
     /// else {
     ///     return Ok(());
     /// };
@@ -627,7 +627,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
+    ///     manager.remove_item("C:\\path\\to\\file.txt")
     /// else {
     ///     return Ok(());
     /// };
@@ -647,7 +647,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
+    ///     manager.remove_item("C:\\path\\to\\file.txt")
     /// else {
     ///     return Ok(());
     /// };
@@ -693,7 +693,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
+    ///     manager.remove_item("C:\\path\\to\\file.txt")
     /// else {
     ///     return Ok(());
     /// };
@@ -721,7 +721,7 @@ impl PowerShellError {
     /// # fn example() -> Result<(), WincentError> {
     /// let manager = QuickAccessManager::new();
     /// let Err(WincentError::PowerShellExecution(err)) =
-    ///     manager.remove_item("C:\\path\\to\\file.txt", QuickAccess::RecentFiles)
+    ///     manager.remove_item("C:\\path\\to\\file.txt")
     /// else {
     ///     return Ok(());
     /// };

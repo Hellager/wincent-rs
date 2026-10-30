@@ -105,7 +105,7 @@ fn main() -> WincentResult<()> {
 
     // --- 删除 ---
     // 移除文件。若不存在则返回 Err(NotInQuickAccess)。
-    manager.remove_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
+    manager.remove_item("C:\\Projects\\report.docx")?;
 
     Ok(())
 }
@@ -118,7 +118,7 @@ fn main() -> WincentResult<()> {
 - **查询语义**：查询 API 返回根据持久化 DestList 数据计算出的 rule-based 结果。相关规则来自对 Shell 查询行为的逆向，匹配已观察到的过滤、排序、去重和结果数量限制，无需调用实时 Shell 查询。
 - **UI 一致性**：已打开的 Explorer 视图可能在 UI 缓存刷新前与持久化的 rule-based 结果短暂不同。Explorer 也可能在不同 Windows 版本上异步重建状态。
 - **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
-- **常用文件夹删除**：`remove_item(..., QuickAccess::FrequentFolders)` 支持删除已固定和未固定的常用文件夹条目。Explorer Shell verb 的实际效果会随当前状态变化，可能添加也可能移除状态，因此 wincent 会在每次修改后验证结果，而不是只信任 verb 名称或返回值。
+- **自动删除分流**：`remove_item(path)` 自动识别文件和目录。Recent file 使用原生 `remove` Shell verb，未固定 Frequent Folder 使用 `IApplicationDestinations::RemoveDestination`，已固定 Frequent Folder 使用 `unpinfromhome`。
 - **固定文件夹清理超时**：在 `empty` 操作中显式移除可见固定文件夹时，可用 `EmptyOptions::with_pinned_folders_timeout()` 覆盖 snapshot/unpin 超时。未设置时使用 manager timeout。
 - **恢复清理**：默认恢复清理只删除目标类型可解析为对应文件或文件夹分类的 `.lnk` 文件。使用 `RestoreDefaultsOptions::deep_lnk_cleanup()` 或 CLI `restore --deep` 时，也会删除无法解析或目标类型未知的 `.lnk` 文件。
 - **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复最近文件可见性，请先显示开始菜单推荐项目，再用 `ShowRecent` 控制最近文件可见性。

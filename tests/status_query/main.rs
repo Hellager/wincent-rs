@@ -536,7 +536,7 @@ fn status_query() {
         );
 
         manager
-            .remove_item(&recent_target, QuickAccess::RecentFiles)
+            .remove_item(&recent_target)
             .expect("remove recent target");
         let remove_started = Instant::now();
         let recent_became_hidden = wait_until(MUTATION_TIMEOUT, || {
@@ -578,7 +578,7 @@ fn status_query() {
         );
 
         manager
-            .remove_item(&folder_target, QuickAccess::FrequentFolders)
+            .remove_item(&folder_target)
             .expect("remove frequent target");
         let unpin_started = Instant::now();
         let unpinned_hidden = wait_until(MUTATION_TIMEOUT, || {

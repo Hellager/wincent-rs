@@ -31,9 +31,9 @@ fn path_to_shell_string(path: &Path) -> WincentResult<String> {
 
 /// Options for removing a single item from Quick Access.
 ///
-/// By default removal only asks Explorer to remove the visible Quick Access
-/// item. Use [`RemoveOptions::deep_clean_recent_links`] when the matching
-/// shortcut in the Windows Recent folder should be deleted too.
+/// By default removal uses the native operation selected from the path type and
+/// Frequent Folders pin state. Use [`RemoveOptions::deep_clean_recent_links`]
+/// when matching shortcuts in the Windows Recent folder should be deleted too.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RemoveOptions {
     deep_clean_recent_links: bool,
@@ -940,27 +940,28 @@ impl QuickAccessManager {
         self.backend.add_frequent_folder(&path, self.timeout)
     }
 
-    /// Removes an item from Recent Files or Frequent Folders.
+    /// Removes an existing file or directory from Quick Access.
     ///
-    /// For [`QuickAccess::FrequentFolders`], pinned folders are unpinned through
-    /// Explorer shell verbs. Unpinned frequent entries are first pinned, then
-    /// unpinned, so this method removes either visible Frequent Folders state
-    /// without rebuilding Explorer's DestList file.
+    /// The operation is selected automatically:
     ///
-    /// `QuickAccess::All` is not a valid target for mutation. Use
-    /// [`QuickAccessManager::empty_items`] when the goal is to clear a whole
-    /// category.
+    /// - files use the Recent Files `remove` Shell verb, which blocks the entry
+    ///   from the UI but can retain its DestList entry and numeric stream;
+    /// - visible unpinned directories use
+    ///   `IApplicationDestinations::RemoveDestination`, which physically
+    ///   removes the Frequent Folders entry and numeric stream on supported
+    ///   Windows builds;
+    /// - pinned directories use the native `unpinfromhome` Shell verb. Windows
+    ///   can retain an entry with cleared usage or physically remove a zero-use
+    ///   entry.
     ///
     /// # Errors
     ///
-    /// Returns [`WincentError::InvalidPath`] when `path` is empty;
+    /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
+    /// is neither a file nor directory;
     /// [`WincentError::NotInQuickAccess`] if the preflight query does not find
-    /// the item; [`WincentError::UnsupportedOperation`] for `QuickAccess::All`;
-    /// [`WincentError::PostMutationFailure`] when remove succeeded but an
-    /// explicitly requested Explorer refresh failed; or a Shell/PowerShell error
-    /// if the underlying operation fails. If an unpinned frequent entry is
-    /// pinned successfully but the later unpin fails, the original unpin error is
-    /// returned and the folder may remain pinned.
+    /// the item; [`WincentError::PostMutationFailure`] when removal succeeded
+    /// but an explicitly requested Explorer refresh or shortcut cleanup failed;
+    /// or an underlying Shell/COM error.
     ///
     /// # Examples
     ///
@@ -969,17 +970,17 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// manager.remove_item("C:\\Work\\report.docx", QuickAccess::RecentFiles)?;
+    /// manager.remove_item("C:\\Work\\report.docx")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn remove_item<P: AsRef<Path>>(&self, path: P, qa_type: QuickAccess) -> WincentResult<()> {
-        self.remove_item_with_options(path, qa_type, RemoveOptions::new())
+    pub fn remove_item<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
+        self.remove_item_with_options(path, RemoveOptions::new())
     }
 
     /// Removes an item from Quick Access with additional cleanup options.
     ///
-    /// Frequent Folders use the same pinned/unpinned behavior as
+    /// Path type and Frequent Folders pin state are detected in the same way as
     /// [`QuickAccessManager::remove_item`].
     ///
     /// [`RemoveOptions::deep_clean_recent_links`] applies to both
@@ -987,27 +988,28 @@ impl QuickAccessManager {
     pub fn remove_item_with_options<P: AsRef<Path>>(
         &self,
         path: P,
-        qa_type: QuickAccess,
         options: RemoveOptions,
     ) -> WincentResult<()> {
-        self.remove_item_with_options_timed(path, qa_type, options)
+        self.remove_item_with_options_timed(path, options)
             .map(|_| ())
     }
 
-    /// Removes an item through the Shell path and returns phase timings.
+    /// Removes an automatically classified item and returns phase timings.
     pub fn remove_item_with_options_timed<P: AsRef<Path>>(
         &self,
         path: P,
-        qa_type: QuickAccess,
         options: RemoveOptions,
     ) -> WincentResult<RemoveTimingReport> {
         let total_started = Instant::now();
         let path = path_to_shell_string(path.as_ref())?;
+        let path_type = self.backend.path_type(&path)?;
+        let qa_type = match path_type {
+            crate::utils::PathType::File => QuickAccess::RecentFiles,
+            crate::utils::PathType::Directory => QuickAccess::FrequentFolders,
+        };
 
-        match qa_type {
-            QuickAccess::RecentFiles => {
-                self.backend
-                    .validate_path(&path, crate::utils::PathType::File)?;
+        match path_type {
+            crate::utils::PathType::File => {
                 self.ensure_present(&path, qa_type)?;
                 let mutation_started = Instant::now();
                 self.execute_with_retry(|| self.backend.remove_recent_file(&path, self.timeout))?;
@@ -1032,14 +1034,27 @@ impl QuickAccessManager {
                     total: total_started.elapsed(),
                 })
             }
-            QuickAccess::FrequentFolders => {
-                self.backend
-                    .validate_path(&path, crate::utils::PathType::Directory)?;
+            crate::utils::PathType::Directory => {
                 self.ensure_present(&path, qa_type)?;
+                let pin_status = self.backend.frequent_folder_pin_status(&path)?;
                 let mutation_started = Instant::now();
-                self.execute_with_retry(|| {
-                    self.backend.remove_frequent_folder(&path, self.timeout)
-                })?;
+                match pin_status {
+                    crate::destlist::FrequentFolderPinStatus::Pinned => {
+                        self.execute_with_retry(|| {
+                            self.backend
+                                .remove_pinned_frequent_folder(&path, self.timeout)
+                        })?;
+                    }
+                    crate::destlist::FrequentFolderPinStatus::Unpinned => {
+                        self.execute_with_retry(|| {
+                            self.backend
+                                .remove_unpinned_frequent_folder(&path, self.timeout)
+                        })?;
+                    }
+                    crate::destlist::FrequentFolderPinStatus::NotFound => {
+                        return Err(WincentError::not_in_quick_access(&path, qa_type));
+                    }
+                }
                 let mutation = mutation_started.elapsed();
                 let mut explorer_refresh = Duration::ZERO;
                 if options.refresh_explorer_enabled() {
@@ -1061,7 +1076,6 @@ impl QuickAccessManager {
                     total: total_started.elapsed(),
                 })
             }
-            unsupported => Err(unsupported_remove(unsupported)),
         }
     }
 
@@ -1811,6 +1825,7 @@ mod tests {
         refresh_explorer_timeouts: Mutex<Vec<Duration>>,
         validate_path_error: Mutex<Option<WincentError>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
+        frequent_pin_status: Mutex<Option<crate::destlist::FrequentFolderPinStatus>>,
         refresh_explorer_error: Mutex<Option<WincentError>>,
         clear_recent_files_error: Mutex<Option<WincentError>>,
         frequent_rebuild_entries: Mutex<Vec<crate::destlist::DestListEntry>>,
@@ -1827,6 +1842,7 @@ mod tests {
                 refresh_explorer_timeouts: Mutex::new(Vec::new()),
                 validate_path_error: Mutex::new(None),
                 add_frequent_folder_error: Mutex::new(None),
+                frequent_pin_status: Mutex::new(None),
                 refresh_explorer_error: Mutex::new(None),
                 clear_recent_files_error: Mutex::new(None),
                 frequent_rebuild_entries: Mutex::new(Vec::new()),
@@ -1855,6 +1871,10 @@ mod tests {
 
         fn fail_add_frequent_folder_with(&self, error: WincentError) {
             *self.add_frequent_folder_error.lock().unwrap() = Some(error);
+        }
+
+        fn set_frequent_pin_status(&self, status: crate::destlist::FrequentFolderPinStatus) {
+            *self.frequent_pin_status.lock().unwrap() = Some(status);
         }
 
         fn fail_refresh_explorer_with(&self, error: WincentError) {
@@ -1936,6 +1956,41 @@ mod tests {
         fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
             self.record(format!(
                 "remove_frequent_folder:{path}:{}",
+                timeout.as_secs()
+            ));
+            Ok(())
+        }
+
+        fn frequent_folder_pin_status(
+            &self,
+            _path: &str,
+        ) -> WincentResult<crate::destlist::FrequentFolderPinStatus> {
+            Ok(self
+                .frequent_pin_status
+                .lock()
+                .unwrap()
+                .unwrap_or(crate::destlist::FrequentFolderPinStatus::Pinned))
+        }
+
+        fn remove_pinned_frequent_folder(
+            &self,
+            path: &str,
+            timeout: Duration,
+        ) -> WincentResult<()> {
+            self.record(format!(
+                "remove_pinned_frequent_folder:{path}:{}",
+                timeout.as_secs()
+            ));
+            Ok(())
+        }
+
+        fn remove_unpinned_frequent_folder(
+            &self,
+            path: &str,
+            timeout: Duration,
+        ) -> WincentResult<()> {
+            self.record(format!(
+                "remove_unpinned_frequent_folder:{path}:{}",
                 timeout.as_secs()
             ));
             Ok(())
@@ -2490,7 +2545,6 @@ mod tests {
 
         manager.remove_item_with_options(
             "C:\\report.docx",
-            QuickAccess::RecentFiles,
             RemoveOptions::new().deep_clean_recent_links(),
         )?;
 
@@ -2626,7 +2680,7 @@ mod tests {
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
 
-        manager.remove_item("C:\\report.docx", QuickAccess::RecentFiles)?;
+        manager.remove_item("C:\\report.docx")?;
 
         assert_eq!(
             backend.calls(),
@@ -2641,11 +2695,8 @@ mod tests {
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
 
-        manager.remove_item_with_options(
-            "C:\\report.docx",
-            QuickAccess::RecentFiles,
-            RemoveOptions::new().refresh_explorer(),
-        )?;
+        manager
+            .remove_item_with_options("C:\\report.docx", RemoveOptions::new().refresh_explorer())?;
 
         assert_eq!(
             backend.calls(),
@@ -2663,16 +2714,13 @@ mod tests {
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
 
-        manager.remove_item_with_options(
-            "C:\\Projects",
-            QuickAccess::FrequentFolders,
-            RemoveOptions::new().refresh_explorer(),
-        )?;
+        manager
+            .remove_item_with_options("C:\\Projects", RemoveOptions::new().refresh_explorer())?;
 
         assert_eq!(
             backend.calls(),
             vec![
-                "remove_frequent_folder:C:\\Projects:10".to_string(),
+                "remove_pinned_frequent_folder:C:\\Projects:10".to_string(),
                 "refresh_explorer".to_string(),
             ]
         );
@@ -2687,11 +2735,7 @@ mod tests {
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
 
         let error = manager
-            .remove_item_with_options(
-                "C:\\report.docx",
-                QuickAccess::RecentFiles,
-                RemoveOptions::new().refresh_explorer(),
-            )
+            .remove_item_with_options("C:\\report.docx", RemoveOptions::new().refresh_explorer())
             .unwrap_err();
 
         assert!(matches!(
@@ -2747,13 +2791,19 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_remove_all_returns_error() {
-        let manager = QuickAccessManager::new();
-        let error = manager
-            .remove_item("C:\\test.txt", QuickAccess::All)
-            .unwrap_err();
+    fn remove_unpinned_frequent_folder_uses_remove_destination_path() -> WincentResult<()> {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
+        backend.set_frequent_pin_status(crate::destlist::FrequentFolderPinStatus::Unpinned);
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
 
-        assert!(matches!(error, WincentError::UnsupportedOperation(_)));
+        manager.remove_item("C:\\Projects")?;
+
+        assert_eq!(
+            backend.calls(),
+            vec!["remove_unpinned_frequent_folder:C:\\Projects:10".to_string()]
+        );
+        Ok(())
     }
 
     #[test]
@@ -2769,9 +2819,7 @@ mod tests {
     fn remove_recent_file_validates_path_before_membership_check() {
         let manager = QuickAccessManager::new();
         let missing = unique_temp_path("missing-remove-recent.txt");
-        let error = manager
-            .remove_item(&missing, QuickAccess::RecentFiles)
-            .unwrap_err();
+        let error = manager.remove_item(&missing).unwrap_err();
 
         assert!(matches!(error, WincentError::InvalidPath(_)));
     }

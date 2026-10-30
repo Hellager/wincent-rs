@@ -187,11 +187,11 @@ Core:
     [--position <first|last|N>]
     updates DestList v4 visibility, Frequent pin state, or zero-based group position.
   pin <path>
-  remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]
-    frequent removal handles pinned folders and unpinned frequent entries via Shell verbs.
+  remove <path> [--deep-clean] [--refresh-explorer]
+    detects Recent files and pinned or unpinned Frequent Folders automatically.
   remove-direct <recent|frequent> <path>
     rewrites DestList v4, removes the numeric stream and Recent shortcut, then refreshes Explorer.
-  remove-timed <shell|direct> <recent|frequent> <path>
+  remove-timed shell <path> | remove-timed direct <recent|frequent> <path>
     prints successful removal phase timings as one JSON object.
   batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
   batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
@@ -468,16 +468,11 @@ fn cmd_pin(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
 }
 
 fn cmd_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(
-        args,
-        2,
-        "remove <recent|frequent> <path> [--deep-clean] [--refresh-explorer]",
-    )?;
-    let qa_type = parse_category(&args[0], false)?;
-    let options = parse_remove_options(&args[2..])?;
+    require_len(args, 1, "remove <path> [--deep-clean] [--refresh-explorer]")?;
+    let options = parse_remove_options(&args[1..])?;
 
-    manager.remove_item_with_options(&args[1], qa_type, options)?;
-    println!("removed {}", args[1]);
+    manager.remove_item_with_options(&args[0], options)?;
+    println!("removed {}", args[0]);
     Ok(())
 }
 
@@ -493,19 +488,27 @@ fn cmd_remove_direct(manager: &QuickAccessManager, args: &[String]) -> WincentRe
 fn cmd_remove_timed(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(
         args,
-        3,
-        "remove-timed <shell|direct> <recent|frequent> <path>",
+        2,
+        "remove-timed shell <path> | remove-timed direct <recent|frequent> <path>",
     )?;
-    let qa_type = parse_category(&args[1], false)?;
-    let report = match args[0].as_str() {
-        "shell" => manager.remove_item_with_options_timed(
-            &args[2],
-            qa_type,
-            RemoveOptions::new()
-                .deep_clean_recent_links()
-                .refresh_explorer(),
-        )?,
-        "direct" => manager.remove_item_direct_timed(&args[2], qa_type)?,
+    let (report, category) = match args[0].as_str() {
+        "shell" => (
+            manager.remove_item_with_options_timed(
+                &args[1],
+                RemoveOptions::new()
+                    .deep_clean_recent_links()
+                    .refresh_explorer(),
+            )?,
+            "auto",
+        ),
+        "direct" => {
+            require_len(args, 3, "remove-timed direct <recent|frequent> <path>")?;
+            let qa_type = parse_category(&args[1], false)?;
+            (
+                manager.remove_item_direct_timed(&args[2], qa_type)?,
+                args[1].as_str(),
+            )
+        }
         mode => {
             return Err(WincentError::InvalidArgument(format!(
                 "unknown remove timing mode: {mode}"
@@ -519,7 +522,7 @@ fn cmd_remove_timed(manager: &QuickAccessManager, args: &[String]) -> WincentRes
             "\"explorer_refresh_ns\":{},\"other_ns\":{},\"total_ns\":{}}}"
         ),
         args[0],
-        args[1],
+        category,
         report.mutation().as_nanos(),
         report.recent_link_cleanup().as_nanos(),
         report.explorer_refresh().as_nanos(),
@@ -1590,15 +1593,13 @@ mod tests {
 
     #[test]
     fn split_command_line_preserves_quoted_windows_path_backslashes() {
-        let args =
-            split_command_line(r#"remove recent "D:\Temp\wincent-rs-test\scripts\Copy-Admin.ps1""#)
-                .unwrap();
+        let args = split_command_line(r#"remove "D:\Temp\wincent-rs-test\scripts\Copy-Admin.ps1""#)
+            .unwrap();
 
         assert_eq!(
             args,
             vec![
                 "remove",
-                "recent",
                 r#"D:\Temp\wincent-rs-test\scripts\Copy-Admin.ps1"#
             ]
         );
@@ -1606,13 +1607,9 @@ mod tests {
 
     #[test]
     fn split_command_line_preserves_quoted_path_with_spaces() {
-        let args =
-            split_command_line(r#"remove recent "D:\Temp\wincent rs test\file.ps1""#).unwrap();
+        let args = split_command_line(r#"remove "D:\Temp\wincent rs test\file.ps1""#).unwrap();
 
-        assert_eq!(
-            args,
-            vec!["remove", "recent", r#"D:\Temp\wincent rs test\file.ps1"#]
-        );
+        assert_eq!(args, vec!["remove", r#"D:\Temp\wincent rs test\file.ps1"#]);
     }
 
     #[test]
@@ -1624,7 +1621,7 @@ mod tests {
 
     #[test]
     fn split_command_line_reports_unterminated_quote() {
-        let error = split_command_line(r#"remove recent "D:\Temp"#).unwrap_err();
+        let error = split_command_line(r#"remove "D:\Temp"#).unwrap_err();
 
         assert!(
             matches!(error, WincentError::InvalidArgument(message) if message == "unterminated quote: \"")

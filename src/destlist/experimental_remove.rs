@@ -640,7 +640,7 @@ mod tests {
     use super::*;
     use crate::manager::QuickAccessManager;
     use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
-    use crate::{QuickAccess, RemoveOptions};
+    use crate::RemoveOptions;
     use std::env;
     use std::io::{self, Write};
     use std::process::Command;
@@ -1879,10 +1879,6 @@ mod tests {
         let dest_path = dest_path_for_kind(kind)?;
         delete_dest_file_for_exploration(&dest_path)?;
 
-        let qa_type = match kind {
-            AutomaticDestinationsKind::RecentFiles => QuickAccess::RecentFiles,
-            AutomaticDestinationsKind::FrequentFolders => QuickAccess::FrequentFolders,
-        };
         let manager = QuickAccessManager::new();
         manager.add_item(seed_path)?;
 
@@ -1892,7 +1888,7 @@ mod tests {
             std::slice::from_ref(&seed_path_string),
             REBUILD_POLL_TIMEOUT,
         );
-        remove_added_seed(&manager, seed_path, qa_type)?;
+        remove_added_seed(&manager, seed_path)?;
         let rebuilt = rebuild_result?;
         let check = rebuilt.rebuilt.ok_or_else(|| {
             WincentError::Timeout(format!(
@@ -1919,14 +1915,9 @@ mod tests {
         Ok(())
     }
 
-    fn remove_added_seed(
-        manager: &QuickAccessManager,
-        seed_path: &Path,
-        qa_type: QuickAccess,
-    ) -> WincentResult<()> {
+    fn remove_added_seed(manager: &QuickAccessManager, seed_path: &Path) -> WincentResult<()> {
         let removal_result = manager.remove_item_with_options(
             seed_path,
-            qa_type,
             RemoveOptions::new()
                 .deep_clean_recent_links()
                 .refresh_explorer(),

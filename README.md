@@ -101,7 +101,7 @@ fn main() -> WincentResult<()> {
 
     // --- Remove ---
     // Remove a file. Returns Err(NotInQuickAccess) if not present.
-    manager.remove_item("C:\\Projects\\report.docx", QuickAccess::RecentFiles)?;
+    manager.remove_item("C:\\Projects\\report.docx")?;
 
     Ok(())
 }
@@ -114,7 +114,7 @@ fn main() -> WincentResult<()> {
 - **Query semantics**: Query APIs return the Explorer UI-visible result calculated from persisted DestList data. The recovered rules cover ordering, metadata filtering, deduplication, hidden-item Folder Options, and result limits without invoking a live Shell query.
 - **UI consistency**: An already-open Explorer view may temporarily differ from the persisted UI-visible result while its UI cache refreshes. Explorer may also rebuild state asynchronously across Windows versions.
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
-- **Frequent Folders removal**: `remove_item(..., QuickAccess::FrequentFolders)` handles both pinned and unpinned frequent entries. Explorer Shell verbs can add or remove state depending on current status, so wincent verifies after each mutation instead of trusting verb names or return values.
+- **Automatic removal routing**: `remove_item(path)` detects files and directories. Recent files use the native `remove` Shell verb, unpinned Frequent Folders use `IApplicationDestinations::RemoveDestination`, and pinned Frequent Folders use `unpinfromhome`.
 - **Empty behavior**: `empty_items(...)` always refreshes Explorer after a successful clear. Clearing Frequent Folders removes user-created entries, including user pins; Windows may rebuild its system-default pins.
 - **Restore cleanup**: default restore cleanup deletes only `.lnk` files whose target type is resolved as the requested file or folder category. Use `RestoreDefaultsOptions::deep_lnk_cleanup()` or CLI `restore --deep` to also delete unresolved or unknown-type `.lnk` files.
 - **Start menu Recommended visibility**: the Start Recommended APIs target the Windows 11 Start menu. They write the current user's `Explorer\Advanced\Start_TrackDocs` value and are not blocked on Windows 10, where the setting may have no visible Start menu effect. On some Windows 11 builds, hiding Start Recommended can also make Explorer Recent Files invisible; if `ShowRecent` alone does not restore Recent Files visibility, show Start Recommended first and then control Recent Files with `ShowRecent`.

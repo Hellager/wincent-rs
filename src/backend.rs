@@ -7,6 +7,7 @@ use crate::{
     handle::{
         add_file_to_recent_native, add_to_frequent_folders_with_timeout,
         remove_from_frequent_folders_with_timeout, remove_from_recent_files_with_timeout,
+        remove_pinned_frequent_folder_with_timeout, remove_unpinned_frequent_folder_with_timeout,
     },
     recent_links,
     script_executor::QuickAccessDataFiles,
@@ -41,6 +42,18 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
 
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
+    fn frequent_folder_pin_status(
+        &self,
+        _path: &str,
+    ) -> WincentResult<crate::destlist::FrequentFolderPinStatus> {
+        Ok(crate::destlist::FrequentFolderPinStatus::NotFound)
+    }
+    fn remove_pinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
+        self.remove_frequent_folder(path, timeout)
+    }
+    fn remove_unpinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
+        self.remove_frequent_folder(path, timeout)
+    }
     fn remove_destlist_entry(&self, _path: &str, _qa_type: QuickAccess) -> WincentResult<()> {
         Err(crate::error::WincentError::UnsupportedOperation(
             "direct DestList removal is not implemented by this backend".to_string(),
@@ -161,6 +174,21 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
 
     fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
         remove_from_frequent_folders_with_timeout(path, timeout)
+    }
+
+    fn frequent_folder_pin_status(
+        &self,
+        path: &str,
+    ) -> WincentResult<crate::destlist::FrequentFolderPinStatus> {
+        crate::destlist::frequent_folder_pin_status(path)
+    }
+
+    fn remove_pinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
+        remove_pinned_frequent_folder_with_timeout(path, timeout)
+    }
+
+    fn remove_unpinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
+        remove_unpinned_frequent_folder_with_timeout(path, timeout)
     }
 
     fn remove_destlist_entry(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {

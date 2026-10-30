@@ -12,6 +12,12 @@
   and pinned state of a path included in the rule-based result
 
 ### Changed
+- `QuickAccessManager::remove_item`, `remove_item_with_options`, and the timed
+  variant now accept only a path and automatically select Recent Files,
+  unpinned Frequent Folders, or pinned Frequent Folders removal.
+- Visible unpinned Frequent Folders now use
+  `IApplicationDestinations::RemoveDestination`; pinned folders use the native
+  `unpinfromhome` verb, while Recent files continue to use `remove`.
 - `QuickAccessLock` can now be moved to another thread for unlocking or dropping
 - Visibility refresh failures now report that the registry mutation completed; callers
   should not retry the registry write for `VisibilityPostMutationFailure`
