@@ -10,7 +10,7 @@ Read this in other languages: [English](README.md) | [中文](README.cn.md)
 
 ## Overview
 
-Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Explorer behavior. Mutations use native Windows APIs where possible, with targeted PowerShell fallbacks for compatible Shell operations and Explorer refreshes.
+Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Explorer behavior. Add mutations use `SHAddToRecentDocs` or native Shell COM; PowerShell remains only for selected removal and Explorer-refresh compatibility paths.
 
 ## Features
 
@@ -21,7 +21,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. Queri
 - Check item existence by exact path or keyword
 - Query whether a frequent folder is pinned, unpinned, or absent
 - Batch add/remove with per-item error collection
-- Caller-side timeout protection for Shell mutations, refreshes, and PowerShell fallbacks
+- Caller-side timeout protection for native Shell mutations, refreshes, and remaining compatibility paths
 - Visibility control for Quick Access sections
 - Recent files visibility control in Windows Recommended items
 - DestList metadata access
@@ -45,16 +45,10 @@ fn main() -> WincentResult<()> {
 
     // --- Add ---
     // Add a file to Recent Files. Returns Err(AlreadyExists) if already present.
-    manager.add_item(
-        "C:\\Projects\\report.docx",
-        QuickAccess::RecentFiles,
-        AddOptions::new()
-            .force_recent_files_rebuild()
-            .refresh_explorer(),
-    )?;
+    manager.add_item("C:\\Projects\\report.docx")?;
 
     // Pin a folder to Frequent Folders.
-    manager.add_item("C:\\Projects", QuickAccess::FrequentFolders, AddOptions::new())?;
+    manager.add_item("C:\\Projects")?;
 
     // --- Query ---
     // List all recent files as PathBuf values.

@@ -297,16 +297,17 @@ mod tests {
     #[test]
     fn test_dynamic_script_management() {
         let param = "C:\\Test\\Path";
-        let result = ScriptStorage::get_dynamic_script_path(PSScript::PinToFrequentFolder, param);
+        let result =
+            ScriptStorage::get_dynamic_script_path(PSScript::UnpinFromFrequentFolder, param);
         assert!(result.is_ok());
         let path = result.unwrap();
         assert!(path.exists());
-        assert!(path.to_string_lossy().contains("PinToFrequentFolder"));
+        assert!(path.to_string_lossy().contains("UnpinFromFrequentFolder"));
         assert!(path
             .to_string_lossy()
             .contains(&format!("_{}_", ScriptStorage::current_process_token())));
 
-        let expected_pattern = format!("PinToFrequentFolder_{}_", current_version());
+        let expected_pattern = format!("UnpinFromFrequentFolder_{}_", current_version());
         assert!(
             path.to_string_lossy().contains(&expected_pattern),
             "Path {} should contain pattern {}",
@@ -315,7 +316,8 @@ mod tests {
         );
 
         let second =
-            ScriptStorage::get_dynamic_script_path(PSScript::PinToFrequentFolder, param).unwrap();
+            ScriptStorage::get_dynamic_script_path(PSScript::UnpinFromFrequentFolder, param)
+                .unwrap();
         assert_eq!(path, second, "same process and parameter should reuse path");
     }
 
@@ -391,7 +393,7 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         let current_pid = ScriptStorage::current_process_token();
         let file = temp_dir.path().join(format!(
-            "PinToFrequentFolder_{}_{}_abcd1234.ps1",
+            "UnpinFromFrequentFolder_{}_{}_abcd1234.ps1",
             env!("CARGO_PKG_VERSION"),
             current_pid
         ));
@@ -413,7 +415,7 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         let other_pid = std::process::id().saturating_add(1);
         let file = temp_dir.path().join(format!(
-            "PinToFrequentFolder_{}_{}_abcd1234.ps1",
+            "UnpinFromFrequentFolder_{}_{}_abcd1234.ps1",
             env!("CARGO_PKG_VERSION"),
             other_pid
         ));
@@ -458,14 +460,16 @@ mod tests {
     #[test]
     fn test_dynamic_script_overwrites_stale_content() -> WincentResult<()> {
         let param = "C:\\Test\\StaleCheck";
-        let result = ScriptStorage::get_dynamic_script_path(PSScript::PinToFrequentFolder, param)?;
+        let result =
+            ScriptStorage::get_dynamic_script_path(PSScript::UnpinFromFrequentFolder, param)?;
         fs::write(&result, b"stale content")?;
-        let result2 = ScriptStorage::get_dynamic_script_path(PSScript::PinToFrequentFolder, param)?;
+        let result2 =
+            ScriptStorage::get_dynamic_script_path(PSScript::UnpinFromFrequentFolder, param)?;
         assert_eq!(result, result2);
         let on_disk = ScriptStorage::read_script_content(&result2)
             .expect("should be able to read regenerated script");
         let expected =
-            ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(param))
+            ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(param))
                 .unwrap();
         assert_eq!(
             on_disk, expected,

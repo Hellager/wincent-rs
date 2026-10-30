@@ -178,11 +178,11 @@ Core:
   contains-keyword <recent|frequent|all> <keyword>
   find <recent|frequent|all> <keyword>
   watch <recent|frequent|all> [--poll-ms N]
-  add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]
+  add <path>
   add-direct <recent|frequent> <path>
     writes a DestList v4 entry, numeric stream, and Recent shortcuts when applicable.
-  add-timed <shell|direct> <recent|frequent> <path>
-    prints successful addition time including Explorer refresh as one JSON object.
+  add-timed shell <path> | add-timed direct <recent|frequent> <path>
+    prints successful addition time as one JSON object.
   modify-direct <recent|frequent> <path> [--show|--hide] [--pin|--unpin]
     [--position <first|last|N>]
     updates DestList v4 visibility, Frequent pin state, or zero-based group position.
@@ -396,16 +396,9 @@ fn cmd_watch(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
 }
 
 fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(
-        args,
-        2,
-        "add <recent|frequent> <path> [--force-recent-files-rebuild] [--refresh-explorer]",
-    )?;
-    let qa_type = parse_category(&args[0], false)?;
-    let options = parse_add_options(&args[2..])?;
-
-    manager.add_item(&args[1], qa_type, options)?;
-    println!("added {}", args[1]);
+    require_len(args, 1, "add <path>")?;
+    manager.add_item(&args[0])?;
+    println!("added {}", args[0]);
     Ok(())
 }
 
@@ -418,22 +411,35 @@ fn cmd_add_direct(manager: &QuickAccessManager, args: &[String]) -> WincentResul
 }
 
 fn cmd_add_timed(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 3, "add-timed <shell|direct> <recent|frequent> <path>")?;
-    let qa_type = parse_category(&args[1], false)?;
     let started = std::time::Instant::now();
-    match args[0].as_str() {
-        "direct" => manager.add_item_direct(&args[2], qa_type)?,
-        "shell" => manager.add_item(&args[2], qa_type, AddOptions::new().refresh_explorer())?,
-        other => {
+    let category = match args.first().map(String::as_str) {
+        Some("shell") => {
+            require_len(args, 2, "add-timed shell <path>")?;
+            manager.add_item(&args[1])?;
+            "auto"
+        }
+        Some("direct") => {
+            require_len(args, 3, "add-timed direct <recent|frequent> <path>")?;
+            let category = args[1].as_str();
+            manager.add_item_direct(&args[2], parse_category(category, false)?)?;
+            category
+        }
+        Some(other) => {
             return Err(WincentError::InvalidArgument(format!(
                 "unknown add timing mode: {other}"
             )));
         }
-    }
+        None => {
+            return Err(WincentError::InvalidArgument(
+                "usage: add-timed shell <path> | add-timed direct <recent|frequent> <path>"
+                    .to_string(),
+            ));
+        }
+    };
     println!(
         "{{\"mode\":\"{}\",\"category\":\"{}\",\"total_ns\":{}}}",
         args[0],
-        args[1],
+        category,
         started.elapsed().as_nanos()
     );
     Ok(())
@@ -1186,22 +1192,6 @@ fn parse_batch_items(args: &[String]) -> WincentResult<Vec<QuickAccessItem>> {
             }
         })
         .collect()
-}
-
-fn parse_add_options(args: &[String]) -> WincentResult<AddOptions> {
-    let mut options = AddOptions::new();
-    for arg in args {
-        match arg.as_str() {
-            "--force-recent-files-rebuild" => options = options.force_recent_files_rebuild(),
-            "--refresh-explorer" => options = options.refresh_explorer(),
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown add option: {other}"
-                )))
-            }
-        }
-    }
-    Ok(options)
 }
 
 fn parse_remove_options(args: &[String]) -> WincentResult<RemoveOptions> {

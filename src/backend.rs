@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(crate) trait QuickAccessBackend: Send + Sync {
+    fn path_type(&self, path: &str) -> WincentResult<PathType> {
+        crate::utils::detect_path_type(path)
+    }
+
     fn validate_path(&self, path: &str, expected: PathType) -> WincentResult<()>;
 
     fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>>;

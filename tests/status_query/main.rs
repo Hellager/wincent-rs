@@ -151,10 +151,7 @@ fn build_recent_fixture(manager: &QuickAccessManager, root: &Path, count: usize)
         if fs::write(&path, b"wincent status fixture").is_err() {
             continue;
         }
-        if manager
-            .add_item(&path, QuickAccess::RecentFiles, AddOptions::new())
-            .is_ok()
-        {
+        if manager.add_item(&path).is_ok() {
             added.push(path);
         }
     }
@@ -520,9 +517,7 @@ fn status_query() {
         let recent_target = root.join("status-recent-target.txt");
         fs::write(&recent_target, b"wincent status query\n").expect("write recent target");
 
-        manager
-            .add_item(&recent_target, QuickAccess::RecentFiles, AddOptions::new())
-            .expect("add recent target");
+        manager.add_item(&recent_target).expect("add recent target");
         let add_started = Instant::now();
         let recent_became_visible = wait_until(MUTATION_TIMEOUT, || {
             manager

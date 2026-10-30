@@ -640,7 +640,7 @@ mod tests {
     use super::*;
     use crate::manager::QuickAccessManager;
     use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
-    use crate::{AddOptions, QuickAccess, RemoveOptions};
+    use crate::{QuickAccess, RemoveOptions};
     use std::env;
     use std::io::{self, Write};
     use std::process::Command;
@@ -1756,16 +1756,22 @@ mod tests {
     }
 
     fn delete_dest_file_for_exploration(dest_path: &Path) -> WincentResult<()> {
-        match fs::remove_file(dest_path) {
-            Ok(()) => {
-                println!("deleted DestList {}", dest_path.display());
-                Ok(())
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match fs::remove_file(dest_path) {
+                Ok(()) => {
+                    println!("deleted DestList {}", dest_path.display());
+                    return Ok(());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    println!("DestList was already absent: {}", dest_path.display());
+                    return Ok(());
+                }
+                Err(error) if error.raw_os_error() == Some(32) && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => return Err(WincentError::Io(error)),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                println!("DestList was already absent: {}", dest_path.display());
-                Ok(())
-            }
-            Err(error) => Err(WincentError::Io(error)),
         }
     }
 
@@ -1878,7 +1884,7 @@ mod tests {
             AutomaticDestinationsKind::FrequentFolders => QuickAccess::FrequentFolders,
         };
         let manager = QuickAccessManager::new();
-        manager.add_item(seed_path, qa_type, AddOptions::new())?;
+        manager.add_item(seed_path)?;
 
         let seed_path_string = seed_path.to_string_lossy().into_owned();
         let rebuild_result = wait_for_rebuilt_dest(

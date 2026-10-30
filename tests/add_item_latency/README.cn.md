@@ -24,9 +24,8 @@ guest VM 内完成；host 只负责编排、文件传输、截图和证据回收
 
 - **Recent Files**：路径校验 → Shell 重复预检 → 在 STA 线程调用
   `SHAddToRecentDocs(SHARD_PATHW, path)`。
-- **Frequent Folders**：路径校验 → Shell 可见性预检 → Shell pin verb（带 manager
-  的重试策略）。
-- **计时区间**：一次 `manager.add_item(path, kind, options)` 调用，从调用前到返回
+- **Frequent Folders**：路径校验 → Shell 可见性预检 → 原生 Shell pin 操作。
+- **计时区间**：一次 `manager.add_item(path)` 调用，从调用前到返回
   `Ok`/`Err`。不包含进程启动、测试框架、目标创建、最终 raw 校验和 CFB 恢复。
 - **样本**：每个系列 2 次预热（同代码路径，不计入统计）+ 20 次计时调用。每次调用都使用
   全新目标（Recent 为 `.txt` 文件，Frequent 为新目录），避免重复检测提前短路。
@@ -81,11 +80,6 @@ host 脚本的解析顺序：
 pwsh -File tests/add_item_latency/run_add_item_latency_vm.ps1 `
     -EvidenceDir temp/track_wincent/evidence/my-add-latency-run `
     -Series 'recent,frequent' -Iters 20 -Warmup 2
-
-# 可选：AddOptions::new().refresh_explorer()
-pwsh -File tests/add_item_latency/run_add_item_latency_vm.ps1 `
-    -EvidenceDir temp/track_wincent/evidence/my-add-latency-refresh `
-    -Series 'recent-refresh,frequent-refresh' -Iters 20 -Warmup 2
 ```
 
 脚本内部构建命令：
@@ -117,7 +111,7 @@ add_item_shell_latency --ignored --exact --nocapture
 | v2 | 601.716 | 442.261 |
 | v4-repeat | 577.163 | 443.371 |
 
-补充的 `refresh_explorer()` 运行（每系列 20 样本，独立批次）：Recent **584.025 ms**、
+补充的旧版显式刷新运行（每系列 20 样本，独立批次）：Recent **584.025 ms**、
 Frequent **643.158 ms**。Frequent 的约 200 ms 增量只作为方向性参考，因为 Explorer
 窗口/负载状态没有与默认轮严格配对。
 
@@ -149,6 +143,5 @@ host 只有在 `restored = true`、无 failure marker、且 guest 报告的 exe 
 - 没有 ETW/Procmon 分解，不能把耗时归因到某个 Shell 内部阶段。
 - 每轮 20 个样本足以做初步 mean/median/p95；p95 接近最大值（n=20 时为第二高样本）。
   尾延迟分析应增加样本量。
-- refresh 变体是独立批次，与默认配置的对比只具有方向性，不是严格控制变量实验。
 - 预热不是可选优化。布局验证时曾用 0 次预热，第一次冷启动 Frequent pin 触发了 30 s 的 COM
   超时。至少保留 1–2 次预热；正式运行使用 2 次。

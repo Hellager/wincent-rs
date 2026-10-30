@@ -19,7 +19,7 @@
 //!
 //! ### System Integration
 //! - Windows API integration for reliable operations
-//! - PowerShell fallbacks for selected Shell mutations and Explorer refreshes
+//! - PowerShell compatibility paths for selected removals and Explorer refreshes
 //! - Cross-version Windows support
 //!
 //! ## Quick Start
@@ -32,13 +32,7 @@
 //!     let manager = QuickAccessManager::new();
 //!     
 //!     // Add a file to Recent Files
-//!     manager.add_item(
-//!         "C:\\path\\to\\file.txt",
-//!         QuickAccess::RecentFiles,
-//!         AddOptions::new()
-//!             .force_recent_files_rebuild()
-//!             .refresh_explorer(),
-//!     )?;
+//!     manager.add_item("C:\\path\\to\\file.txt")?;
 //!     
 //!     // Query all Quick Access items as PathBuf values
 //!     let items = manager.get_item_paths(QuickAccess::All)?;
@@ -64,7 +58,7 @@
 //!
 //! ## Best Practices
 //!
-//! - Use [`AddOptions::force_recent_files_rebuild`] when adding recent files for immediate visibility
+//! - Explorer refreshes successful add operations asynchronously
 //!
 
 mod backend;
@@ -102,7 +96,7 @@ pub mod prelude {
         WincentError,
     };
     pub use crate::manager::{
-        AddOptions, QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
+        QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
         RemoveTimingReport,
     };
     pub use crate::monitor::{
@@ -151,7 +145,7 @@ use crate::error::WincentError;
 pub use crate::batch::{BatchOptions, BatchResult};
 pub use crate::destlist::{DestListItemUpdate, DestListPosition};
 pub use crate::error::QuickAccessPostMutationStep;
-pub use crate::manager::{AddOptions, QuickAccessItem, RemoveOptions, RemoveTimingReport};
+pub use crate::manager::{QuickAccessItem, RemoveOptions, RemoveTimingReport};
 pub use crate::monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions};
 pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,

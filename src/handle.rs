@@ -3,13 +3,13 @@
 //! Provides system-level manipulation of Quick Access locations including:
 //! - Recent files management
 //! - Frequent folders pinning
-//! - Cross-API operation support (PowerShell + Win32 API)
+//! - Native add operations and compatibility removal fallbacks
 //!
 //! # Key Functionality
 //! - File addition/removal from Recent Items
 //! - Folder pinning/unpinning operations
 //! - Path validation and sanitization
-//! - Multi-strategy execution (PowerShell/Win32 API)
+//! - Native SHAddToRecentDocs and Shell COM additions
 //!
 //! # Operation Safety
 //! 1. Dedicated STA threading for Shell COM operations
@@ -222,7 +222,7 @@ where
 ///
 /// # See Also
 ///
-/// - [`pin_frequent_folder()`] - Higher-level internal wrapper with PowerShell fallback
+/// - [`pin_frequent_folder()`] - Validating native wrapper used by public add APIs
 /// - [`invoke_verb_on_self_current_sta()`] - The underlying verb invocation mechanism
 fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     // Check and invoke in one STA worker to narrow the TOCTOU window.
@@ -549,7 +549,8 @@ fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Win
 ///
 /// # Arguments
 ///
-/// * `script` - The PowerShell script type to execute (e.g., `PSScript::PinToFrequentFolder`)
+/// * `script` - The PowerShell script type to execute for supported removal or
+///   compatibility operations
 /// * `path` - The file or folder path to pass to the script
 /// * `path_type` - The expected path type (`PathType::File` or `PathType::Directory`)
 ///
@@ -665,17 +666,26 @@ fn add_file_to_recent_native_current_sta(path: &str) -> WincentResult<()> {
     Ok(())
 }
 
-/// Adds a file to the Windows Recent Items list via a dedicated STA thread.
+/// Adds a file to the Windows Recent Items list with `SHAddToRecentDocs`.
 ///
-/// `timeout` limits how long the caller waits; the underlying Shell operation
-/// may still complete after the timeout elapses.
+/// The library requires `path` to exist and be a file before calling
+/// `SHAddToRecentDocs(SHARD_PATHW, path)`. The Windows function itself is more
+/// permissive: experiments accepted missing absolute file-like paths, ignored
+/// existing directories for DestList purposes, and returned no status because
+/// the API has a `void` return type. Keeping validation here gives the public
+/// API deterministic file-only semantics.
 ///
 /// # Windows Behavior Notes
 ///
-/// - **Deduplication**: Windows may ignore repeated additions of the same file
-///   within a short time window.
-/// - **Asynchronous Processing**: The file may not appear immediately in the
-///   Recent Items list. Windows Shell processes these updates asynchronously.
+/// - A normal add creates or updates the Recent entry and can also add one
+///   usage point for the parent folder in Frequent Folders.
+/// - Zero-byte, extensionless, read-only, and hidden files are accepted. A file
+///   hidden when added is persisted but can be filtered from the UI according
+///   to Explorer's hidden-item setting.
+/// - Re-adding a path can update its existing entry instead of creating a
+///   duplicate. Shell persistence is session-sensitive and asynchronous.
+/// - `timeout` limits only how long the caller waits. The Shell operation can
+///   still complete after the timeout is reported.
 pub(crate) fn add_file_to_recent_native(path: &str, timeout: Duration) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
     let path = path.to_owned();
@@ -884,84 +894,6 @@ fn map_remove_recent_file_powershell_error(path: &str, error: WincentError) -> W
     }
 }
 
-/// Pins a folder to the Windows Quick Access Frequent Folders list using PowerShell
-///
-/// This is the PowerShell fallback implementation for pinning folders.
-/// It's used when the native COM approach fails (e.g., permission issues,
-/// COM initialization failures, Windows 11 deadlock without message pump).
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be pinned
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the PowerShell script executed successfully.
-///
-/// # Errors
-///
-/// - `InvalidPath`: Path validation failed (not a directory, doesn't exist)
-/// - `PowerShellExecution`: Script execution failed
-///
-/// # Performance
-///
-/// - Typical execution time: 200-500ms (significantly slower than native COM)
-/// - Includes PowerShell startup overhead (~100-200ms)
-///
-/// # See Also
-///
-/// - [`pin_frequent_folder_native()`] - Native COM implementation (fast path)
-/// - [`pin_frequent_folder()`] - Internal wrapper with fallback strategy
-#[allow(dead_code)]
-fn pin_frequent_folder_powershell(path: &str) -> WincentResult<()> {
-    pin_frequent_folder_powershell_with_timeout(path, DEFAULT_COM_TIMEOUT)
-}
-
-fn pin_frequent_folder_powershell_with_timeout(path: &str, timeout: Duration) -> WincentResult<()> {
-    match execute_pin_frequent_folder_script_with_timeout(
-        path,
-        timeout,
-        |script, parameter, timeout| {
-            ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
-        },
-    ) {
-        Ok(()) => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-fn execute_pin_frequent_folder_script_with_timeout<F>(
-    path: &str,
-    timeout: Duration,
-    mut execute: F,
-) -> WincentResult<()>
-where
-    F: FnMut(PSScript, Option<&str>, Duration) -> WincentResult<std::process::Output>,
-{
-    execute_script_with_validation_and_timeout(
-        PSScript::PinToFrequentFolder,
-        path,
-        PathType::Directory,
-        |script, parameter| execute(script, parameter, timeout),
-    )
-}
-
-fn pin_frequent_folder_with_fallback<N, P>(mut native: N, mut powershell: P) -> WincentResult<()>
-where
-    N: FnMut() -> WincentResult<()>,
-    P: FnMut() -> WincentResult<()>,
-{
-    match native() {
-        Ok(()) => Ok(()),
-        Err(e @ WincentError::AlreadyExists { .. }) => Err(e),
-        // A timed-out STA worker keeps running and may still complete the
-        // `pintohome` call later. That verb can behave like a toggle, so
-        // running the fallback could undo a successful late pin.
-        Err(e @ WincentError::Timeout(_)) => Err(e),
-        Err(_) => powershell(),
-    }
-}
-
 /// Unpins a folder from the Windows Quick Access Frequent Folders list using PowerShell
 ///
 /// This is the PowerShell fallback implementation for unpinning folders.
@@ -1034,64 +966,34 @@ fn map_unpin_frequent_folder_powershell_error(path: &str, error: WincentError) -
     }
 }
 
-/// Pins a folder to the Windows Quick Access Frequent Folders list
+/// Pins a folder to the Windows Quick Access Frequent Folders list with COM.
 ///
-/// This is the internal implementation that uses a **two-tier fallback strategy**:
+/// The folder must exist and be a directory. The implementation performs its
+/// pinned-state check and invokes the canonical `pintohome` verb through native
+/// Shell COM on one dedicated STA thread. There is no PowerShell fallback.
 ///
-/// 1. **Native COM API** (fast path, 10-50ms): Uses [`pin_frequent_folder_native()`]
-///    - Uses "pintohome" Shell verb on the folder
-///    - Runs on dedicated STA thread to avoid Windows 11 deadlock
+/// Observed Windows 10 22H2 behavior:
 ///
-/// 2. **PowerShell fallback** (slow path, 200-500ms): Uses [`pin_frequent_folder_powershell()`]
-///    - Executes PowerShell script if native COM fails
-///    - Provides broader compatibility at the cost of performance
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be pinned. Must be an existing directory.
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was successfully pinned (by either strategy).
+/// - The result is a pinned Frequent Folder, not an unpinned usage entry.
+/// - The new item is appended after all existing pinned items and therefore
+///   appears before displayed unpinned items.
+/// - A newly pinned item starts with zero usage count and score.
+/// - `pintohome` can act like a toggle, so the same STA flow rejects an already
+///   pinned path before invoking the verb.
 ///
 /// # Errors
 ///
 /// - `InvalidPath`: Path validation failed (not a directory, doesn't exist)
-/// - `SystemError` or `PowerShellExecution`: Both strategies failed
-///
-/// # Performance
-///
-/// - Native COM: ~10-50ms (typical case)
-/// - PowerShell fallback: ~200-500ms (when COM fails)
+/// - `AlreadyExists`: The folder is already pinned
+/// - `SystemError` or `Timeout`: Native COM failed or the caller stopped waiting
 ///
 /// # See Also
 ///
 /// - [`crate::manager::QuickAccessManager::add_item`] - Public mutation API
 /// - [`pin_frequent_folder_native()`] - Native COM implementation
-/// - [`pin_frequent_folder_powershell()`] - PowerShell fallback
 pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     validate_path(path, PathType::Directory)?;
-
-    // Try native COM first (fast path), fallback to PowerShell only for
-    // system/COM failures. AlreadyExists is an authoritative duplicate result
-    // from the native check+pin path and must not be retried via PowerShell.
-    pin_frequent_folder_with_fallback(
-        || pin_frequent_folder_native(path, timeout),
-        || {
-            // DestList is the source of truth for pin state. PowerShell is
-            // only a mutation fallback when native COM cannot run.
-            if matches!(
-                crate::destlist::frequent_folder_pin_status(path)?,
-                FrequentFolderPinStatus::Pinned
-            ) {
-                return Err(WincentError::already_exists(
-                    path,
-                    QuickAccess::FrequentFolders,
-                ));
-            }
-            pin_frequent_folder_powershell_with_timeout(path, timeout)
-        },
-    )
+    pin_frequent_folder_native(path, timeout)
 }
 
 /// Removes a folder from the Windows Quick Access Frequent Folders list
@@ -1204,8 +1106,8 @@ pub(crate) fn remove_from_recent_files_with_timeout(
 /// Pins a folder to Windows Quick Access with a custom COM STA thread timeout.
 ///
 /// Internal timeout-aware variant used by [`crate::manager::QuickAccessManager::add_item`].
-/// It uses native COM with a PowerShell fallback and rejects zero timeouts before
-/// attempting any mutation.
+/// It uses only native COM and rejects zero timeouts before attempting any
+/// mutation.
 ///
 /// # Arguments
 ///
@@ -1664,71 +1566,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_fallback_preserves_already_exists_without_powershell() {
-        let fallback_called = std::rc::Rc::new(std::cell::RefCell::new(false));
-        let fallback_called_for_closure = std::rc::Rc::clone(&fallback_called);
-
-        let result = pin_frequent_folder_with_fallback(
-            || {
-                Err(WincentError::already_exists(
-                    "C:\\Folder",
-                    QuickAccess::FrequentFolders,
-                ))
-            },
-            move || {
-                *fallback_called_for_closure.borrow_mut() = true;
-                Ok(())
-            },
-        );
-
-        assert!(matches!(result, Err(WincentError::AlreadyExists { .. })));
-        assert!(
-            !*fallback_called.borrow(),
-            "PowerShell fallback must not run for AlreadyExists"
-        );
-    }
-
-    #[test]
-    fn test_pin_fallback_runs_powershell_for_system_error() -> WincentResult<()> {
-        let fallback_called = std::rc::Rc::new(std::cell::RefCell::new(false));
-        let fallback_called_for_closure = std::rc::Rc::clone(&fallback_called);
-
-        pin_frequent_folder_with_fallback(
-            || Err(WincentError::SystemError("native failed".to_string())),
-            move || {
-                *fallback_called_for_closure.borrow_mut() = true;
-                Ok(())
-            },
-        )?;
-
-        assert!(*fallback_called.borrow());
-        Ok(())
-    }
-
-    #[test]
-    fn test_pin_fallback_preserves_timeout_without_powershell() {
-        let fallback_called = std::rc::Rc::new(std::cell::RefCell::new(false));
-        let fallback_called_for_closure = std::rc::Rc::clone(&fallback_called);
-
-        let result = pin_frequent_folder_with_fallback(
-            || Err(WincentError::Timeout("native timed out".to_string())),
-            move || {
-                *fallback_called_for_closure.borrow_mut() = true;
-                Ok(())
-            },
-        );
-
-        assert!(matches!(
-            result,
-            Err(WincentError::Timeout(ref message)) if message == "native timed out"
-        ));
-        assert!(
-            !*fallback_called.borrow(),
-            "PowerShell fallback must not run after native timeout"
-        );
-    }
-
-    #[test]
     fn test_unpin_state_machine_unknown_uses_unpinfromhome_then_pintohome() -> WincentResult<()> {
         let present = std::rc::Rc::new(std::cell::RefCell::new(true));
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
@@ -2100,39 +1937,6 @@ mod tests {
             move |script, parameter, timeout| {
                 assert_eq!(script, PSScript::RemoveRecentFile);
                 assert_eq!(parameter, Some(expected_file.as_str()));
-                *observed_timeout_for_closure.borrow_mut() = Some(timeout);
-                Ok(Output {
-                    status: std::process::ExitStatus::from_raw(0),
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                })
-            },
-        )?;
-
-        assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
-        Ok(())
-    }
-
-    #[test]
-    fn pin_frequent_folder_script_uses_caller_timeout() -> WincentResult<()> {
-        use std::os::windows::process::ExitStatusExt;
-        use std::process::Output;
-
-        let temp_dir = tempfile::tempdir().map_err(|e| WincentError::SystemError(e.to_string()))?;
-        let folder = temp_dir.path().join("timeout-pin");
-        std::fs::create_dir(&folder).map_err(WincentError::Io)?;
-        let folder = folder.to_string_lossy().into_owned();
-        let expected_folder = folder.clone();
-        let expected_timeout = Duration::from_millis(1234);
-        let observed_timeout = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let observed_timeout_for_closure = std::rc::Rc::clone(&observed_timeout);
-
-        execute_pin_frequent_folder_script_with_timeout(
-            &folder,
-            expected_timeout,
-            move |script, parameter, timeout| {
-                assert_eq!(script, PSScript::PinToFrequentFolder);
-                assert_eq!(parameter, Some(expected_folder.as_str()));
                 *observed_timeout_for_closure.borrow_mut() = Some(timeout);
                 Ok(Output {
                     status: std::process::ExitStatus::from_raw(0),

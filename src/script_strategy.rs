@@ -19,8 +19,6 @@ pub(crate) enum PSScript {
     RefreshExplorer,
     /// Remove a file from Recent Files.
     RemoveRecentFile,
-    /// Pin a folder to Frequent Folders.
-    PinToFrequentFolder,
     /// Unpin a folder from Frequent Folders.
     UnpinFromFrequentFolder,
     /// Unpin every folder currently pinned to Frequent Folders.
@@ -36,7 +34,6 @@ impl PSScript {
         match self {
             PSScript::RefreshExplorer => PowerShellOperation::RefreshExplorer,
             PSScript::RemoveRecentFile => PowerShellOperation::RemoveRecentFile,
-            PSScript::PinToFrequentFolder => PowerShellOperation::PinFrequentFolder,
             PSScript::UnpinFromFrequentFolder => PowerShellOperation::UnpinFrequentFolder,
             PSScript::EmptyPinnedFolders => PowerShellOperation::EmptyPinnedFolders,
             PSScript::CheckQueryFeasible => PowerShellOperation::CheckQueryFeasible,
@@ -119,45 +116,6 @@ impl ScriptStrategy for RemoveRecentFileStrategy {
             BaseScriptStrategy::shell_com_object(),
             path,
             ShellNamespaces::QUICK_ACCESS
-        ))
-    }
-}
-
-/// Strategy for pinning to frequent folders
-pub(crate) struct PinToFrequentFolderStrategy;
-
-impl ScriptStrategy for PinToFrequentFolderStrategy {
-    fn generate(&self, parameter: Option<&str>) -> WincentResult<String> {
-        let path = escape_ps_single_quoted(parameter.ok_or(WincentError::MissingParameter)?);
-        Ok(format!(
-            r#"
-    {header}
-    {shell}
-
-    function Normalize-WincentPath($p) {{
-        if ($null -eq $p) {{
-            return ''
-        }}
-        $n = $p.ToLower().Replace('/', '\')
-        if ($n.Length -gt 3 -and $n.EndsWith('\')) {{
-            $n = $n.TrimEnd('\')
-        }}
-        return $n
-    }}
-
-    $requestedPath = '{path}';
-    $folders = $shell.Namespace('{frequent_folders}').Items() | where {{$_.IsFolder -eq $true}};
-    $target = $folders | Where-Object {{ (Normalize-WincentPath $_.Path) -eq (Normalize-WincentPath $requestedPath) }} | Select-Object -First 1;
-    if ($null -ne $target) {{
-        Write-Output 'WINCENT_ALREADY_EXISTS';
-        exit 1;
-    }}
-    $shell.Namespace($requestedPath).Self.InvokeVerb('pintohome');
-"#,
-            header = BaseScriptStrategy::utf8_header(),
-            shell = BaseScriptStrategy::shell_com_object(),
-            path = path,
-            frequent_folders = ShellNamespaces::FREQUENT_FOLDERS,
         ))
     }
 }
@@ -381,7 +339,6 @@ impl ScriptStrategyFactory {
         Ok(match script_type {
             PSScript::RefreshExplorer => Box::new(RefreshExplorerStrategy),
             PSScript::RemoveRecentFile => Box::new(RemoveRecentFileStrategy),
-            PSScript::PinToFrequentFolder => Box::new(PinToFrequentFolderStrategy),
             PSScript::UnpinFromFrequentFolder => Box::new(UnpinFromFrequentFolderStrategy),
             PSScript::CheckQueryFeasible => Box::new(CheckQueryFeasibleStrategy),
             PSScript::CheckPinUnpinFeasible => Box::new(CheckPinUnpinFeasibleStrategy),
@@ -402,21 +359,6 @@ impl ScriptStrategyFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_pin_frequent_folder_script_generation() {
-        let path = "C:\\Users\\User\\Documents";
-        let script =
-            ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
-                .unwrap();
-        assert!(script.contains("pintohome"));
-        assert!(script.contains(path));
-        assert!(script.contains(BaseScriptStrategy::shell_com_object()));
-        assert!(script.contains(ShellNamespaces::FREQUENT_FOLDERS));
-        assert!(script.contains("Normalize-WincentPath"));
-        assert!(script.contains("WINCENT_ALREADY_EXISTS"));
-        assert!(script.contains("$shell.Namespace($requestedPath).Self.InvokeVerb('pintohome')"));
-    }
 
     #[test]
     fn test_unpin_frequent_folder_script_generation() {
@@ -523,11 +465,6 @@ mod tests {
         assert!(rrf.contains("'remove'"));
         assert!(rrf.contains(ShellNamespaces::QUICK_ACCESS));
 
-        // PinToFrequentFolder: must invoke 'pintohome' on path namespace self
-        let pin = ScriptStrategyFactory::generate_script(PSScript::PinToFrequentFolder, Some(path))
-            .unwrap();
-        assert!(pin.contains("pintohome"));
-
         // UnpinFromFrequentFolder: must have both Win10 and Win11 branches
         let unpin =
             ScriptStrategyFactory::generate_script(PSScript::UnpinFromFrequentFolder, Some(path))
@@ -558,7 +495,6 @@ mod tests {
         // with None, not panic or produce empty output.
         let requires_param = [
             PSScript::RemoveRecentFile,
-            PSScript::PinToFrequentFolder,
             PSScript::UnpinFromFrequentFolder,
         ];
         for script_type in &requires_param {
@@ -600,7 +536,6 @@ mod tests {
         let path = "C:\\Users\\User\\Documents";
         let param_variants = [
             PSScript::RemoveRecentFile,
-            PSScript::PinToFrequentFolder,
             PSScript::UnpinFromFrequentFolder,
         ];
         for variant in &param_variants {
@@ -624,10 +559,6 @@ mod tests {
         let cases = [
             (
                 PSScript::RemoveRecentFile,
-                format!("$requestedPath = '{}'", escaped_path),
-            ),
-            (
-                PSScript::PinToFrequentFolder,
                 format!("$requestedPath = '{}'", escaped_path),
             ),
             (

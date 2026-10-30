@@ -178,10 +178,36 @@ pub fn get_windows_version() -> WincentResult<WindowsVersion> {
     })
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum PathType {
     File,
     Directory,
+}
+
+/// Identifies an existing path as a regular file or directory.
+pub(crate) fn detect_path_type(path: &str) -> WincentResult<PathType> {
+    let path_buf = Path::new(path);
+    if path.is_empty() {
+        return Err(WincentError::invalid_path_reason("Empty path provided"));
+    }
+
+    let metadata = std::fs::metadata(path_buf).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            WincentError::invalid_path(path, "Path does not exist")
+        } else {
+            WincentError::Io(error)
+        }
+    })?;
+    if metadata.is_file() {
+        Ok(PathType::File)
+    } else if metadata.is_dir() {
+        Ok(PathType::Directory)
+    } else {
+        Err(WincentError::invalid_path(
+            path,
+            "Path is neither a file nor a directory",
+        ))
+    }
 }
 
 /// Refreshes the Windows Explorer windows.
@@ -270,6 +296,30 @@ pub fn get_windows_recent_folder() -> WincentResult<String> {
 #[cfg(test)]
 mod utils_test {
     use super::*;
+
+    #[test]
+    fn test_detect_path_type_for_file_and_directory() -> WincentResult<()> {
+        let directory = tempfile::tempdir().map_err(WincentError::Io)?;
+        let file = tempfile::NamedTempFile::new_in(directory.path()).map_err(WincentError::Io)?;
+        let directory_path = directory.path().to_string_lossy();
+        let file_path = file.path().to_string_lossy();
+
+        assert_eq!(detect_path_type(&directory_path)?, PathType::Directory);
+        assert_eq!(detect_path_type(&file_path)?, PathType::File);
+        Ok(())
+    }
+
+    #[test]
+    fn test_detect_path_type_rejects_empty_and_missing_paths() {
+        assert!(matches!(
+            detect_path_type(""),
+            Err(WincentError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            detect_path_type("Z:\\WincentMissing\\item.txt"),
+            Err(WincentError::InvalidPath(_))
+        ));
+    }
 
     #[test]
     #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer -- --ignored --nocapture"]

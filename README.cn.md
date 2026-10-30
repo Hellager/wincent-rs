@@ -45,16 +45,10 @@ fn main() -> WincentResult<()> {
 
     // --- 添加 ---
     // 添加文件到最近文件。若已存在则返回 Err(AlreadyExists)。
-    manager.add_item(
-        "C:\\Projects\\report.docx",
-        QuickAccess::RecentFiles,
-        AddOptions::new()
-            .force_recent_files_rebuild()
-            .refresh_explorer(),
-    )?;
+    manager.add_item("C:\\Projects\\report.docx")?;
 
     // 固定文件夹到常用文件夹。
-    manager.add_item("C:\\Projects", QuickAccess::FrequentFolders, AddOptions::new())?;
+    manager.add_item("C:\\Projects")?;
 
     // --- 查询 ---
     // 以 PathBuf 形式列出所有最近文件。

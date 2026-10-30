@@ -27,8 +27,8 @@ Only the shell/COM `add_item` path is measured.
 - **Recent Files**: path validation, Shell duplicate preflight, then
   `SHAddToRecentDocs(SHARD_PATHW, path)` on an STA thread.
 - **Frequent Folders**: path validation, Shell visibility preflight, then the
-  Shell pin verb (wrapped by the manager's retry policy).
-- **Timed interval**: one `manager.add_item(path, kind, options)` call, from
+  native Shell pin operation.
+- **Timed interval**: one `manager.add_item(path)` call, from
   immediately before the call until it returns `Ok`/`Err`. Process startup,
   test framework, target creation, final raw verification and CFB restore are
   excluded.
@@ -91,11 +91,6 @@ the script stops before touching the VM and asks you to create `.env`.
 pwsh -File tests/add_item_latency/run_add_item_latency_vm.ps1 `
     -EvidenceDir temp/track_wincent/evidence/my-add-latency-run `
     -Series 'recent,frequent' -Iters 20 -Warmup 2
-
-# Optional: AddOptions::new().refresh_explorer()
-pwsh -File tests/add_item_latency/run_add_item_latency_vm.ps1 `
-    -EvidenceDir temp/track_wincent/evidence/my-add-latency-refresh `
-    -Series 'recent-refresh,frequent-refresh' -Iters 20 -Warmup 2
 ```
 
 The script builds the test with:
@@ -125,7 +120,7 @@ Per-run means:
 | v2 | 601.716 | 442.261 |
 | v4-repeat | 577.163 | 443.371 |
 
-Supplementary `refresh_explorer()` run (20 samples each, different batch):
+Supplementary legacy explicit-refresh run (20 samples each, different batch):
 Recent **584.025 ms**, Frequent **643.158 ms**. The Frequent refresh delta
 (+~200 ms) is directional only because the Explorer window/load state was not
 paired with the default runs.
@@ -166,8 +161,6 @@ git-ignored.
 - 20 samples per run is enough for a preliminary mean/median/p95; p95 is close
   to the maximum sample (second-highest for n=20). Increase the sample count for
   tail-latency work.
-- The refresh variant was run as a separate batch, so its comparison with the
-  default configuration is directional rather than controlled.
 - Warm-up is not optional. In a layout smoke test with zero warm-ups, the first
   cold Frequent pin hit the 30 s COM timeout. Keep at least 1–2 warm-ups; the
   official runs used 2.

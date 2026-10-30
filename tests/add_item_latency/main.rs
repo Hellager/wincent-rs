@@ -21,10 +21,7 @@
 //! | `WINCENT_ADD_LATENCY_WARMUP` | Warm-up iterations per series (default 2). |
 //! | `WINCENT_ADD_LATENCY_SERIES` | Comma list, default `recent,frequent`. |
 //!
-//! Supported series identifiers are `recent`, `frequent`, `recent-refresh` and
-//! `frequent-refresh`. The `*-refresh` variants pass
-//! `AddOptions::new().refresh_explorer()`; the plain variants pass
-//! `AddOptions::new()`.
+//! Supported series identifiers are `recent` and `frequent`.
 
 #![cfg(windows)]
 
@@ -44,7 +41,6 @@ const ADD_TIMEOUT: Duration = Duration::from_secs(30);
 struct Series {
     id: &'static str,
     kind: QuickAccess,
-    refresh: bool,
 }
 
 impl Series {
@@ -59,22 +55,10 @@ impl Series {
                 "recent" => Self {
                     id: "recent",
                     kind: QuickAccess::RecentFiles,
-                    refresh: false,
                 },
                 "frequent" => Self {
                     id: "frequent",
                     kind: QuickAccess::FrequentFolders,
-                    refresh: false,
-                },
-                "recent-refresh" => Self {
-                    id: "recent-refresh",
-                    kind: QuickAccess::RecentFiles,
-                    refresh: true,
-                },
-                "frequent-refresh" => Self {
-                    id: "frequent-refresh",
-                    kind: QuickAccess::FrequentFolders,
-                    refresh: true,
                 },
                 other => return Err(format!("unknown add-latency series: {other}")),
             };
@@ -86,14 +70,6 @@ impl Series {
             return Err("add-latency series list is empty".to_string());
         }
         Ok(series)
-    }
-
-    fn options(self) -> AddOptions {
-        if self.refresh {
-            AddOptions::new().refresh_explorer()
-        } else {
-            AddOptions::new()
-        }
     }
 
     fn is_recent(self) -> bool {
@@ -221,7 +197,7 @@ fn add_item_shell_latency() {
     for current in &series {
         for index in 0..warmup {
             let target = make_target(&root, "warmup", current, index, nonce, iterations);
-            match manager.add_item(&target, current.kind, current.options()) {
+            match manager.add_item(&target) {
                 Ok(()) => {
                     warmup_added += 1;
                     added.push(AddedTarget {
@@ -245,7 +221,7 @@ fn add_item_shell_latency() {
             let current = series[(position + offset) % series.len()];
             let target = make_target(&root, "timed", &current, iteration, nonce, iterations);
             let started = Instant::now();
-            let result = manager.add_item(&target, current.kind, current.options());
+            let result = manager.add_item(&target);
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             match result {
                 Ok(()) => {
@@ -456,14 +432,13 @@ fn write_result_json(
         series
             .iter()
             .map(|item| format!(
-                "{{\"id\": {}, \"kind\": {}, \"refresh\": {}}}",
+                "{{\"id\": {}, \"kind\": {}}}",
                 json_escape(item.id),
                 json_escape(if item.is_recent() {
                     "recent"
                 } else {
                     "frequent"
-                }),
-                item.refresh
+                })
             ))
             .collect::<Vec<_>>()
             .join(", ")

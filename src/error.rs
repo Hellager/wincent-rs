@@ -51,7 +51,7 @@
 //!
 //! # fn example() -> WincentResult<()> {
 //! # let manager = QuickAccessManager::new();
-//! match manager.add_item("C:\\test", QuickAccess::FrequentFolders, AddOptions::new()) {
+//! match manager.remove_item("C:\\test.txt", QuickAccess::RecentFiles) {
 //!     Ok(_) => println!("Success"),
 //!     Err(WincentError::PowerShellExecution(err)) => {
 //!         let kind = err.classification_with(classify_chinese_error);
