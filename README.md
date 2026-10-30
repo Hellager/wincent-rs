@@ -10,7 +10,7 @@ Read this in other languages: [English](README.md) | [中文](README.cn.md)
 
 ## Overview
 
-Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Shell query behavior. Mutations use native Windows APIs where possible, with targeted PowerShell fallbacks for compatible Shell operations and Explorer refreshes.
+Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Explorer behavior. Mutations use native Windows APIs where possible, with targeted PowerShell fallbacks for compatible Shell operations and Explorer refreshes.
 
 ## Features
 
@@ -117,8 +117,8 @@ fn main() -> WincentResult<()> {
 
 - **OS**: Windows 10 or Windows 11.
 - **Rust**: 1.85.0 or later.
-- **Query semantics**: Query APIs return the rule-based result calculated from persisted DestList data. The recovered rules match observed Shell query filtering, ordering, deduplication, and result limits without invoking a live Shell query.
-- **UI consistency**: An already-open Explorer view may temporarily differ from the persisted rule-based result while its UI cache refreshes. Explorer may also rebuild state asynchronously across Windows versions.
+- **Query semantics**: Query APIs return the Explorer UI-visible result calculated from persisted DestList data. The recovered rules cover ordering, metadata filtering, deduplication, hidden-item Folder Options, and result limits without invoking a live Shell query.
+- **UI consistency**: An already-open Explorer view may temporarily differ from the persisted UI-visible result while its UI cache refreshes. Explorer may also rebuild state asynchronously across Windows versions.
 - **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
 - **Frequent Folders removal**: `remove_item(..., QuickAccess::FrequentFolders)` handles both pinned and unpinned frequent entries. Explorer Shell verbs can add or remove state depending on current status, so wincent verifies after each mutation instead of trusting verb names or return values.
 - **Empty behavior**: `empty_items(...)` always refreshes Explorer after a successful clear. Clearing Frequent Folders removes user-created entries, including user pins; Windows may rebuild its system-default pins.

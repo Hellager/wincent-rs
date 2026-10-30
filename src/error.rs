@@ -189,7 +189,7 @@ type PowerShellClassifier = dyn Fn(&str) -> Option<PowerShellErrorKind>;
 ///
 /// The `Query*` variants are retained for compatibility. wincent no longer
 /// runs PowerShell for queries: `get_items` reads DestList data directly and
-/// applies the recovered Shell visibility rules.
+/// applies the recovered Quick Access UI visibility rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PowerShellOperation {

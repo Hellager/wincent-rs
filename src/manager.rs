@@ -468,13 +468,14 @@ impl QuickAccessManager {
     /// Retrieves Quick Access items as strings.
     ///
     /// This reads Explorer's on-disk DestList directly and applies the
-    /// `CAutoList` visibility rules recovered from observed Shell query
-    /// behavior. Queries do not invoke Shell COM or PowerShell.
+    /// `CAutoList` rules plus Explorer's Folder Options hidden-item setting.
+    /// Queries do not invoke Shell COM or PowerShell.
     ///
-    /// The returned values are the rule-based result from persisted backing
-    /// data. An already-open Explorer view may temporarily show different
-    /// content while its UI cache refreshes. Returned paths may also point to
-    /// files or folders that no longer exist on disk.
+    /// The returned values match the UI-visible result from persisted backing
+    /// data. Hidden filtering uses the attributes serialized when each item
+    /// was added, not the target's current filesystem attributes. An already-
+    /// open Explorer view may temporarily differ while its UI cache refreshes.
+    /// Returned paths may also point to items that no longer exist on disk.
     ///
     /// # Errors
     ///
@@ -499,7 +500,7 @@ impl QuickAccessManager {
 
     /// Retrieves Quick Access items as path buffers.
     ///
-    /// The returned paths are the rule-based DestList results converted into
+    /// The returned paths are the UI-visible DestList results converted into
     /// [`PathBuf`]. They may point to files or folders that no longer exist.
     ///
     /// # Errors
@@ -1852,7 +1853,7 @@ impl QuickAccessManager {
     /// Parses the recent-files `.automaticDestinations-ms` file and returns all entries.
     ///
     /// This is the raw parsed DestList, including entries Explorer may filter
-    /// out. Use [`QuickAccessManager::get_items`] for the live Shell query.
+    /// out. Use [`QuickAccessManager::get_items`] for the UI-visible result.
     ///
     /// # Errors
     ///

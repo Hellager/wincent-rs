@@ -32,6 +32,9 @@ pub const DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS: i32 = 4;
 /// returned by Explorer on Windows 10 1809 and 22H2.
 pub const FREQUENT_FOLDERS_MIN_ACCESS_COUNT: u32 = 3;
 
+const SHELL_LINK_FILE_ATTRIBUTES_OFFSET: usize = 0x18;
+const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+
 /// Configuration for the custom CAutoList-style v4 rule evaluation.
 ///
 /// The crate ships one default configuration per list kind; use
@@ -202,6 +205,22 @@ impl AutomaticDestinations {
         self.entries_for_rule_set(&DestListRuleSet::for_kind(self.kind))
     }
 
+    /// Applies the Quick Access UI hidden-item rule to the custom rule result.
+    ///
+    /// Explorer uses the file attributes serialized in each numeric Shell Link
+    /// stream when the item was added. It does not re-read the target's current
+    /// filesystem attributes for this decision. Therefore an item hidden after
+    /// it was added remains visible, while an item already hidden when added is
+    /// omitted unless Folder Options is configured to show hidden items.
+    #[must_use]
+    pub(crate) fn ui_entries(&self, show_hidden_items: bool) -> Vec<DestListEntry> {
+        let mut entries = self.rule_entries();
+        if !show_hidden_items {
+            entries.retain(|entry| !self.shell_link_target_is_hidden(entry));
+        }
+        entries
+    }
+
     /// Applies a caller-supplied [`DestListRuleSet`] without a result limit.
     ///
     /// Most callers should prefer [`Self::rule_entries`], which applies the
@@ -254,6 +273,13 @@ impl AutomaticDestinations {
         self.cfb_info
             .stream(entry.stream_name())
             .is_some_and(|stream| looks_like_lnk_stream(stream.data()))
+    }
+
+    fn shell_link_target_is_hidden(&self, entry: &DestListEntry) -> bool {
+        self.cfb_info
+            .stream(entry.stream_name())
+            .and_then(|stream| shell_link_file_attributes(stream.data()))
+            .is_some_and(|attributes| attributes & FILE_ATTRIBUTE_HIDDEN != 0)
     }
 }
 
@@ -1814,6 +1840,13 @@ fn looks_like_lnk_stream(data: &[u8]) -> bool {
             ])
 }
 
+fn shell_link_file_attributes(data: &[u8]) -> Option<u32> {
+    if !looks_like_lnk_stream(data) {
+        return None;
+    }
+    read_u32(data, SHELL_LINK_FILE_ATTRIBUTES_OFFSET).ok()
+}
+
 fn parse_link_info(data: &[u8], link_info_start: usize) -> Option<LinkInfoSummary> {
     let link_info_size = read_u32(data, link_info_start).ok()? as usize;
     let link_info_header_size = read_u32(data, link_info_start + 4).ok()? as usize;
@@ -2409,6 +2442,50 @@ mod tests {
         let rules = parsed.rule_entries();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].path(), "C:\\Valid.txt");
+    }
+
+    #[test]
+    fn ui_entries_use_serialized_hidden_attribute() {
+        let entries = vec![
+            destlist_entry_for_test("C:\\AddedThenHidden.txt", 1, 1, 0, 1, None),
+            destlist_entry_for_test("C:\\HiddenBeforeAdd.txt", 2, 2, 0, 1, None),
+        ];
+        let mut parsed = automatic_destinations_for_test(
+            DestListKind::RecentFiles,
+            entries,
+            &["1".to_string(), "2".to_string()],
+        );
+        let hidden_stream = parsed
+            .cfb_info
+            .streams
+            .iter_mut()
+            .find(|stream| stream.name == "2")
+            .expect("test stream");
+        hidden_stream.data[0x18..0x1c].copy_from_slice(&0x22u32.to_le_bytes());
+
+        let hidden_disabled = parsed.ui_entries(false);
+        let hidden_enabled = parsed.ui_entries(true);
+
+        assert_eq!(hidden_disabled.len(), 1);
+        assert_eq!(hidden_disabled[0].path(), "C:\\AddedThenHidden.txt");
+        assert_eq!(hidden_enabled.len(), 2);
+    }
+
+    #[test]
+    fn shell_link_hidden_attribute_requires_valid_header() {
+        let mut data = vec![0u8; 0x4c];
+        data[0x18..0x1c].copy_from_slice(&FILE_ATTRIBUTE_HIDDEN.to_le_bytes());
+        assert_eq!(shell_link_file_attributes(&data), None);
+
+        data[0..4].copy_from_slice(&0x4cu32.to_le_bytes());
+        data[4..20].copy_from_slice(&[
+            0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x46,
+        ]);
+        assert_eq!(
+            shell_link_file_attributes(&data),
+            Some(FILE_ATTRIBUTE_HIDDEN)
+        );
     }
 
     #[test]

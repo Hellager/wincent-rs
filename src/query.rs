@@ -313,7 +313,7 @@ pub(crate) fn query_recent_native_with_timeout(
 ///
 /// This internal live-Shell query is retained for diagnostics and integration
 /// tests. Public [`crate::manager::QuickAccessManager::get_items`] queries use
-/// the rule-based DestList parser instead. The COM query runs on a dedicated
+/// the UI-aware DestList parser instead. The COM query runs on a dedicated
 /// STA worker thread with caller-side timeout control.
 ///
 /// `QuickAccess::All` is decomposed into a Recent Files query and a Frequent

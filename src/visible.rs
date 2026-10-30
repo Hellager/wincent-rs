@@ -42,6 +42,7 @@ const EXPLORER_ADVANCED_KEY: &str =
 const SHOW_FREQUENT_VALUE: &str = "ShowFrequent";
 const SHOW_RECENT_VALUE: &str = "ShowRecent";
 const START_TRACK_DOCS_VALUE: &str = "Start_TrackDocs";
+const HIDDEN_ITEMS_VALUE: &str = "Hidden";
 const VISIBLE_DWORD: u32 = 1;
 const HIDDEN_DWORD: u32 = 0;
 
@@ -61,7 +62,7 @@ fn create_quick_access_reg_key() -> WincentResult<RegKey> {
     Ok(key)
 }
 
-fn open_start_recommended_reg_key() -> WincentResult<Option<RegKey>> {
+fn open_explorer_advanced_reg_key() -> WincentResult<Option<RegKey>> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
 
     match hkcu.open_subkey(EXPLORER_ADVANCED_KEY) {
@@ -71,7 +72,7 @@ fn open_start_recommended_reg_key() -> WincentResult<Option<RegKey>> {
     }
 }
 
-fn create_start_recommended_reg_key() -> WincentResult<RegKey> {
+fn create_explorer_advanced_reg_key() -> WincentResult<RegKey> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(EXPLORER_ADVANCED_KEY)?;
     Ok(key)
@@ -108,6 +109,22 @@ fn read_start_recommended_visibility(reg_key: &RegKey) -> WincentResult<bool> {
     match reg_key.get_value::<u32, _>(START_TRACK_DOCS_VALUE) {
         Ok(value) => Ok(read_start_recommended_visibility_value(Some(value))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn read_hidden_items_visibility_value(value: Option<u32>) -> bool {
+    value == Some(VISIBLE_DWORD)
+}
+
+pub(crate) fn explorer_shows_hidden_items() -> WincentResult<bool> {
+    let Some(reg_key) = open_explorer_advanced_reg_key()? else {
+        return Ok(false);
+    };
+
+    match reg_key.get_value::<u32, _>(HIDDEN_ITEMS_VALUE) {
+        Ok(value) => Ok(read_hidden_items_visibility_value(Some(value))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.into()),
     }
 }
@@ -247,7 +264,7 @@ pub fn set_frequent_folders_visible(visible: bool) -> WincentResult<()> {
 /// Returns registry I/O errors if the current-user Explorer Advanced key cannot
 /// be read.
 pub fn is_start_recommended_section_visible() -> WincentResult<bool> {
-    let Some(reg_key) = open_start_recommended_reg_key()? else {
+    let Some(reg_key) = open_explorer_advanced_reg_key()? else {
         return Ok(true);
     };
 
@@ -275,7 +292,7 @@ pub fn is_start_recommended_section_visible() -> WincentResult<bool> {
 /// Returns registry I/O errors if the current-user Explorer Advanced key cannot
 /// be created or updated.
 pub fn set_start_recommended_section_visible(visible: bool) -> WincentResult<()> {
-    let reg_key = create_start_recommended_reg_key()?;
+    let reg_key = create_explorer_advanced_reg_key()?;
     write_start_recommended_visibility(&reg_key, visible)
 }
 
@@ -537,6 +554,14 @@ mod tests {
     #[test]
     fn disabled_start_track_docs_value_is_hidden() {
         assert!(!read_start_recommended_visibility_value(Some(0)));
+    }
+
+    #[test]
+    fn explorer_hidden_items_value_matches_folder_options() {
+        assert!(read_hidden_items_visibility_value(Some(1)));
+        assert!(!read_hidden_items_visibility_value(Some(2)));
+        assert!(!read_hidden_items_visibility_value(Some(0)));
+        assert!(!read_hidden_items_visibility_value(None));
     }
 
     #[test]

@@ -52,7 +52,7 @@
 //!
 //! - Implements timeout mechanism to prevent deadlocks
 //! - Reads Quick Access directly from DestList data without Shell or PowerShell queries
-//! - Applies rule-based filtering recovered from observed Shell query behavior
+//! - Applies Quick Access UI filtering recovered from observed Explorer behavior
 //! - Handles system-specific edge cases
 //!
 //! ## Safety and Reliability
