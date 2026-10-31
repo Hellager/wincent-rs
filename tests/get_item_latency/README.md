@@ -17,38 +17,36 @@ runs, not a capacity-planning benchmark.
 | --- | --- |
 | `main.rs` | Rust integration test. Ignored by default and gated behind `WINCENT_GET_ITEM_LATENCY=1` so it cannot mutate a developer host by accident. |
 | `run_get_item_latency_vm.ps1` | Host orchestrator: builds the test, uploads it, starts the guest run, polls markers, captures screenshots, pulls evidence and validates the restore state. |
-| `vm_get_item_latency_start.ps1` | Guest launcher (session 0): cleans stale state and creates a temporary `/IT` scheduled task in the interactive Explorer session. |
+| `vm_get_item_latency_start.ps1` | Guest launcher: cleans stale state, prefers the interactive session, and retains a scheduled-task fallback. |
 | `vm_get_item_latency_guest.ps1` | Guest orchestrator (session 1): baseline backup, test execution, restore, markers, environment/final-state JSON, evidence zip. |
 | `.env.example` | Configuration template. Copy to `.env` and fill in the VM paths and guest account. |
 | `.env` | Local values, including the guest password. Git-ignored. |
 
 ## Fixture
 
-The test builds the following state before measuring, then restarts Explorer so
-the Shell reloads the backing files. Fixture construction is not timed.
+`-Platform` / `WINCENT_VM_PLATFORM` selects the flow explicitly. The guest also
+checks the Windows build number so a Windows 10 flow cannot run on Windows 11.
 
-| List | Raw entries | Composition |
-| --- | ---: | --- |
-| Recent Files | 120 | 20 visible + 100 hidden |
-| Frequent Folders | 100 | 46 pinned + 4 visible unpinned + 50 hidden unpinned |
+| Platform | Fixture mode | Operations |
+| --- | --- | --- |
+| `win10` | `synthetic_v4` | Writes empty v4 CFBs, creates 120 Recent and 100 Frequent entries, then directly controls hidden/pin/access-count metadata. |
+| `win11` | `native_v6` | Never writes v6 entry bytes. Creates 20 Recent items through system `add_item` and two Frequent items through system pin, then measures the actual post-restart raw/Shell counts. |
 
-Frequent Folders access counts cover `0`, `1`, `3` and `5`. Pinned entries use
-`0`; visible unpinned entries use `3`; hidden unpinned entries include `1`, `3`
-and `5`. The test asserts the raw counts, pinned count, rule-visible count and
-access-count distribution after Explorer restarts.
-
-The fixture starts from an empty v4 backing file and is created through the
-crate's public mutation API; the test does not reuse the current user's Quick
-Access state.
+The Windows 11 flow does not require the injected 100-entry v4 Frequent list to
+survive Explorer rewriting and does not hard-code the observed rewritten count.
+Native Recent tracking can vary with the Windows 11 VM state. The result records
+the detected capability and omits `recent_native` when no Recent entries persist.
 
 ## Scenarios
 
 | Scenario | Shell-visible count | Raw count |
 | --- | ---: | ---: |
-| `recent_full` | 20 (result window full) | 120 |
-| `recent_under` | 8 (under the window) | 120 |
-| `frequent_full` | 50 | 100 |
-| `frequent_under` | 40 | 100 |
+| Win10 `recent_full` | 20 (result window full) | 120 |
+| Win10 `recent_under` | 8 (under the window) | 120 |
+| Win10 `frequent_full` | 50 | 100 |
+| Win10 `frequent_under` | 40 | 100 |
+| Win11 `recent_native` | Actual post-restart value | Actual parsed value |
+| Win11 `frequent_native` | Actual post-restart value | Actual parsed value |
 
 The Shell query is expected to return 20 Recent Files in the full window and 8
 after 12 visible entries are hidden. Frequent Folders returns 46 pinned plus 4
@@ -104,6 +102,8 @@ command-line parameter > .env value > non-secret built-in default
 | --- | --- |
 | `WINCENT_VM_VMRUN` | Full path to `vmrun.exe` |
 | `WINCENT_VM_VMX` | Full path to the target `.vmx` |
+| `WINCENT_VM_PLATFORM` | `win10` or `win11`; selected by the host and verified in the guest |
+| `WINCENT_VM_PASSWORD` | Optional VM encryption password passed through `vmrun -vp` |
 | `WINCENT_VM_GUEST_USER` | Guest account for vmrun guest control |
 | `WINCENT_VM_GUEST_PASSWORD` | Guest password |
 | `WINCENT_EVIDENCE_ROOT` | Host evidence root; relative paths resolve from the repo root |
@@ -114,12 +114,26 @@ command-line parameter > .env value > non-secret built-in default
 `WINCENT_VM_GUEST_PASSWORD` have no hard-coded fallback. If they are missing,
 the script stops before touching the VM and asks you to create `.env`.
 
+The host prefers VMware `-interactive` to enter the Explorer session. The
+guest launcher retains the interactive scheduled-task path as a fallback.
+
+Windows 11 now uses the native v6 flow instead of injecting a v4 Frequent fixture.
+Treat `fixture_capabilities` as the source of truth for the scenarios available
+in a particular run.
+
 ## Run
 
 ```powershell
-# 20 timed + 2 warm-up calls per scenario and method
+# Windows 10: deterministic synthetic-v4 scenarios
 pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
+    -Platform win10 `
     -EvidenceDir temp/track_wincent/evidence/my-get-item-latency-run `
+    -Iters 20 -Warmup 2
+
+# Windows 11: native-v6 state created through system APIs
+pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
+    -Platform win11 `
+    -Vmx 'C:\VirtualMachine\Windows11\Windows 11 x64.vmx' `
     -Iters 20 -Warmup 2
 ```
 

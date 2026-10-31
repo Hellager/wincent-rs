@@ -15,36 +15,36 @@
 | --- | --- |
 | `main.rs` | Rust 集成测试；默认 `#[ignore]`，并额外要求 `WINCENT_GET_ITEM_LATENCY=1`，避免在开发机误运行 |
 | `run_get_item_latency_vm.ps1` | host 编排：构建、上传、启动、轮询 marker、截图、回收证据、校验恢复状态 |
-| `vm_get_item_latency_start.ps1` | guest 启动器（session 0）：清理旧状态，在 Explorer 所在交互 session 创建临时 `/IT` 计划任务 |
+| `vm_get_item_latency_start.ps1` | guest 启动器：清理旧状态，优先直接使用 interactive session，计划任务回退 |
 | `vm_get_item_latency_guest.ps1` | guest 编排（session 1）：baseline 备份、运行测试、恢复、marker、环境/最终状态 JSON、证据 zip |
 | `.env.example` | 配置模板；复制为 `.env` 后填写 VM 路径和 guest 账号 |
 | `.env` | 本机实际配置，含 guest 密码，已被 git 忽略 |
 
 ## 测试夹具
 
-测试在计时前构造以下状态，然后重启 Explorer，让 Shell 重新加载 backing 文件。
-夹具构造不计入耗时。
+`-Platform` / `WINCENT_VM_PLATFORM` 明确选择测试流程，guest 会根据 build number 再次校验，
+防止把 Win10 流程误跑到 Win11：
 
-| 列表 | raw 条目数 | 组成 |
-| --- | ---: | --- |
-| Recent Files | 120 | 20 visible + 100 hidden |
-| Frequent Folders | 100 | 46 pinned + 4 visible unpinned + 50 hidden unpinned |
+| 平台 | fixture 模式 | 操作 |
+| --- | --- | --- |
+| `win10` | `synthetic_v4` | 写入空 v4 CFB，构造 120 个 Recent 和 100 个 Frequent，并直接调整 hidden/pin/access count |
+| `win11` | `native_v6` | 不写 v6 字节；通过系统 `add_item` 创建 20 个 Recent、通过系统 pin 创建 2 个 Frequent，Explorer 重启后按实际 raw/Shell 数量测量 |
 
-Frequent Folders 的 access count 覆盖 `0`、`1`、`3`、`5`：pinned 使用 `0`，
-visible unpinned 使用 `3`，hidden unpinned 包含 `1`、`3`、`5`。Explorer 重启后，测试会
-重新断言 raw 条目数、pinned 数、规则可见数和 access count 分布。
-
-夹具从一个空的 v4 backing 文件开始，通过 crate 的公开 mutation API 创建；测试不会复用
-当前用户的 Quick Access 状态。
+Win11 流程不再要求 Explorer 重启后仍保留 100 个 v4 Frequent 条目，也不会把实测的 56
+写成固定预期。
+Win11 的原生 Recent 跟踪能力可能随 VM 状态变化；结果会记录动态检测到的 capability，
+如果 Recent 条目未持久化，则不生成 `recent_native` 场景。
 
 ## 场景
 
 | 场景 | Shell 可见数 | Raw 数 |
 | --- | ---: | ---: |
-| `recent_full` | 20（结果窗口满） | 120 |
-| `recent_under` | 8（不足窗口） | 120 |
-| `frequent_full` | 50 | 100 |
-| `frequent_under` | 40 | 100 |
+| Win10 `recent_full` | 20（结果窗口满） | 120 |
+| Win10 `recent_under` | 8（不足窗口） | 120 |
+| Win10 `frequent_full` | 50 | 100 |
+| Win10 `frequent_under` | 40 | 100 |
+| Win11 `recent_native` | Explorer 重启后的实际值 | 解析出的实际值 |
+| Win11 `frequent_native` | Explorer 重启后的实际值 | 解析出的实际值 |
 
 Recent Files 在满窗口时返回 20 项；再隐藏 12 个 visible 条目后返回 8 项。Frequent
 Folders 满状态为 46 pinned + 4 unpinned；将 10 个 pinned 条目 unpin 并隐藏后，剩 36
@@ -93,6 +93,8 @@ host 脚本的解析顺序：
 | --- | --- |
 | `WINCENT_VM_VMRUN` | `vmrun.exe` 完整路径 |
 | `WINCENT_VM_VMX` | 目标 `.vmx` 完整路径 |
+| `WINCENT_VM_PLATFORM` | `win10` 或 `win11`；host 选择流程，guest 校验实际系统 |
+| `WINCENT_VM_PASSWORD` | 可选的 VM 加密密码；非空时通过 `vmrun -vp` 传递 |
 | `WINCENT_VM_GUEST_USER` | vmrun guest control 使用的 guest 账号 |
 | `WINCENT_VM_GUEST_PASSWORD` | guest 密码 |
 | `WINCENT_EVIDENCE_ROOT` | host 证据根目录；相对路径从仓库根目录解析 |
@@ -103,12 +105,25 @@ host 脚本的解析顺序：
 `WINCENT_VM_GUEST_PASSWORD` 没有硬编码兜底值。缺少时脚本会在接触 VM 之前停止，并提示创建
 `.env`。
 
+host 优先使用 VMware `-interactive` 在 Explorer session 中启动 guest 流程；不支持该模式时，
+guest launcher 仍保留交互计划任务回退路径。
+
+Windows 11 使用 native v6 流程，不再注入 v4 Frequent fixture。每次运行应以
+`fixture_capabilities` 为准判断实际可用场景。
+
 ## 运行
 
 ```powershell
-# 每个场景/方法 20 次计时 + 2 次预热
+# Win10：确定性 synthetic v4 四场景
 pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
+    -Platform win10 `
     -EvidenceDir temp/track_wincent/evidence/my-get-item-latency-run `
+    -Iters 20 -Warmup 2
+
+# Win11：系统 API 构造 native v6 状态，两场景
+pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
+    -Platform win11 `
+    -Vmx 'C:\VirtualMachine\Windows11\Windows 11 x64.vmx' `
     -Iters 20 -Warmup 2
 ```
 

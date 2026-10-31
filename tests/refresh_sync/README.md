@@ -23,8 +23,9 @@ itself updates the open view.
 
 | State | Raw entries | Visible items |
 | --- | ---: | --- |
-| A (baseline) | 5 | 5 |
-| B | 6 | 6 (adds `refresh-sync-marker.txt`) |
+| Windows 10 A (baseline) | 5 | 5 |
+| Windows 10 B | 6 | 6 (adds `refresh-sync-marker.txt`) |
+| Windows 11 A/B | Native v6 snapshots created through system APIs | Records actual Shell counts; B adds the marker |
 
 The test:
 
@@ -47,7 +48,7 @@ screenshots. `result.json` records file/rule/Shell observations and timings.
 | --- | --- |
 | `main.rs` | VM integration test. Ignored and gated behind `WINCENT_REFRESH_SYNC=1`. |
 | `run_refresh_sync_vm.ps1` | Host orchestration, phase polling and screenshots. |
-| `vm_refresh_sync_start.ps1` | Guest session-1 scheduled-task launcher. |
+| `vm_refresh_sync_start.ps1` | Guest session-1 launcher with an interactive path and task fallback. |
 | `vm_refresh_sync_guest.ps1` | Guest baseline/restore and test execution. |
 | `.env.example` | VM/credential/output configuration template. |
 | `.env` | Local values, including the guest password. Git-ignored. |
@@ -59,6 +60,7 @@ Copy-Item tests/refresh_sync/.env.example tests/refresh_sync/.env
 # Edit .env, then:
 
 pwsh -File tests/refresh_sync/run_refresh_sync_vm.ps1 `
+    -Platform win10 `
     -PhaseSleepMs 6000
 ```
 
@@ -69,6 +71,19 @@ The test binary is built with
 `WINCENT_REFRESH_SYNC_PHASE_SLEEP_MS` (default 3000) is the time each phase
 stays on screen; use a larger value on a slow VM so the host can capture the
 correct screenshot.
+
+Encrypted VMs can set the optional `WINCENT_VM_PASSWORD`; the host passes it
+through `vmrun -vp`.
+
+Windows 10 uses deterministic synthetic-v4 A/B states. Windows 11 creates
+native-v6 A/B snapshots through system `add_item`, then performs whole-file
+replacement. This does not implement or validate a v6 entry writer.
+If native Recent tracking cannot produce both snapshots, the Windows 11 run
+returns `status: "skipped"` with reason `native_recent_tracking_unavailable`.
+That result is an expected capability outcome, not a successful refresh sample.
+
+Set `WINCENT_VM_PLATFORM=win10|win11` or pass `-Platform`. The guest validates
+the actual Windows build before modifying Quick Access.
 
 ## Results (Windows 10 Home 22H2 `10.0.19045`)
 

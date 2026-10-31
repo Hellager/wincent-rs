@@ -50,6 +50,16 @@ if (Test-Path -LiteralPath $Root) {
     throw "failed to clean the previous benchmark root: $Root"
 }
 
+$scriptSession = (Get-Process -Id $PID).SessionId
+if ($scriptSession -eq 1) {
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script
+    ) -WindowStyle Hidden
+    (Get-Date).ToString('o') |
+        Set-Content -LiteralPath $startedMarker -Encoding UTF8
+    return
+}
+
 cmd.exe /c "schtasks.exe /Delete /TN `"$TaskName`" /F >nul 2>&1"
 $action = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$Script`""
 cmd.exe /c "schtasks.exe /Create /TN `"$TaskName`" /TR `"$action`" /SC ONCE /ST 00:00 /RU `"$UserName`" /IT /F >nul 2>&1"

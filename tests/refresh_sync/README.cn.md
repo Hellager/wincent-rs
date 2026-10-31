@@ -20,8 +20,9 @@
 
 | 状态 | Raw 条目数 | 可见项 |
 | --- | ---: | --- |
-| A（基线） | 5 | 5 |
-| B | 6 | 6（新增 `refresh-sync-marker.txt`） |
+| Win10 A（基线） | 5 | 5 |
+| Win10 B | 6 | 6（新增 `refresh-sync-marker.txt`） |
+| Win11 A/B | 系统 API 生成的原生 v6 快照 | 按实际 Shell 数量记录，B 新增 marker |
 
 实验步骤：
 
@@ -41,7 +42,7 @@ file/rule/Shell 观察和耗时。
 | --- | --- |
 | `main.rs` | VM 集成测试；`#[ignore]` + `WINCENT_REFRESH_SYNC=1` 双重门禁 |
 | `run_refresh_sync_vm.ps1` | host 编排、阶段轮询和截图 |
-| `vm_refresh_sync_start.ps1` | guest session 1 计划任务启动器 |
+| `vm_refresh_sync_start.ps1` | guest session 1 启动器，优先 interactive，计划任务回退 |
 | `vm_refresh_sync_guest.ps1` | guest baseline/恢复和测试执行 |
 | `.env.example` | VM/凭据/输出目录配置模板 |
 | `.env` | 本机实际配置，含 guest 密码，已被 git 忽略 |
@@ -53,6 +54,7 @@ Copy-Item tests/refresh_sync/.env.example tests/refresh_sync/.env
 # 编辑 .env，然后：
 
 pwsh -File tests/refresh_sync/run_refresh_sync_vm.ps1 `
+    -Platform win10 `
     -PhaseSleepMs 6000
 ```
 
@@ -61,6 +63,16 @@ pwsh -File tests/refresh_sync/run_refresh_sync_vm.ps1 `
 
 `WINCENT_REFRESH_SYNC_PHASE_SLEEP_MS`（默认 3000）控制每个阶段在屏幕上停留的时间；
 VM 较慢时应增大该值，避免 host 截到错误阶段。
+
+加密 VM 可在 `.env` 中设置可选的 `WINCENT_VM_PASSWORD`，host 会通过 `vmrun -vp` 传递。
+
+Win10 使用确定性 synthetic v4 A/B；Win11 通过系统 `add_item` 分别生成原生 v6 A/B
+快照，再进行整文件替换。该流程不实现或验证 v6 entry writer。
+如果原生 Recent 跟踪无法生成两个快照，Win11 运行会返回 `status: "skipped"`，原因是
+`native_recent_tracking_unavailable`。这是预期的能力检测结果，不代表刷新实验成功。
+
+`WINCENT_VM_PLATFORM=win10|win11` 与 `-Platform` 等价，guest 会在修改 Quick Access 前校验
+实际 Windows build。
 
 ## 结果（Windows 10 Home 22H2 `10.0.19045`）
 

@@ -2,7 +2,7 @@
 
 Measures the end-to-end latency of `QuickAccessManager::add_item` when adding
 new items to **Recent Files** and **Frequent Folders**. The benchmark runs
-inside a dedicated Windows 10 VM; the host only orchestrates the VM, transfers
+inside a dedicated Windows 10 or Windows 11 VM; the host only orchestrates the VM, transfers
 artifacts, captures screenshots and collects evidence.
 
 This directory contains everything needed to reproduce the run. The current
@@ -15,7 +15,7 @@ capacity-planning benchmark.
 | --- | --- |
 | `main.rs` | Rust integration test. Ignored by default and gated behind `WINCENT_ADD_LATENCY=1` so it cannot mutate a developer host by accident. |
 | `run_add_item_latency_vm.ps1` | Host orchestrator: builds the test, uploads it, starts the guest run, polls markers, captures screenshots, pulls evidence and validates restore state. |
-| `vm_add_item_latency_start.ps1` | Guest launcher (session 0): cleans stale state and creates a temporary `/IT` scheduled task in the interactive Explorer session. |
+| `vm_add_item_latency_start.ps1` | Guest launcher: cleans stale state, prefers the interactive session, and retains a scheduled-task fallback. |
 | `vm_add_item_latency_guest.ps1` | Guest orchestrator (session 1): baseline backup, test execution, restore, markers, environment/final-state JSON, evidence zip. |
 | `.env.example` | Configuration template. Copy to `.env` and fill in the VM paths and guest account. |
 | `.env` | Local values, including the guest password. Git-ignored. |
@@ -73,6 +73,8 @@ command-line parameter > .env value > non-secret built-in default
 | --- | --- |
 | `WINCENT_VM_VMRUN` | Full path to `vmrun.exe` |
 | `WINCENT_VM_VMX` | Full path to the target `.vmx` |
+| `WINCENT_VM_PLATFORM` | `win10` or `win11`; selected by the host and verified in the guest |
+| `WINCENT_VM_PASSWORD` | Optional VM encryption password passed through `vmrun -vp` |
 | `WINCENT_VM_GUEST_USER` | Guest account for vmrun guest control |
 | `WINCENT_VM_GUEST_PASSWORD` | Guest password |
 | `WINCENT_EVIDENCE_ROOT` | Host evidence root; relative paths resolve from the repo root |
@@ -84,11 +86,15 @@ command-line parameter > .env value > non-secret built-in default
 `WINCENT_VM_GUEST_PASSWORD` have no hard-coded fallback. If they are missing,
 the script stops before touching the VM and asks you to create `.env`.
 
+The host prefers VMware `-interactive` to enter the Explorer session. The
+guest launcher retains the interactive scheduled-task path as a fallback.
+
 ## Run
 
 ```powershell
 # Recent + Frequent, 20 timed + 2 warm-up calls per series
 pwsh -File tests/add_item_latency/run_add_item_latency_vm.ps1 `
+    -Platform win10 `
     -EvidenceDir temp/track_wincent/evidence/my-add-latency-run `
     -Series 'recent,frequent' -Iters 20 -Warmup 2
 ```

@@ -1,8 +1,8 @@
 # wincent add_item average-latency test - host orchestrator
 #
 # Runs on the Windows host. It builds the integration test in this directory,
-# uploads the test binary plus the guest scripts to the dedicated Windows 10
-# 22H2 VM, starts the guest benchmark in Explorer's interactive session, waits
+# uploads the test binary plus the guest scripts to a dedicated Windows 10 or
+# Windows 11 VM, starts the guest benchmark in Explorer's interactive session, waits
 # for markers, captures screenshots, and pulls all evidence back.
 #
 # Isolation: every Quick Access mutation happens in the guest. This script only
@@ -22,9 +22,11 @@
 param(
     [string]$Vmx = '',
     [string]$Vmrun = '',
+    [string]$VmPassword = '',
     [string]$GuestUser = '',
     [string]$GuestPassword = '',
     [string]$EvidenceDir = '',
+    [string]$Platform = '',
     [string]$Series = '',
     [int]$Iters = 0,
     [int]$Warmup = -1,
@@ -76,8 +78,14 @@ function Get-EnvSetting {
 
 if (-not $Vmrun) { $Vmrun = Get-EnvSetting 'WINCENT_VM_VMRUN' }
 if (-not $Vmx) { $Vmx = Get-EnvSetting 'WINCENT_VM_VMX' }
+if (-not $VmPassword) { $VmPassword = Get-EnvSetting 'WINCENT_VM_PASSWORD' }
 if (-not $GuestUser) { $GuestUser = Get-EnvSetting 'WINCENT_VM_GUEST_USER' }
 if (-not $GuestPassword) { $GuestPassword = Get-EnvSetting 'WINCENT_VM_GUEST_PASSWORD' }
+if (-not $Platform) { $Platform = Get-EnvSetting 'WINCENT_VM_PLATFORM' 'win10' }
+$Platform = $Platform.ToLowerInvariant()
+if ($Platform -notin @('win10', 'win11')) {
+    throw "invalid platform '$Platform': expected win10 or win11"
+}
 if (-not $Series) { $Series = Get-EnvSetting 'WINCENT_ADD_LATENCY_SERIES' 'recent,frequent' }
 if ($Iters -le 0) { $Iters = [int](Get-EnvSetting 'WINCENT_ADD_LATENCY_ITERS' '20') }
 if ($Warmup -lt 0) { $Warmup = [int](Get-EnvSetting 'WINCENT_ADD_LATENCY_WARMUP' '2') }
@@ -96,7 +104,7 @@ if (-not [System.IO.Path]::IsPathRooted($EvidenceRoot)) {
     $EvidenceRoot = Join-Path $RepoRoot $EvidenceRoot
 }
 if (-not $EvidenceDir) {
-    $EvidenceDir = Join-Path $EvidenceRoot ('add-item-latency-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $EvidenceDir = Join-Path $EvidenceRoot ("add-item-latency-$Platform-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 } elseif (-not [System.IO.Path]::IsPathRooted($EvidenceDir)) {
     $EvidenceDir = Join-Path $RepoRoot $EvidenceDir
 }
@@ -117,7 +125,9 @@ function Invoke-Vmrun {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [switch]$AllowFailure
     )
-    $output = & $Vmrun -T ws @Arguments 2>&1
+    $vmArgs = @('-T', 'ws')
+    if ($VmPassword) { $vmArgs += @('-vp', $VmPassword) }
+    $output = & $Vmrun @vmArgs @Arguments 2>&1
     $code = $LASTEXITCODE
     $text = ($output | Out-String).Trim()
     if ($code -ne 0 -and -not $AllowFailure) {
@@ -253,6 +263,14 @@ try {
     $hostHash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash
     Write-Host "test binary: $($exe.FullName) sha256=$hostHash"
 
+    $guestDirectory = Invoke-GuestVmrun -Arguments @(
+        'directoryExistsInGuest', $Vmx, 'C:\WincentTrack'
+    ) -AllowFailure
+    if ($guestDirectory.ExitCode -ne 0) {
+        Invoke-GuestVmrun -Arguments @(
+            'createDirectoryInGuest', $Vmx, 'C:\WincentTrack'
+        ) | Out-Null
+    }
     Copy-ToGuest $exe.FullName $GuestExe
     Copy-ToGuest (Join-Path $PSScriptRoot 'vm_add_item_latency_guest.ps1') $GuestScript
     Copy-ToGuest (Join-Path $PSScriptRoot 'vm_add_item_latency_start.ps1') $GuestStart
@@ -260,6 +278,7 @@ try {
         run_id = $RunId
         exe = $GuestExe
         guest_user = $GuestUser
+        platform = $Platform
         series = $Series
         iters = $Iters
         warmup = $Warmup
@@ -268,9 +287,10 @@ try {
     $config | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding UTF8
     Copy-ToGuest $configPath $GuestConfig
 
-    Write-Host "launching guest benchmark (series=$Series iters=$Iters warmup=$Warmup)"
+    Write-Host "launching guest benchmark (platform=$Platform series=$Series iters=$Iters warmup=$Warmup)"
     Invoke-GuestVmrun -Arguments @(
         'runProgramInGuest', $Vmx,
+        '-interactive',
         'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $GuestStart
     ) | Out-Null
@@ -298,6 +318,9 @@ try {
     if ($environment.exe_sha256 -ne $hostHash) {
         throw "guest executable hash $($environment.exe_sha256) != host $hostHash"
     }
+    if ($environment.detected_platform -ne $Platform) {
+        throw "guest platform $($environment.detected_platform) != requested $Platform"
+    }
     foreach ($failureName in @('FAILURE.txt', 'RESTORE_FAILURE.txt')) {
         if (Test-Path -LiteralPath (Join-Path $EvidenceDir $failureName)) {
             throw "guest failure marker present: $failureName"
@@ -305,6 +328,7 @@ try {
     }
 
     $result = Get-Content -LiteralPath (Join-Path $EvidenceDir 'result.json') -Raw | ConvertFrom-Json
+    if ($result.platform -ne $Platform) { throw "result platform $($result.platform) != requested $Platform" }
     if ([int]$result.failure_count -ne 0) {
         throw "result reports $($result.failure_count) failed add_item calls"
     }

@@ -47,6 +47,30 @@ const FIXTURE_ITEMS: usize = 5;
 const MARKER_STEM: &str = "refresh-sync-marker";
 const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TestPlatform {
+    Win10,
+    Win11,
+}
+
+impl TestPlatform {
+    fn from_env() -> Self {
+        match env::var("WINCENT_TEST_PLATFORM").as_deref() {
+            Ok("win10") => Self::Win10,
+            Ok("win11") => Self::Win11,
+            Ok(value) => panic!("WINCENT_TEST_PLATFORM must be win10 or win11, got {value}"),
+            Err(_) => panic!("WINCENT_TEST_PLATFORM must be set by the VM guest harness"),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Win10 => "win10",
+            Self::Win11 => "win11",
+        }
+    }
+}
+
 #[test]
 #[ignore = "replaces real Quick Access backing data; run inside the test VM with WINCENT_REFRESH_SYNC=1"]
 fn refresh_sync() {
@@ -58,6 +82,7 @@ fn refresh_sync() {
         return;
     }
 
+    let platform = TestPlatform::from_env();
     let out_path = PathBuf::from(
         env::var("WINCENT_REFRESH_SYNC_OUT")
             .expect("WINCENT_REFRESH_SYNC_OUT must point at the result JSON"),
@@ -80,10 +105,35 @@ fn refresh_sync() {
         .build();
 
     let marker_path = root.join(format!("{MARKER_STEM}.txt"));
-    let fixture = build_fixture(&root, &marker_path).expect("fixture build failed");
+    let mut fixture =
+        build_fixture(&manager, &root, &marker_path, platform).expect("fixture build failed");
+    if platform == TestPlatform::Win11 && (fixture.a_raw == 0 || fixture.b_raw <= fixture.a_raw) {
+        let skipped = format!(
+            concat!(
+                "{{\n",
+                "  \"test\": \"refresh_sync\",\n",
+                "  \"platform\": \"win11\",\n",
+                "  \"status\": \"skipped\",\n",
+                "  \"reason\": \"native_recent_tracking_unavailable\",\n",
+                "  \"fixture_mode\": \"native_v6_snapshots\",\n",
+                "  \"fixture\": {{\"items\": {items}, \"a_raw\": {a_raw}, \"b_raw\": {b_raw}}}\n",
+                "}}\n"
+            ),
+            items = FIXTURE_ITEMS,
+            a_raw = fixture.a_raw,
+            b_raw = fixture.b_raw,
+        );
+        fs::write(&out_path, skipped).expect("write skipped refresh-sync result");
+        phase(&root, "80-complete", 100);
+        return;
+    }
     let dest = recent_files_dest_path().expect("recent DestFiles path");
     start_explorer_quick_access().expect("start Explorer Quick Access");
-    wait_shell_count(FIXTURE_ITEMS, 20).expect("baseline Shell count not reached");
+    if platform == TestPlatform::Win11 {
+        fixture.a_visible = wait_shell_stable(20).expect("native baseline did not stabilize");
+    } else {
+        wait_shell_count(fixture.a_visible, 20).expect("baseline Shell count not reached");
+    }
 
     let baseline = observe(&manager, &marker_path);
     println!("baseline: {baseline:?}");
@@ -111,7 +161,7 @@ fn refresh_sync() {
     stop_explorer().expect("stop Explorer before reset");
     fs::write(&dest, &fixture.a_bytes).expect("restore A CFB");
     start_explorer_quick_access().expect("restart Explorer for trial 2");
-    wait_shell_count(FIXTURE_ITEMS, 20).expect("trial 2 baseline Shell count not reached");
+    wait_shell_count(fixture.a_visible, 20).expect("trial 2 baseline Shell count not reached");
     phase(&root, "40-reset-a", 2000);
 
     // Trial 2: replace A -> B, then notify + refresh.
@@ -151,7 +201,7 @@ fn refresh_sync() {
     stop_explorer().expect("stop Explorer before trial 3 reset");
     fs::write(&dest, &fixture.a_bytes).expect("restore A before trial 3");
     start_explorer_quick_access().expect("restart Explorer for trial 3");
-    wait_shell_count(FIXTURE_ITEMS, 20).expect("trial 3 baseline Shell count not reached");
+    wait_shell_count(fixture.a_visible, 20).expect("trial 3 baseline Shell count not reached");
     phase(&root, "65-reset-a-2", 2000);
 
     replace_cfb(&dest, &fixture.b_bytes).expect("replace CFB with B for trial 3");
@@ -182,7 +232,10 @@ fn refresh_sync() {
         concat!(
             "{{\n",
             "  \"test\": \"refresh_sync\",\n",
-            "  \"fixture\": {{\"items\": {fixture_items}, \"marker\": {marker}, \"a_raw\": {a_raw}, \"b_raw\": {b_raw}}},\n",
+            "  \"platform\": {platform},\n",
+            "  \"status\": \"completed\",\n",
+            "  \"fixture_mode\": {fixture_mode},\n",
+            "  \"fixture\": {{\"items\": {fixture_items}, \"marker\": {marker}, \"a_raw\": {a_raw}, \"b_raw\": {b_raw}, \"a_visible\": {a_visible}}},\n",
             "  \"observations\": {{\n",
             "    \"baseline\": {baseline},\n",
             "    \"after_b_without_refresh\": {before_current},\n",
@@ -207,9 +260,12 @@ fn refresh_sync() {
             "}}\n"
         ),
         marker = json_escape(&marker_path.to_string_lossy()),
+        platform = json_escape(platform.as_str()),
+        fixture_mode = json_escape(fixture.mode),
         fixture_items = FIXTURE_ITEMS,
         a_raw = fixture.a_raw,
         b_raw = fixture.b_raw,
+        a_visible = fixture.a_visible,
         baseline = baseline.json(),
         before_current = before_current.json(),
         after_current = after_current.json(),
@@ -241,6 +297,8 @@ struct Fixture {
     b_bytes: Vec<u8>,
     a_raw: usize,
     b_raw: usize,
+    a_visible: usize,
+    mode: &'static str,
 }
 
 #[derive(Debug)]
@@ -289,27 +347,47 @@ fn observe(manager: &QuickAccessManager, marker: &Path) -> Observation {
     }
 }
 
-fn build_fixture(root: &Path, marker: &Path) -> Result<Fixture, String> {
-    stop_explorer()?;
-    write_empty_recent_cfb()?;
+fn build_fixture(
+    manager: &QuickAccessManager,
+    root: &Path,
+    marker: &Path,
+    platform: TestPlatform,
+) -> Result<Fixture, String> {
+    if platform == TestPlatform::Win10 {
+        stop_explorer()?;
+        write_empty_recent_cfb()?;
+    }
 
     for index in 0..FIXTURE_ITEMS {
         let path = root.join(format!("refresh-item-{index:02}.txt"));
         fs::write(&path, b"wincent refresh-sync fixture\n")
             .map_err(|error| format!("create {}: {error}", path.display()))?;
-        add_direct(&path)?;
+        add_fixture_item(manager, &path, platform)?;
+    }
+    if platform == TestPlatform::Win11 {
+        manager
+            .refresh_explorer()
+            .map_err(|error| format!("refresh native A: {error}"))?;
+        std::thread::sleep(Duration::from_millis(800));
     }
     let a_bytes = fs::read(recent_files_dest_path().map_err(|error| error.to_string())?)
         .map_err(|error| format!("read A: {error}"))?;
     let a_raw = raw_count()?;
+    let a_visible = visible_count()?;
 
     fs::write(marker, b"wincent refresh-sync marker\n")
         .map_err(|error| format!("create marker: {error}"))?;
-    add_direct(marker)?;
+    add_fixture_item(manager, marker, platform)?;
+    if platform == TestPlatform::Win11 {
+        manager
+            .refresh_explorer()
+            .map_err(|error| format!("refresh native B: {error}"))?;
+        std::thread::sleep(Duration::from_millis(800));
+    }
     let b_bytes = fs::read(recent_files_dest_path().map_err(|error| error.to_string())?)
         .map_err(|error| format!("read B: {error}"))?;
     let b_raw = raw_count()?;
-    if a_raw != FIXTURE_ITEMS || b_raw != FIXTURE_ITEMS + 1 {
+    if platform == TestPlatform::Win10 && (a_raw != FIXTURE_ITEMS || b_raw != FIXTURE_ITEMS + 1) {
         return Err(format!(
             "unexpected fixture raw counts: A={a_raw}, B={b_raw}"
         ));
@@ -319,6 +397,7 @@ fn build_fixture(root: &Path, marker: &Path) -> Result<Fixture, String> {
     // the baseline UI/Shell state; the embedded numeric stream is enough.
     remove_marker_links()?;
 
+    stop_explorer()?;
     // Leave A as the initial on-disk state.
     fs::write(
         recent_files_dest_path().map_err(|error| error.to_string())?,
@@ -330,7 +409,30 @@ fn build_fixture(root: &Path, marker: &Path) -> Result<Fixture, String> {
         b_bytes,
         a_raw,
         b_raw,
+        a_visible,
+        mode: if platform == TestPlatform::Win10 {
+            "synthetic_v4"
+        } else {
+            "native_v6_snapshots"
+        },
     })
+}
+
+fn visible_count() -> Result<usize, String> {
+    Ok(shell_query()?.len())
+}
+
+fn add_fixture_item(
+    manager: &QuickAccessManager,
+    path: &Path,
+    platform: TestPlatform,
+) -> Result<(), String> {
+    match platform {
+        TestPlatform::Win10 => add_direct(path),
+        TestPlatform::Win11 => manager
+            .add_item(path)
+            .map_err(|error| format!("add native item {}: {error}", path.display())),
+    }
 }
 
 fn raw_count() -> Result<usize, String> {
@@ -575,6 +677,27 @@ fn wait_shell_count(expected: usize, attempts: usize) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(500));
     }
     Err(format!("expected {expected} Shell items, last {last}"))
+}
+
+fn wait_shell_stable(attempts: usize) -> Result<usize, String> {
+    let mut last = None;
+    let mut stable = 0;
+    for _ in 0..attempts {
+        if let Ok(items) = shell_query() {
+            let count = items.len();
+            if Some(count) == last {
+                stable += 1;
+                if stable >= 2 {
+                    return Ok(count);
+                }
+            } else {
+                last = Some(count);
+                stable = 0;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!("Shell count did not stabilize, last={last:?}"))
 }
 
 fn shell_query() -> Result<Vec<String>, String> {

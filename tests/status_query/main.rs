@@ -37,6 +37,30 @@ const MUTATION_TIMEOUT: Duration = Duration::from_secs(20);
 const FIXTURE_TIMEOUT: Duration = Duration::from_secs(120);
 const FIXTURE_RECENT_FILES: usize = 25;
 const FIXTURE_UNPINNED_FOLDERS: usize = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TestPlatform {
+    Win10,
+    Win11,
+}
+
+impl TestPlatform {
+    fn from_env() -> Self {
+        match env::var("WINCENT_TEST_PLATFORM").as_deref() {
+            Ok("win10") => Self::Win10,
+            Ok("win11") => Self::Win11,
+            Ok(value) => panic!("WINCENT_TEST_PLATFORM must be win10 or win11, got {value}"),
+            Err(_) => panic!("WINCENT_TEST_PLATFORM must be set by the VM guest harness"),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Win10 => "win10",
+            Self::Win11 => "win11",
+        }
+    }
+}
 const MUTATION_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy)]
@@ -158,17 +182,25 @@ fn build_recent_fixture(manager: &QuickAccessManager, root: &Path, count: usize)
     added
 }
 
-fn build_frequent_fixture(manager: &QuickAccessManager, root: &Path, count: usize) -> Vec<PathBuf> {
+fn build_frequent_fixture(
+    manager: &QuickAccessManager,
+    root: &Path,
+    count: usize,
+    platform: TestPlatform,
+) -> Vec<PathBuf> {
     let mut added = Vec::new();
     for index in 0..count {
         let directory = root.join(format!("frequent-fixture-{index:02}"));
         if fs::create_dir_all(&directory).is_err() {
             continue;
         }
-        if manager
-            .add_item_direct(&directory, QuickAccess::FrequentFolders)
-            .is_ok()
-        {
+        let result = match platform {
+            TestPlatform::Win10 => {
+                manager.add_item_direct(&directory, QuickAccess::FrequentFolders)
+            }
+            TestPlatform::Win11 => manager.pin_frequent_folder(&directory),
+        };
+        if result.is_ok() {
             added.push(directory);
         }
     }
@@ -183,6 +215,12 @@ fn status_query() {
         return;
     }
 
+    let platform = TestPlatform::from_env();
+    let fixture_timeout = if platform == TestPlatform::Win11 {
+        Duration::from_secs(15)
+    } else {
+        FIXTURE_TIMEOUT
+    };
     let run_id = env::var("WINCENT_STATUS_QUERY_RUN_ID").unwrap_or_else(|_| "local".to_string());
     let root = PathBuf::from(
         env::var("WINCENT_STATUS_QUERY_ROOT")
@@ -209,6 +247,8 @@ fn status_query() {
     let mut timings: BTreeMap<String, Stats> = BTreeMap::new();
     let mut summary: BTreeMap<String, String> = BTreeMap::new();
     let mut mutation_log: Vec<String> = Vec::new();
+    let mut recent_fixture_status = "not_requested";
+    let mut frequent_fixture_status = "not_requested";
 
     let recent_path = recent_files_dest_path().expect("recent dest path");
     let frequent_path = frequent_folders_dest_path().expect("frequent dest path");
@@ -226,32 +266,72 @@ fn status_query() {
             recent_fixture.len(),
             FIXTURE_RECENT_FILES
         ));
-        let recent_ready = wait_until(FIXTURE_TIMEOUT, || {
+        checks.check(
+            "fixture_recent_created",
+            recent_fixture.len() == FIXTURE_RECENT_FILES,
+            format!(
+                "created={} requested={FIXTURE_RECENT_FILES}",
+                recent_fixture.len()
+            ),
+        );
+        let recent_ready = wait_until(fixture_timeout, || {
             parse_file(&recent_path)
                 .map(|parsed| parsed.cfb_entries().len() >= recent_fixture.len())
                 .unwrap_or(false)
         });
         mutation_log.push(format!("recent_fixture_persisted={recent_ready}"));
+        recent_fixture_status = if recent_ready {
+            "available"
+        } else {
+            "unavailable"
+        };
+        if platform == TestPlatform::Win10 {
+            checks.check(
+                "fixture_recent_persisted",
+                recent_ready,
+                "all requested Recent fixture entries must persist",
+            );
+        }
 
-        let frequent_fixture = build_frequent_fixture(&manager, &root, FIXTURE_UNPINNED_FOLDERS);
+        let frequent_fixture =
+            build_frequent_fixture(&manager, &root, FIXTURE_UNPINNED_FOLDERS, platform);
         mutation_log.push(format!(
             "frequent_fixture_added={} of {}",
             frequent_fixture.len(),
             FIXTURE_UNPINNED_FOLDERS
         ));
-        let frequent_ready = wait_until(FIXTURE_TIMEOUT, || {
-            parse_file(&frequent_path)
-                .map(|parsed| {
-                    parsed
-                        .cfb_entries()
-                        .iter()
-                        .filter(|entry| !entry.is_pinned())
-                        .count()
-                        >= FIXTURE_UNPINNED_FOLDERS
-                })
-                .unwrap_or(false)
+        checks.check(
+            "fixture_frequent_created",
+            frequent_fixture.len() == FIXTURE_UNPINNED_FOLDERS,
+            format!(
+                "created={} requested={FIXTURE_UNPINNED_FOLDERS} mode={}",
+                frequent_fixture.len(),
+                if platform == TestPlatform::Win10 {
+                    "direct_unpinned"
+                } else {
+                    "native_pinned"
+                }
+            ),
+        );
+        let frequent_ready = wait_until(fixture_timeout, || {
+            frequent_fixture.iter().all(|path| {
+                manager
+                    .frequent_folder_slot(path)
+                    .map(|slot| slot.is_some())
+                    .unwrap_or(false)
+            })
         });
         mutation_log.push(format!("frequent_fixture_persisted={frequent_ready}"));
+        frequent_fixture_status = if frequent_ready {
+            "available"
+        } else {
+            "unavailable"
+        };
+        checks.check(
+            "fixture_frequent_persisted",
+            frequent_ready,
+            "all created Frequent fixture entries must persist",
+        );
     }
 
     // ---- baseline reads -------------------------------------------------
@@ -514,62 +594,90 @@ fn status_query() {
 
     // ---- Live mutation round trip ---------------------------------------
     if mutate {
-        let recent_target = root.join("status-recent-target.txt");
-        fs::write(&recent_target, b"wincent status query\n").expect("write recent target");
+        if recent_fixture_status == "available" {
+            if platform == TestPlatform::Win11
+                && recent_visible.len() >= DEFAULT_RECENT_FILES_RESULT_LIMIT
+            {
+                let victim = &recent_visible[DEFAULT_RECENT_FILES_RESULT_LIMIT - 1];
+                let remove_result = manager.remove_item(victim);
+                let removed = remove_result.is_ok()
+                    && wait_until(MUTATION_TIMEOUT, || {
+                        manager
+                            .recent_file_position(victim)
+                            .map(|position| position.is_none())
+                            .unwrap_or(false)
+                    });
+                mutation_log.push(format!(
+                    "win11_recent_slot_release={removed} target={victim} result={remove_result:?}"
+                ));
+                checks.check(
+                    "mutation_win11_recent_slot_released",
+                    removed,
+                    "Win11 native flow releases one visible slot before the add/remove round trip",
+                );
+            }
 
-        manager.add_item(&recent_target).expect("add recent target");
-        let add_started = Instant::now();
-        let recent_became_visible = wait_until(MUTATION_TIMEOUT, || {
-            manager
-                .recent_file_position(&recent_target)
-                .map(|position| position.is_some())
-                .unwrap_or(false)
-        });
-        let recent_visible_latency = add_started.elapsed().as_secs_f64() * 1000.0;
-        mutation_log.push(format!(
-            "recent_add_visible={recent_became_visible} latency_ms={recent_visible_latency:.3}"
-        ));
-        checks.check(
-            "mutation_recent_add_becomes_visible",
-            recent_became_visible,
-            format!("latency_ms={recent_visible_latency:.3}"),
-        );
+            let recent_target = root.join("status-recent-target.txt");
+            fs::write(&recent_target, b"wincent status query\n").expect("write recent target");
 
-        manager
-            .remove_item(&recent_target)
-            .expect("remove recent target");
-        let remove_started = Instant::now();
-        let recent_became_hidden = wait_until(MUTATION_TIMEOUT, || {
-            manager
-                .recent_file_position(&recent_target)
-                .map(|position| position.is_none())
-                .unwrap_or(false)
-        });
-        mutation_log.push(format!(
-            "recent_remove_hidden={recent_became_hidden} latency_ms={:.3}",
-            remove_started.elapsed().as_secs_f64() * 1000.0
+            let recent_add_result = manager.add_item(&recent_target);
+            let add_started = Instant::now();
+            let recent_became_visible = recent_add_result.is_ok()
+                && wait_until(MUTATION_TIMEOUT, || {
+                    manager
+                        .recent_file_position(&recent_target)
+                        .map(|position| position.is_some())
+                        .unwrap_or(false)
+                });
+            let recent_visible_latency = add_started.elapsed().as_secs_f64() * 1000.0;
+            mutation_log.push(format!(
+            "recent_add_visible={recent_became_visible} latency_ms={recent_visible_latency:.3} result={recent_add_result:?}"
         ));
-        checks.check(
-            "mutation_recent_remove_becomes_hidden",
-            recent_became_hidden,
-            "removed recent file must stop being visible",
-        );
+            checks.check(
+                "mutation_recent_add_becomes_visible",
+                recent_became_visible,
+                format!("latency_ms={recent_visible_latency:.3}"),
+            );
+
+            let remove_started = Instant::now();
+            let recent_remove_result =
+                recent_became_visible.then(|| manager.remove_item(&recent_target));
+            let recent_became_hidden = matches!(recent_remove_result.as_ref(), Some(Ok(())))
+                && wait_until(MUTATION_TIMEOUT, || {
+                    manager
+                        .recent_file_position(&recent_target)
+                        .map(|position| position.is_none())
+                        .unwrap_or(false)
+                });
+            mutation_log.push(format!(
+            "recent_remove_hidden={recent_became_hidden} latency_ms={:.3} result={recent_remove_result:?}",
+            remove_started.elapsed().as_secs_f64() * 1000.0,
+        ));
+            checks.check(
+                "mutation_recent_remove_becomes_hidden",
+                recent_became_hidden,
+                "removed recent file must stop being visible",
+            );
+        } else {
+            mutation_log.push(
+                "recent_mutation=skipped reason=native_recent_tracking_unavailable".to_string(),
+            );
+        }
 
         let folder_target = root.join("status-frequent-target");
         fs::create_dir_all(&folder_target).expect("create frequent target");
-        manager
-            .pin_frequent_folder(&folder_target)
-            .expect("pin frequent target");
+        let pin_result = manager.pin_frequent_folder(&folder_target);
         let pin_started = Instant::now();
-        let pinned_visible = wait_until(MUTATION_TIMEOUT, || {
-            manager
-                .frequent_folder_slot(&folder_target)
-                .map(|slot| slot.is_some_and(|slot| slot.is_pinned()))
-                .unwrap_or(false)
-        });
+        let pinned_visible = pin_result.is_ok()
+            && wait_until(MUTATION_TIMEOUT, || {
+                manager
+                    .frequent_folder_slot(&folder_target)
+                    .map(|slot| slot.is_some_and(|slot| slot.is_pinned()))
+                    .unwrap_or(false)
+            });
         mutation_log.push(format!(
-            "frequent_pin_visible={pinned_visible} latency_ms={:.3}",
-            pin_started.elapsed().as_secs_f64() * 1000.0
+            "frequent_pin_visible={pinned_visible} latency_ms={:.3} result={pin_result:?}",
+            pin_started.elapsed().as_secs_f64() * 1000.0,
         ));
         checks.check(
             "mutation_frequent_pin_becomes_visible",
@@ -577,19 +685,18 @@ fn status_query() {
             "pinned folder must report a pinned slot",
         );
 
-        manager
-            .remove_item(&folder_target)
-            .expect("remove frequent target");
         let unpin_started = Instant::now();
-        let unpinned_hidden = wait_until(MUTATION_TIMEOUT, || {
-            manager
-                .frequent_folder_slot(&folder_target)
-                .map(|slot| slot.is_none())
-                .unwrap_or(false)
-        });
+        let frequent_remove_result = pinned_visible.then(|| manager.remove_item(&folder_target));
+        let unpinned_hidden = matches!(frequent_remove_result.as_ref(), Some(Ok(())))
+            && wait_until(MUTATION_TIMEOUT, || {
+                manager
+                    .frequent_folder_slot(&folder_target)
+                    .map(|slot| slot.is_none())
+                    .unwrap_or(false)
+            });
         mutation_log.push(format!(
-            "frequent_remove_hidden={unpinned_hidden} latency_ms={:.3}",
-            unpin_started.elapsed().as_secs_f64() * 1000.0
+            "frequent_remove_hidden={unpinned_hidden} latency_ms={:.3} result={frequent_remove_result:?}",
+            unpin_started.elapsed().as_secs_f64() * 1000.0,
         ));
         checks.check(
             "mutation_frequent_remove_becomes_hidden",
@@ -602,6 +709,24 @@ fn status_query() {
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str(&format!("  \"run_id\": \"{}\",\n", json_escape(&run_id)));
+    json.push_str(&format!(
+        "  \"platform\": \"{}\",\n",
+        json_escape(platform.as_str())
+    ));
+    json.push_str(&format!(
+        "  \"fixture_mode\": \"{}\",\n",
+        if !mutate {
+            "read_only"
+        } else if platform == TestPlatform::Win10 {
+            "synthetic_v4_unpinned"
+        } else {
+            "native_v6_pinned"
+        }
+    ));
+    json.push_str(&format!(
+        "  \"fixture_capabilities\": {{\"recent\": \"{}\", \"frequent\": \"{}\"}},\n",
+        recent_fixture_status, frequent_fixture_status
+    ));
     json.push_str(&format!("  \"failures\": {},\n", checks.failures));
     json.push_str(&format!("  \"checks\": {},\n", checks.entries.len()));
     json.push_str("  \"summary\": {\n");

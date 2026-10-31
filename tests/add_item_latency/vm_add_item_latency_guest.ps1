@@ -46,6 +46,10 @@ $Series = [string]$config.series
 $Iters = [int]$config.iters
 $Warmup = [int]$config.warmup
 $RunId = [string]$config.run_id
+$RequestedPlatform = ([string]$config.platform).ToLowerInvariant()
+if ($RequestedPlatform -notin @('win10', 'win11')) {
+    throw "config platform must be win10 or win11, got '$RequestedPlatform'"
+}
 
 function Get-LinkManifestText([string] $Directory) {
     return ((Get-ChildItem -LiteralPath $Directory -Filter '*.lnk' -File |
@@ -54,19 +58,54 @@ function Get-LinkManifestText([string] $Directory) {
         }) -join "`n")
 }
 
+function Get-BackingState([string] $Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]@{ state = 'absent'; length = 0; sha256 = $null }
+    }
+    $item = Get-Item -LiteralPath $Path
+    return [pscustomobject]@{
+        state = if ($item.Length -eq 0) { 'zero_length' } else { 'populated' }
+        length = $item.Length
+        sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    }
+}
+
+function Save-BackingFile([string] $Source, [string] $Destination) {
+    $state = Get-BackingState $Source
+    if ($state.state -ne 'absent') {
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    }
+    return $state
+}
+
+function Restore-BackingFile($State, [string] $Backup, [string] $Destination) {
+    if ($State.state -eq 'absent') {
+        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        return
+    }
+    Copy-Item -LiteralPath $Backup -Destination $Destination -Force
+}
+
+function Test-BackingRestored($Expected, [string] $Path) {
+    $actual = Get-BackingState $Path
+    return $actual.state -eq $Expected.state -and
+        [int64]$actual.length -eq [int64]$Expected.length -and
+        $actual.sha256 -eq $Expected.sha256
+}
+
 function Save-State([string] $Destination) {
     $links = Join-Path $Destination 'links'
     New-Item -ItemType Directory -Path $Destination, $links -Force | Out-Null
-    Copy-Item -LiteralPath $RecentCfb -Destination (Join-Path $Destination 'recent.cfb') -Force
-    Copy-Item -LiteralPath $FrequentCfb -Destination (Join-Path $Destination 'frequent.cfb') -Force
+    $backingState = [ordered]@{
+        recent = Save-BackingFile $RecentCfb (Join-Path $Destination 'recent.cfb')
+        frequent = Save-BackingFile $FrequentCfb (Join-Path $Destination 'frequent.cfb')
+    }
     Get-ChildItem -LiteralPath $RecentDir -Filter '*.lnk' -File |
         Copy-Item -Destination $links -Force
     Get-LinkManifestText $RecentDir |
         Set-Content -LiteralPath (Join-Path $Destination 'links-manifest.txt') -Encoding UTF8
-    [pscustomobject]@{
-        recent_sha256 = (Get-FileHash -LiteralPath $RecentCfb -Algorithm SHA256).Hash
-        frequent_sha256 = (Get-FileHash -LiteralPath $FrequentCfb -Algorithm SHA256).Hash
-    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Destination 'cfb-hashes.json') -Encoding UTF8
+    $backingState | ConvertTo-Json -Depth 4 |
+        Set-Content -LiteralPath (Join-Path $Destination 'backing-state.json') -Encoding UTF8
 }
 
 function Stop-ExplorerSession {
@@ -83,8 +122,10 @@ function Start-ExplorerSession {
 
 function Restore-State {
     Stop-ExplorerSession
-    Copy-Item -LiteralPath (Join-Path $OriginalDir 'recent.cfb') -Destination $RecentCfb -Force
-    Copy-Item -LiteralPath (Join-Path $OriginalDir 'frequent.cfb') -Destination $FrequentCfb -Force
+    $state = Get-Content -LiteralPath (Join-Path $OriginalDir 'backing-state.json') -Raw |
+        ConvertFrom-Json
+    Restore-BackingFile $state.recent (Join-Path $OriginalDir 'recent.cfb') $RecentCfb
+    Restore-BackingFile $state.frequent (Join-Path $OriginalDir 'frequent.cfb') $FrequentCfb
     Get-ChildItem -LiteralPath $RecentDir -Filter '*.lnk' -File | Remove-Item -Force
     # Remove a stray "links" directory if an earlier run copied the backup folder
     # itself into the Recent directory instead of its children.
@@ -98,8 +139,7 @@ function Restore-State {
 }
 
 if (-not (Test-Path -LiteralPath $Exe)) { throw "benchmark executable is missing: $Exe" }
-if (-not (Test-Path -LiteralPath $RecentCfb)) { throw "Recent CFB is missing: $RecentCfb" }
-if (-not (Test-Path -LiteralPath $FrequentCfb)) { throw "Frequent CFB is missing: $FrequentCfb" }
+New-Item -ItemType Directory -Path $AutoDir -Force | Out-Null
 
 $script:ScriptSession = (Get-Process -Id $PID).SessionId
 $initialExplorer = Get-Process explorer -ErrorAction Stop |
@@ -112,6 +152,12 @@ if ($script:ScriptSession -ne 1) {
     throw "Benchmark must run in interactive session 1, got $script:ScriptSession"
 }
 
+$os = Get-CimInstance Win32_OperatingSystem
+$DetectedPlatform = if ([int]$os.BuildNumber -ge 22000) { 'win11' } else { 'win10' }
+if ($DetectedPlatform -ne $RequestedPlatform) {
+    throw "guest platform $DetectedPlatform (build $($os.BuildNumber)) does not match requested $RequestedPlatform"
+}
+
 if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
 New-Item -ItemType Directory -Path $Root, $TargetsDir, $MarkersDir -Force | Out-Null
 
@@ -121,7 +167,8 @@ $restored = $false
 try {
     Save-State $OriginalDir
 
-    $os = Get-CimInstance Win32_OperatingSystem
+    $backingState = Get-Content -LiteralPath (Join-Path $OriginalDir 'backing-state.json') -Raw |
+        ConvertFrom-Json
     [pscustomobject]@{
         run_id = $RunId
         timestamp = (Get-Date).ToString('o')
@@ -130,6 +177,8 @@ try {
         os_caption = $os.Caption
         os_version = $os.Version
         os_build = $os.BuildNumber
+        requested_platform = $RequestedPlatform
+        detected_platform = $DetectedPlatform
         powershell_version = $PSVersionTable.PSVersion.ToString()
         script_pid = $PID
         script_session = $script:ScriptSession
@@ -139,8 +188,10 @@ try {
         exe_sha256 = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
         recent_cfb = $RecentCfb
         frequent_cfb = $FrequentCfb
-        recent_sha256 = (Get-FileHash -LiteralPath $RecentCfb -Algorithm SHA256).Hash
-        frequent_sha256 = (Get-FileHash -LiteralPath $FrequentCfb -Algorithm SHA256).Hash
+        recent_backing_state = $backingState.recent.state
+        frequent_backing_state = $backingState.frequent.state
+        recent_sha256 = $backingState.recent.sha256
+        frequent_sha256 = $backingState.frequent.sha256
         series = $Series
         iterations = $Iters
         warmup = $Warmup
@@ -150,6 +201,7 @@ try {
         Set-Content -LiteralPath (Join-Path $MarkersDir '10-baseline-ready.txt') -Encoding UTF8
 
     $env:WINCENT_ADD_LATENCY = '1'
+    $env:WINCENT_TEST_PLATFORM = $DetectedPlatform
     $env:WINCENT_ADD_LATENCY_OUT = $ResultPath
     $env:WINCENT_ADD_LATENCY_ROOT = $TargetsDir
     $env:WINCENT_ADD_LATENCY_ITERS = [string]$Iters
@@ -185,12 +237,12 @@ try {
 } finally {
     try {
         Restore-State
-        $hashes = Get-Content -LiteralPath (Join-Path $OriginalDir 'cfb-hashes.json') -Raw |
+        $state = Get-Content -LiteralPath (Join-Path $OriginalDir 'backing-state.json') -Raw |
             ConvertFrom-Json
         $links = (Get-Content -LiteralPath (Join-Path $OriginalDir 'links-manifest.txt') -Raw).TrimEnd()
         $restored =
-            ((Get-FileHash $RecentCfb -Algorithm SHA256).Hash -eq $hashes.recent_sha256) -and
-            ((Get-FileHash $FrequentCfb -Algorithm SHA256).Hash -eq $hashes.frequent_sha256) -and
+            (Test-BackingRestored $state.recent $RecentCfb) -and
+            (Test-BackingRestored $state.frequent $FrequentCfb) -and
             ((Get-LinkManifestText $RecentDir) -eq $links)
         if (-not $restored) { throw 'Final CFB hashes or Recent link manifest do not match baseline' }
     } catch {

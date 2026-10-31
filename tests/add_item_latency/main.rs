@@ -156,6 +156,7 @@ fn add_item_shell_latency() {
         return;
     }
 
+    let platform = test_platform();
     let out_path = PathBuf::from(
         env::var("WINCENT_ADD_LATENCY_OUT")
             .expect("WINCENT_ADD_LATENCY_OUT must point at the result JSON path"),
@@ -325,6 +326,7 @@ fn add_item_shell_latency() {
         .count();
     write_result_json(
         &out_path,
+        platform,
         &root,
         iterations,
         warmup,
@@ -346,6 +348,15 @@ fn add_item_shell_latency() {
         samples.len(),
         out_path.display()
     );
+}
+
+fn test_platform() -> &'static str {
+    match env::var("WINCENT_TEST_PLATFORM").as_deref() {
+        Ok("win10") => "win10",
+        Ok("win11") => "win11",
+        Ok(value) => panic!("WINCENT_TEST_PLATFORM must be win10 or win11, got {value}"),
+        Err(_) => panic!("WINCENT_TEST_PLATFORM must be set by the VM guest harness"),
+    }
 }
 
 fn parse_env_usize(name: &str, default: usize) -> usize {
@@ -407,6 +418,7 @@ fn render_table(stats_by_series: &BTreeMap<&'static str, Stats>) -> String {
 #[allow(clippy::too_many_arguments)]
 fn write_result_json(
     path: &Path,
+    platform: &str,
     root: &Path,
     iterations: usize,
     warmup: usize,
@@ -425,6 +437,8 @@ fn write_result_json(
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"test\": \"add_item_shell_latency\",\n");
+    json.push_str(&format!("  \"platform\": {},\n", json_escape(platform)));
+    json.push_str("  \"fixture_mode\": \"native_shell_api\",\n");
     json.push_str(&format!("  \"iterations\": {iterations},\n"));
     json.push_str(&format!("  \"warmup\": {warmup},\n"));
     json.push_str(&format!(

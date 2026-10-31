@@ -1,7 +1,7 @@
 # Quick Access `add_item` 平均耗时测试（仅 VM）
 
 本目录用于测量 `QuickAccessManager::add_item` 向 **Recent Files** 和
-**Frequent Folders** 添加新项的端到端耗时。所有 Quick Access 变更都在专用 Windows 10
+**Frequent Folders** 添加新项的端到端耗时。所有 Quick Access 变更都在专用 Windows 10/11
 guest VM 内完成；host 只负责编排、文件传输、截图和证据回收。
 
 当前数据是初步结果：每个目标两轮独立运行、每轮 20 个样本，不用于容量规划。本文是
@@ -13,7 +13,7 @@ guest VM 内完成；host 只负责编排、文件传输、截图和证据回收
 | --- | --- |
 | `main.rs` | Rust 集成测试；默认 `#[ignore]`，并额外要求 `WINCENT_ADD_LATENCY=1`，避免在开发机误运行 |
 | `run_add_item_latency_vm.ps1` | host 编排：构建、上传、启动、轮询 marker、截图、回收证据、校验恢复状态 |
-| `vm_add_item_latency_start.ps1` | guest 启动器（session 0）：清理旧状态，在 Explorer 所在的交互 session 创建临时 `/IT` 计划任务 |
+| `vm_add_item_latency_start.ps1` | guest 启动器：清理旧状态，优先直接使用 interactive session，计划任务回退 |
 | `vm_add_item_latency_guest.ps1` | guest 编排（session 1）：baseline 备份、运行测试、恢复、marker、环境/最终状态 JSON、证据 zip |
 | `.env.example` | 配置模板；复制为 `.env` 后填写 VM 路径和 guest 账号 |
 | `.env` | 本机实际配置，含 guest 密码，已被 git 忽略 |
@@ -62,6 +62,8 @@ host 脚本的解析顺序：
 | --- | --- |
 | `WINCENT_VM_VMRUN` | `vmrun.exe` 完整路径 |
 | `WINCENT_VM_VMX` | 目标 `.vmx` 完整路径 |
+| `WINCENT_VM_PLATFORM` | `win10` 或 `win11`；host 选择流程，guest 校验实际系统 |
+| `WINCENT_VM_PASSWORD` | 可选的 VM 加密密码；非空时通过 `vmrun -vp` 传递 |
 | `WINCENT_VM_GUEST_USER` | vmrun guest control 使用的 guest 账号 |
 | `WINCENT_VM_GUEST_PASSWORD` | guest 密码 |
 | `WINCENT_EVIDENCE_ROOT` | host 证据根目录；相对路径从仓库根目录解析 |
@@ -73,11 +75,15 @@ host 脚本的解析顺序：
 `WINCENT_VM_GUEST_PASSWORD` 没有硬编码兜底值。缺少时脚本会在接触 VM 之前停止，并提示创建
 `.env`。
 
+host 优先使用 VMware `-interactive` 在 Explorer session 中启动 guest 流程；不支持该模式时，
+guest launcher 仍保留交互计划任务回退路径。
+
 ## 运行
 
 ```powershell
 # Recent + Frequent，每系列 20 次计时 + 2 次预热
 pwsh -File tests/add_item_latency/run_add_item_latency_vm.ps1 `
+    -Platform win10 `
     -EvidenceDir temp/track_wincent/evidence/my-add-latency-run `
     -Series 'recent,frequent' -Iters 20 -Warmup 2
 ```
@@ -125,12 +131,12 @@ Frequent **643.158 ms**。Frequent 的约 200 ms 增量只作为方向性参考�
 
 每轮 guest 编排都会：
 
-1. 备份两个 Quick Access CFB 和完整 Recent `.lnk` 集合；
+1. 记录两个 Quick Access CFB 的 absent/zero-length/populated 状态并备份现有文件；
 2. 写入含逐文件 SHA-256 的 baseline manifest；
 3. 运行 benchmark；
 4. 停止 Explorer，写回两个 CFB，删除测试新增的 `.lnk`，恢复 baseline `.lnk`，重启
    Explorer；
-5. 比较 CFB SHA-256 和 `.lnk` manifest；
+5. 校验 CFB 已恢复为原始存在状态、长度、SHA-256，并比较 `.lnk` manifest；
 6. 输出 `final-state.json`；失败时写 `FAILURE.txt`/`RESTORE_FAILURE.txt`，并打包证据 zip。
 
 host 只有在 `restored = true`、无 failure marker、且 guest 报告的 exe SHA-256 与本机构建

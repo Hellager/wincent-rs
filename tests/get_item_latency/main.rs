@@ -42,6 +42,32 @@ const FREQUENT_RAW: usize = 100;
 const FREQUENT_PINNED: usize = 46;
 const FREQUENT_VISIBLE_UNPINNED: usize = 4; // 46 + 4 = 50 visible
 const FREQUENT_UNDER_HIDE_PINNED: usize = 10; // leaves 40 visible
+const NATIVE_RECENT_ITEMS: usize = 20;
+const NATIVE_FREQUENT_ITEMS: usize = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TestPlatform {
+    Win10,
+    Win11,
+}
+
+impl TestPlatform {
+    fn from_env() -> Self {
+        match env::var("WINCENT_TEST_PLATFORM").as_deref() {
+            Ok("win10") => Self::Win10,
+            Ok("win11") => Self::Win11,
+            Ok(value) => panic!("WINCENT_TEST_PLATFORM must be win10 or win11, got {value}"),
+            Err(_) => panic!("WINCENT_TEST_PLATFORM must be set by the VM guest harness"),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Win10 => "win10",
+            Self::Win11 => "win11",
+        }
+    }
+}
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECENT_NAMESPACE: &str = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
@@ -125,6 +151,7 @@ fn get_item_latency() {
         return;
     }
 
+    let platform = TestPlatform::from_env();
     let out_path = PathBuf::from(
         env::var("WINCENT_GET_ITEM_LATENCY_OUT")
             .expect("WINCENT_GET_ITEM_LATENCY_OUT must point at the result JSON"),
@@ -151,19 +178,45 @@ fn get_item_latency() {
         root.display()
     );
 
-    build_fixture(&manager, &root).unwrap_or_else(|error| panic!("fixture build failed: {error}"));
-    validate_fixture(&manager).unwrap_or_else(|error| panic!("fixture validation failed: {error}"));
+    let mut samples = Vec::new();
+    let (fixture_mode, scenarios) = match platform {
+        TestPlatform::Win10 => run_synthetic_v4(&manager, &root, iterations, warmup, &mut samples),
+        TestPlatform::Win11 => run_native_v6(&manager, &root, iterations, warmup, &mut samples),
+    }
+    .unwrap_or_else(|error| panic!("fixture or measurement failed: {error}"));
+    let stats = summarize(&samples, &scenarios);
+    print_summary(&stats);
+    write_result_json(
+        &out_path,
+        platform,
+        fixture_mode,
+        iterations,
+        warmup,
+        &scenarios,
+        &samples,
+        &stats,
+    )
+    .expect("failed to write get_item_latency result JSON");
+    write_timings_csv(&out_path.with_file_name("timings.csv"), &samples)
+        .expect("failed to write get_item_latency timings CSV");
+}
 
-    start_explorer().unwrap_or_else(|error| panic!("Explorer start failed: {error}"));
-    wait_for_shell(QuickAccess::RecentFiles, RECENT_VISIBLE)
-        .unwrap_or_else(|error| panic!("Recent Files shell count mismatch: {error}"));
+fn run_synthetic_v4(
+    manager: &QuickAccessManager,
+    root: &Path,
+    iterations: usize,
+    warmup: usize,
+    samples: &mut Vec<Sample>,
+) -> Result<(&'static str, Vec<Scenario>), String> {
+    build_fixture(manager, root)?;
+    validate_fixture(manager)?;
+    start_explorer()?;
+    wait_for_shell(QuickAccess::RecentFiles, RECENT_VISIBLE)?;
     wait_for_shell(
         QuickAccess::FrequentFolders,
         FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED,
-    )
-    .unwrap_or_else(|error| panic!("Frequent Folders shell count mismatch: {error}"));
-    check_frequent_distribution(&manager, FREQUENT_PINNED)
-        .unwrap_or_else(|error| panic!("post-restart fixture validation failed: {error}"));
+    )?;
+    check_frequent_distribution(manager, FREQUENT_PINNED)?;
 
     let full_recent = Scenario {
         id: "recent_full",
@@ -177,24 +230,17 @@ fn get_item_latency() {
         expected_shell: FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED,
         expected_raw: FREQUENT_RAW,
     };
-    let mut samples = Vec::new();
-    measure_scenario(&full_recent, iterations, warmup, &mut samples)
-        .unwrap_or_else(|error| panic!("{} measurement failed: {error}", full_recent.id));
-    measure_scenario(&full_frequent, iterations, warmup, &mut samples)
-        .unwrap_or_else(|error| panic!("{} measurement failed: {error}", full_frequent.id));
+    measure_scenario(&full_recent, iterations, warmup, samples)?;
+    measure_scenario(&full_frequent, iterations, warmup, samples)?;
 
-    reduce_fixture_for_under(&manager, &root)
-        .unwrap_or_else(|error| panic!("fixture reduction failed: {error}"));
-    start_explorer().unwrap_or_else(|error| panic!("second Explorer start failed: {error}"));
-    wait_for_shell(QuickAccess::RecentFiles, RECENT_VISIBLE - RECENT_UNDER_HIDE)
-        .unwrap_or_else(|error| panic!("reduced Recent Files shell count mismatch: {error}"));
+    reduce_fixture_for_under(manager, root)?;
+    start_explorer()?;
+    wait_for_shell(QuickAccess::RecentFiles, RECENT_VISIBLE - RECENT_UNDER_HIDE)?;
     wait_for_shell(
         QuickAccess::FrequentFolders,
         FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED - FREQUENT_UNDER_HIDE_PINNED,
-    )
-    .unwrap_or_else(|error| panic!("reduced Frequent Folders shell count mismatch: {error}"));
-    check_frequent_distribution(&manager, FREQUENT_PINNED - FREQUENT_UNDER_HIDE_PINNED)
-        .unwrap_or_else(|error| panic!("post-reduction fixture validation failed: {error}"));
+    )?;
+    check_frequent_distribution(manager, FREQUENT_PINNED - FREQUENT_UNDER_HIDE_PINNED)?;
 
     let under_recent = Scenario {
         id: "recent_under",
@@ -208,18 +254,73 @@ fn get_item_latency() {
         expected_shell: FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED - FREQUENT_UNDER_HIDE_PINNED,
         expected_raw: FREQUENT_RAW,
     };
-    measure_scenario(&under_recent, iterations, warmup, &mut samples)
-        .unwrap_or_else(|error| panic!("{} measurement failed: {error}", under_recent.id));
-    measure_scenario(&under_frequent, iterations, warmup, &mut samples)
-        .unwrap_or_else(|error| panic!("{} measurement failed: {error}", under_frequent.id));
+    measure_scenario(&under_recent, iterations, warmup, samples)?;
+    measure_scenario(&under_frequent, iterations, warmup, samples)?;
+    Ok((
+        "synthetic_v4",
+        vec![full_recent, full_frequent, under_recent, under_frequent],
+    ))
+}
 
-    let scenarios = [full_recent, full_frequent, under_recent, under_frequent];
-    let stats = summarize(&samples, &scenarios);
-    print_summary(&stats);
-    write_result_json(&out_path, iterations, warmup, &scenarios, &samples, &stats)
-        .expect("failed to write get_item_latency result JSON");
-    write_timings_csv(&out_path.with_file_name("timings.csv"), &samples)
-        .expect("failed to write get_item_latency timings CSV");
+fn run_native_v6(
+    manager: &QuickAccessManager,
+    root: &Path,
+    iterations: usize,
+    warmup: usize,
+    samples: &mut Vec<Sample>,
+) -> Result<(&'static str, Vec<Scenario>), String> {
+    for index in 0..NATIVE_RECENT_ITEMS {
+        let path = recent_target(root, index);
+        fs::write(&path, b"wincent native get_item latency fixture\n")
+            .map_err(|error| format!("create {}: {error}", path.display()))?;
+        manager
+            .add_item(&path)
+            .map_err(|error| format!("add native recent {}: {error}", path.display()))?;
+    }
+    for index in 0..NATIVE_FREQUENT_ITEMS {
+        let path = frequent_target(root, index);
+        fs::create_dir_all(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
+        manager
+            .pin_frequent_folder(&path)
+            .map_err(|error| format!("pin native frequent {}: {error}", path.display()))?;
+    }
+
+    stop_explorer()?;
+    start_explorer()?;
+    let mut scenarios = Vec::new();
+    if let Some(recent) = native_scenario(manager, "recent_native", QuickAccess::RecentFiles)? {
+        measure_scenario(&recent, iterations, warmup, samples)?;
+        scenarios.push(recent);
+    }
+    if let Some(frequent) =
+        native_scenario(manager, "frequent_native", QuickAccess::FrequentFolders)?
+    {
+        measure_scenario(&frequent, iterations, warmup, samples)?;
+        scenarios.push(frequent);
+    }
+    if scenarios.is_empty() {
+        return Err("native Quick Access lists are both unavailable".to_string());
+    }
+    Ok(("native_v6", scenarios))
+}
+
+fn native_scenario(
+    manager: &QuickAccessManager,
+    id: &'static str,
+    kind: QuickAccess,
+) -> Result<Option<Scenario>, String> {
+    let expected_raw = raw_entries(manager, kind)?.len();
+    let expected_shell = shell_query(kind)?.len();
+    if expected_raw == 0 || expected_shell == 0 {
+        println!("native {kind:?} unavailable: raw={expected_raw} shell={expected_shell}");
+        return Ok(None);
+    }
+    Ok(Some(Scenario {
+        id,
+        kind,
+        expected_shell,
+        expected_raw,
+    }))
 }
 
 fn parse_env_usize(name: &str, default: usize) -> usize {
@@ -884,6 +985,8 @@ fn print_summary(stats: &BTreeMap<&'static str, BTreeMap<&'static str, Stats>>) 
 
 fn write_result_json(
     path: &Path,
+    platform: TestPlatform,
+    fixture_mode: &str,
     iterations: usize,
     warmup: usize,
     scenarios: &[Scenario],
@@ -893,12 +996,38 @@ fn write_result_json(
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"test\": \"get_item_latency\",\n");
+    json.push_str(&format!(
+        "  \"platform\": {},\n",
+        json_escape(platform.as_str())
+    ));
+    json.push_str(&format!(
+        "  \"fixture_mode\": {},\n",
+        json_escape(fixture_mode)
+    ));
+    let recent_available = scenarios
+        .iter()
+        .any(|scenario| scenario.kind == QuickAccess::RecentFiles);
+    let frequent_available = scenarios
+        .iter()
+        .any(|scenario| scenario.kind == QuickAccess::FrequentFolders);
+    json.push_str(&format!(
+        "  \"fixture_capabilities\": {{\"recent\": {}, \"frequent\": {}}},\n",
+        recent_available, frequent_available
+    ));
     json.push_str(&format!("  \"iterations\": {iterations},\n"));
     json.push_str(&format!("  \"warmup\": {warmup},\n"));
     json.push_str(&format!(
-        "  \"fixture\": {{\"recent_raw\": {RECENT_RAW}, \"recent_visible\": {RECENT_VISIBLE}, \
-         \"frequent_raw\": {FREQUENT_RAW}, \"frequent_pinned\": {FREQUENT_PINNED}, \
-         \"frequent_visible_unpinned\": {FREQUENT_VISIBLE_UNPINNED}}},\n"
+        "  \"fixture\": {{\"requested_recent\": {}, \"requested_frequent\": {}}},\n",
+        if platform == TestPlatform::Win10 {
+            RECENT_RAW
+        } else {
+            NATIVE_RECENT_ITEMS
+        },
+        if platform == TestPlatform::Win10 {
+            FREQUENT_RAW
+        } else {
+            NATIVE_FREQUENT_ITEMS
+        }
     ));
     json.push_str("  \"scenarios\": {\n");
     let entries: Vec<String> = scenarios
