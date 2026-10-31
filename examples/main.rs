@@ -1364,6 +1364,15 @@ fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
         "dest.add_delete_action_count: {}",
         dest.add_delete_action_count()
     );
+    println!("dest.header_reserved_1c: {}", dest.header_reserved_1c());
+    match parsed.dest_list_property_store() {
+        Some(stream) => println!(
+            "dest.property_store: size={} value={:?}",
+            stream.len(),
+            parsed.dest_list_property_store_value()
+        ),
+        None => println!("dest.property_store: <absent>"),
+    }
     println!("dest.diagnostics: {}", dest.diagnostics().len());
     print_dest_entries(&dest_entries(dest), limit);
 }

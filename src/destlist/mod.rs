@@ -29,6 +29,12 @@
 //!
 //! **DestList versions 4 and 6 are supported.** Other persisted versions return
 //! [`crate::error::WincentError::DestListUnsupportedVersion`].
+//! Windows 11 build 26100.6584 v6 samples use the same observed header, entry,
+//! variable path/SPS layout, and CRC-64 algorithm as v4. V6 Recent Files and
+//! Frequent Folders still require different metadata rules: Recent entries
+//! commonly use rank `-1`, while unpinned Frequent entries use nonnegative
+//! ranks. V6 files may also contain a `DestListPropertyStore` stream, exposed
+//! through [`AutomaticDestinations::dest_list_property_store`].
 //! Explorer can also keep a zero-length `DestList` stream before the first
 //! item is recorded. The parser represents that uninitialized state as version
 //! `0`; it is not a persisted DestList format version.
@@ -71,7 +77,8 @@ pub use parser::{
     recent_files_dest_path, visible_entries, visible_entries_for_kind, AutomaticDestinations,
     CfbDirectoryEntry, CfbInfo, CfbStream, DestList, DestListEntry, DestListKind, Diagnostic,
     DiagnosticSeverity, FrequentFolderPinStatus, PathSource, DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS,
-    DEFAULT_RECENT_FILES_RESULT_LIMIT, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
+    DEFAULT_RECENT_FILES_RESULT_LIMIT, DEST_LIST_PROPERTY_STORE_STREAM,
+    FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
 };
 pub use time::filetime_to_system_time;
 

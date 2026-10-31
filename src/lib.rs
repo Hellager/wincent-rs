@@ -136,7 +136,7 @@ pub mod prelude {
         DestList, DestListEntry, DestListItemUpdate, DestListKind, DestListPosition, Diagnostic,
         DiagnosticSeverity, FrequentFolderPinStatus, PathSource,
         DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS, DEFAULT_RECENT_FILES_RESULT_LIMIT,
-        FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
+        DEST_LIST_PROPERTY_STORE_STREAM, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
     };
 }
 

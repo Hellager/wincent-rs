@@ -21,6 +21,7 @@ pub(crate) fn dest_list_for_test(version: u32, entries: Vec<DestListEntry>) -> D
         last_entry_id: entries.last().map(DestListEntry::entry_id).unwrap_or(0),
         last_entry_number: entries.last().map(DestListEntry::entry_number).unwrap_or(0),
         add_delete_action_count: 0,
+        header_reserved_1c: 0,
         entries,
         diagnostics: Vec::new(),
     }
