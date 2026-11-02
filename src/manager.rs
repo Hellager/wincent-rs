@@ -946,10 +946,9 @@ impl QuickAccessManager {
     ///
     /// - files use the Recent Files `remove` Shell verb, which blocks the entry
     ///   from the UI but can retain its DestList entry and numeric stream;
-    /// - visible unpinned directories use
-    ///   `IApplicationDestinations::RemoveDestination`, which physically
-    ///   removes the Frequent Folders entry and numeric stream on supported
-    ///   Windows builds;
+    /// - visible unpinned directories use the native `removefromhome` Shell
+    ///   verb, which blocks the entry from the UI while retaining its DestList
+    ///   entry and numeric stream;
     /// - pinned directories use the native `unpinfromhome` Shell verb. Windows
     ///   can retain an entry with cleared usage or physically remove a zero-use
     ///   entry.
@@ -2791,7 +2790,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_unpinned_frequent_folder_uses_remove_destination_path() -> WincentResult<()> {
+    fn remove_unpinned_frequent_folder_uses_native_verb_path() -> WincentResult<()> {
         let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
         backend.set_frequent_pin_status(crate::destlist::FrequentFolderPinStatus::Unpinned);
         let manager =

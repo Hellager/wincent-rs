@@ -29,19 +29,16 @@ use crate::{
 use std::ffi::OsString;
 use std::os::windows::prelude::*;
 use std::time::{Duration, Instant};
-use windows::core::{Interface, PCWSTR};
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::core::Interface;
 use windows::Win32::System::Variant::VARIANT;
-use windows::Win32::UI::Shell::{
-    ApplicationDestinations, Folder3, IApplicationDestinations, IShellItem, SHAddToRecentDocs,
-    SHCreateItemFromParsingName,
-};
+use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 /// Default timeout for COM STA thread operations
 const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const FREQUENT_FOLDER_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(1);
 const FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const EXPLORER_APP_USER_MODEL_ID: &str = "Microsoft.Windows.Explorer";
+const REMOVE_FROM_HOME_VERB: &str = "removefromhome";
+const UNPIN_FROM_HOME_VERB: &str = "unpinfromhome";
 /// SHARD_PATHW registers a wide-string path in the recent documents list.
 const SHARD_PATHW: u32 = 0x0000_0003;
 
@@ -147,63 +144,7 @@ fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> Win
     Ok(false)
 }
 
-fn remove_unpinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
-    let path_wide: Vec<u16> = OsString::from(path).encode_wide().chain(Some(0)).collect();
-    let app_id_wide: Vec<u16> = OsString::from(EXPLORER_APP_USER_MODEL_ID)
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
-    // SAFETY: This runs on a COM-initialized STA thread. Both UTF-16 buffers are
-    // NUL-terminated and remain alive for all calls. The windows wrappers own
-    // the returned COM interfaces and release them when they leave scope.
-    unsafe {
-        let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path_wide.as_ptr()), None)
-            .map_err(|error| {
-                WincentError::SystemError(format!(
-                    "SHCreateItemFromParsingName failed for {path}: {error}"
-                ))
-            })?;
-        let destinations: IApplicationDestinations =
-            CoCreateInstance(&ApplicationDestinations, None, CLSCTX_INPROC_SERVER).map_err(
-                |error| {
-                    WincentError::SystemError(format!(
-                        "Failed to create IApplicationDestinations: {error}"
-                    ))
-                },
-            )?;
-        destinations
-            .SetAppID(PCWSTR(app_id_wide.as_ptr()))
-            .map_err(|error| {
-                WincentError::SystemError(format!(
-                    "IApplicationDestinations::SetAppID failed: {error}"
-                ))
-            })?;
-        destinations.RemoveDestination(&item).map_err(|error| {
-            WincentError::SystemError(format!(
-                "IApplicationDestinations::RemoveDestination failed for {path}: {error}"
-            ))
-        })?;
-    }
-
-    let mut contains = contains_frequent_folder_current_sta;
-    let mut sleep = std::thread::sleep;
-    if wait_for_frequent_folder_removed(
-        path,
-        FREQUENT_FOLDER_VERIFICATION_TIMEOUT,
-        FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL,
-        &mut contains,
-        &mut sleep,
-    )? {
-        return Ok(());
-    }
-
-    Err(WincentError::SystemError(format!(
-        "RemoveDestination succeeded but Frequent Folders still contains {path}"
-    )))
-}
-
-fn remove_pinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
+fn remove_frequent_folder_with_verb_current_sta(path: &str, verb: &str) -> WincentResult<()> {
     if !contains_frequent_folder_current_sta(path)? {
         return Err(WincentError::not_in_quick_access(
             path,
@@ -211,9 +152,9 @@ fn remove_pinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
         ));
     }
 
-    if !try_invoke_verb_on_frequent_folder_current_sta(path, "unpinfromhome")? {
+    if !try_invoke_verb_on_frequent_folder_current_sta(path, verb)? {
         return Err(WincentError::SystemError(format!(
-            "Frequent Folders item disappeared before unpinfromhome: {path}"
+            "Frequent Folders item disappeared before {verb}: {path}"
         )));
     }
 
@@ -230,8 +171,16 @@ fn remove_pinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
     }
 
     Err(WincentError::SystemError(format!(
-        "unpinfromhome completed but Frequent Folders still contains {path}"
+        "{verb} completed but Frequent Folders still contains {path}"
     )))
+}
+
+fn remove_unpinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
+    remove_frequent_folder_with_verb_current_sta(path, REMOVE_FROM_HOME_VERB)
+}
+
+fn remove_pinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
+    remove_frequent_folder_with_verb_current_sta(path, UNPIN_FROM_HOME_VERB)
 }
 
 /// Invokes a Shell verb directly on a folder using Folder.Self pattern
@@ -1243,8 +1192,8 @@ pub(crate) fn remove_from_frequent_folders_with_timeout(
     unpin_frequent_folder(path, timeout)
 }
 
-/// Removes a visible unpinned Frequent Folders entry through
-/// `IApplicationDestinations::RemoveDestination`.
+/// Hides a visible unpinned Frequent Folders entry with the native
+/// `removefromhome` Shell verb.
 pub(crate) fn remove_unpinned_frequent_folder_with_timeout(
     path: &str,
     timeout: std::time::Duration,
