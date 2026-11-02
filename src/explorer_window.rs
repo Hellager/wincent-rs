@@ -1,43 +1,15 @@
 use crate::{error::WincentError, WincentResult};
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
-use std::thread;
 use std::time::Duration;
 use windows::core::Interface;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoTaskMemFree, IDispatch, IServiceProvider, CLSCTX_LOCAL_SERVER,
+    CoCreateInstance, IDispatch, IServiceProvider, CLSCTX_LOCAL_SERVER,
 };
-use windows::Win32::System::Ole::READYSTATE_COMPLETE;
-use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{
-    FOLDERID_Desktop, IShellBrowser, IShellWindows, IWebBrowser2, SHGetKnownFolderPath,
-    SID_STopLevelBrowser, ShellWindows, KNOWN_FOLDER_FLAG,
+    IShellBrowser, IShellWindows, IWebBrowser2, SID_STopLevelBrowser, ShellWindows,
 };
-
-const QUICK_ACCESS_NAMESPACE: &str = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
-const HOME_NAMESPACE: &str = "shell:::{f874310e-b6b7-47dc-bc84-b9e6b38f5903}";
-const BROWSER_READY_POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub(crate) struct NavigationCycleResult {
-    pub(crate) original: ExplorerLocation,
-    pub(crate) after_desktop: ExplorerLocation,
-    pub(crate) restored: ExplorerLocation,
-}
 
 pub(crate) fn refresh_shell_views_with_timeout(timeout: Duration) -> WincentResult<()> {
     crate::com_thread::run_on_sta_thread(refresh_shell_views_on_sta, timeout)
-}
-
-#[allow(dead_code)]
-pub(crate) fn navigate_recent_access_window_to_desktop_and_back(
-) -> WincentResult<Option<NavigationCycleResult>> {
-    crate::com_thread::run_on_sta_thread(
-        navigate_recent_access_window_to_desktop_and_back_on_sta,
-        Duration::from_secs(20),
-    )
 }
 
 fn refresh_shell_views_on_sta() -> WincentResult<()> {
@@ -80,55 +52,6 @@ struct RefreshResult {
 pub(crate) struct ExplorerLocation {
     pub(crate) location_name: String,
     pub(crate) location_url: String,
-}
-
-fn navigate_recent_access_window_to_desktop_and_back_on_sta(
-) -> WincentResult<Option<NavigationCycleResult>> {
-    let (shell_windows, count) = shell_windows_with_count()?;
-    let Some(web_browser) = find_recent_access_web_browser(&shell_windows, count)? else {
-        return Ok(None);
-    };
-
-    let original = browser_location(&web_browser);
-    let desktop = desktop_path()?;
-    let desktop_url = file_url_from_path(&desktop);
-    navigate_to_url(&web_browser, &desktop_url)?;
-    let after_desktop = browser_location(&web_browser);
-
-    navigate_back_to_location(&web_browser, &original)?;
-    let restored = browser_location(&web_browser);
-
-    Ok(Some(NavigationCycleResult {
-        original,
-        after_desktop,
-        restored,
-    }))
-}
-
-fn find_recent_access_web_browser(
-    shell_windows: &IShellWindows,
-    count: i32,
-) -> WincentResult<Option<IWebBrowser2>> {
-    for index in 0..count {
-        // SAFETY: `shell_windows` is a live COM collection from ShellWindows;
-        // the VARIANT index is valid for the duration of the call.
-        let dispatch = match unsafe { shell_windows.Item(&index.into()) } {
-            Ok(dispatch) => dispatch,
-            Err(_) => continue,
-        };
-
-        let web_browser = match dispatch.cast::<IWebBrowser2>() {
-            Ok(web_browser) => web_browser,
-            Err(_) => continue,
-        };
-
-        let location = browser_location(&web_browser);
-        if is_recent_access_location(&location) {
-            return Ok(Some(web_browser));
-        }
-    }
-
-    Ok(None)
 }
 
 fn refresh_recent_access_shell_views(
@@ -194,111 +117,6 @@ fn browser_location(web_browser: &IWebBrowser2) -> ExplorerLocation {
         location_name,
         location_url,
     }
-}
-
-fn navigate_to_url(web_browser: &IWebBrowser2, url: &str) -> WincentResult<()> {
-    let target = VARIANT::from(url);
-    let empty = VARIANT::default();
-    // SAFETY: `web_browser` is a live IWebBrowser2 interface and all VARIANT
-    // arguments live until Navigate2 returns.
-    unsafe {
-        web_browser
-            .Navigate2(
-                &target,
-                Some(&empty),
-                Some(&empty),
-                Some(&empty),
-                Some(&empty),
-            )
-            .map_err(|e| {
-                WincentError::SystemError(format!("Failed to navigate Explorer to {}: {}", url, e))
-            })?;
-    }
-    wait_for_browser_ready(web_browser, Duration::from_secs(5));
-    Ok(())
-}
-
-fn navigate_back_to_location(
-    web_browser: &IWebBrowser2,
-    original: &ExplorerLocation,
-) -> WincentResult<()> {
-    if !original.location_url.is_empty() {
-        return navigate_to_url(web_browser, &original.location_url);
-    }
-
-    let mut errors = Vec::new();
-    for candidate in [QUICK_ACCESS_NAMESPACE, HOME_NAMESPACE] {
-        match navigate_to_url(web_browser, candidate) {
-            Ok(()) => {
-                let current = browser_location(web_browser);
-                if is_recent_access_location(&current) {
-                    return Ok(());
-                }
-            }
-            Err(error) => errors.push(error.to_string()),
-        }
-    }
-
-    Err(WincentError::SystemError(format!(
-        "Failed to navigate Explorer back to Quick Access/Home: {}",
-        errors.join("; ")
-    )))
-}
-
-fn wait_for_browser_ready(web_browser: &IWebBrowser2, timeout: Duration) {
-    let started = std::time::Instant::now();
-
-    while started.elapsed() < timeout {
-        // SAFETY: `web_browser` is a live IWebBrowser2 interface; failures are
-        // treated as not busy so the wait remains best-effort.
-        let busy = unsafe {
-            web_browser
-                .Busy()
-                .map(|value| value.0 != 0)
-                .unwrap_or(false)
-        };
-        // SAFETY: Same live IWebBrowser2 interface; failures are treated as
-        // ready to avoid waiting forever on a disappearing window.
-        let ready = unsafe {
-            web_browser
-                .ReadyState()
-                .map(|value| value == READYSTATE_COMPLETE)
-                .unwrap_or(true)
-        };
-
-        if !busy && ready {
-            return;
-        }
-
-        thread::sleep(BROWSER_READY_POLL_INTERVAL);
-    }
-}
-
-fn desktop_path() -> WincentResult<PathBuf> {
-    // SAFETY: SHGetKnownFolderPath allocates a PWSTR for a known folder ID with
-    // no token handle; the allocation is freed below with CoTaskMemFree.
-    let path = unsafe { SHGetKnownFolderPath(&FOLDERID_Desktop, KNOWN_FOLDER_FLAG(0x00), None) }
-        .map_err(|e| {
-            WincentError::SystemError(format!("Failed to get Desktop known folder path: {}", e))
-        })?;
-
-    // SAFETY: `path` is the PWSTR allocated by SHGetKnownFolderPath above. Its
-    // contents are copied before freeing with the documented allocator.
-    let desktop = unsafe {
-        let wide = OsString::from_wide(path.as_wide());
-        CoTaskMemFree(Some(path.as_ptr() as _));
-        PathBuf::from(wide)
-    };
-
-    Ok(desktop)
-}
-
-fn file_url_from_path(path: &Path) -> String {
-    let mut value = path.to_string_lossy().replace('\\', "/");
-    if value.len() >= 2 && value.as_bytes()[1] == b':' {
-        value = format!("/{value}");
-    }
-    format!("file://{value}")
 }
 
 fn refresh_shell_view(dispatch: &IDispatch) -> WincentResult<()> {
@@ -472,43 +290,6 @@ mod tests {
                 "detected Quick Access/Home windows but refreshed none"
             );
         }
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Requires an interactive desktop session with a Quick Access/Home Explorer window"]
-    fn test_navigate_recent_access_window_to_desktop_and_back() -> WincentResult<()> {
-        let Some(result) = navigate_recent_access_window_to_desktop_and_back()? else {
-            println!("No Quick Access/Home Explorer window detected; nothing to navigate");
-            return Ok(());
-        };
-
-        println!(
-            "Original: name=\"{}\" url=\"{}\"",
-            result.original.location_name, result.original.location_url
-        );
-        println!(
-            "After desktop: name=\"{}\" url=\"{}\"",
-            result.after_desktop.location_name, result.after_desktop.location_url
-        );
-        println!(
-            "Restored: name=\"{}\" url=\"{}\"",
-            result.restored.location_name, result.restored.location_url
-        );
-
-        assert!(
-            result
-                .after_desktop
-                .location_url
-                .to_ascii_lowercase()
-                .starts_with("file:///"),
-            "expected Explorer to navigate to a file URL for Desktop"
-        );
-        assert!(
-            is_recent_access_location(&result.restored),
-            "expected Explorer to navigate back to Quick Access/Home"
-        );
 
         Ok(())
     }

@@ -3,7 +3,7 @@
 //! Provides system-level manipulation of Quick Access locations including:
 //! - Recent files management
 //! - Frequent folders pinning
-//! - Native add operations and compatibility removal fallbacks
+//! - Native add and removal operations
 //!
 //! # Key Functionality
 //! - File addition/removal from Recent Items
@@ -14,15 +14,12 @@
 //! # Operation Safety
 //! 1. Dedicated STA threading for Shell COM operations
 //! 2. Path validation before execution
-//! 3. PowerShell script sandboxing
-//! 4. Clean error propagation
+//! 3. Clean error propagation
 
 use crate::{
     destlist::FrequentFolderPinStatus,
     error::WincentError,
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
-    script_executor::ScriptExecutor,
-    script_strategy::PSScript,
     utils::{paths_equal, validate_path, PathType},
     QuickAccess, WincentResult,
 };
@@ -33,8 +30,6 @@ use windows::core::Interface;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
-/// Default timeout for COM STA thread operations
-const DEFAULT_COM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const FREQUENT_FOLDER_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(1);
 const FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const REMOVE_FROM_HOME_VERB: &str = "removefromhome";
@@ -185,8 +180,9 @@ fn remove_pinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
 
 /// Invokes a Shell verb directly on a folder using Folder.Self pattern
 ///
-/// This function uses the PowerShell-equivalent pattern: `$shell.Namespace(path).Self.InvokeVerb(verb)`.
-/// It's more efficient than enumerating parent folder items to find the target.
+/// This function invokes the verb through the Shell `Namespace(path).Self`
+/// pattern. It is more efficient than enumerating parent folder items to find
+/// the target.
 ///
 /// # Threading Model
 ///
@@ -285,49 +281,6 @@ fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Wince
     )
 }
 
-/// Checks if a folder is in the Frequent Folders namespace using native COM
-///
-/// This function performs a pure native COM check without PowerShell fallback.
-/// It uses [`paths_equal()`] for path comparison to handle case insensitivity,
-/// slash normalization, and trailing slashes.
-///
-/// # Threading Model
-///
-/// Runs on a dedicated STA thread to avoid Windows 11 deadlock issues.
-///
-/// # Arguments
-///
-/// * `path` - The full path to check
-///
-/// # Returns
-///
-/// Returns `true` if the folder is found in the Frequent Folders namespace,
-/// `false` otherwise.
-///
-/// # Errors
-///
-/// - `SystemError`: COM operation failed (e.g., failed to open namespace, get item count)
-///
-/// # Path Matching
-///
-/// Uses [`paths_equal()`] for robust path comparison, which handles:
-/// - Case insensitivity (`C:\\Test` == `c:\\test`)
-/// - Slash normalization (`C:\\Test` == `C:/Test`)
-/// - Trailing slashes (`C:\\Test` == `C:\\Test\\`)
-/// - Symlinks and relative paths (via canonicalization)
-///
-/// # See Also
-///
-/// - [`unpin_frequent_folder_native()`] - Uses this function for pre-check
-#[allow(dead_code)]
-fn is_in_frequent_folders_native(path: &str, timeout: std::time::Duration) -> WincentResult<bool> {
-    let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
-        move || contains_frequent_folder_current_sta(&path),
-        timeout,
-    )
-}
-
 fn wait_for_frequent_folder_presence_with<C, S>(
     path: &str,
     expected: bool,
@@ -377,319 +330,6 @@ where
         contains,
         sleep,
     )
-}
-
-fn frequent_folder_pinned_status(path: &str) -> FrequentFolderPinStatus {
-    crate::destlist::frequent_folder_pin_status(path).unwrap_or(FrequentFolderPinStatus::NotFound)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_unpin_frequent_folder_state_machine<C, N, S, Sleep>(
-    path: &str,
-    pinned_status: FrequentFolderPinStatus,
-    verification_timeout: Duration,
-    poll_interval: Duration,
-    mut contains: C,
-    mut invoke_on_namespace: N,
-    mut invoke_on_self: S,
-    mut sleep: Sleep,
-) -> WincentResult<()>
-where
-    C: FnMut(&str) -> WincentResult<bool>,
-    N: FnMut(&str, &str) -> WincentResult<bool>,
-    S: FnMut(&str, &str) -> WincentResult<()>,
-    Sleep: FnMut(Duration),
-{
-    if !contains(path)? {
-        return Err(WincentError::not_in_quick_access(
-            path,
-            QuickAccess::FrequentFolders,
-        ));
-    }
-
-    match pinned_status {
-        FrequentFolderPinStatus::Pinned => {
-            let _ = invoke_on_namespace(path, "unpinfromhome");
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-
-            invoke_on_self(path, "pintohome")?;
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-
-            let _ = invoke_on_namespace(path, "unpinfromhome");
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-        }
-        FrequentFolderPinStatus::Unpinned => {
-            invoke_on_self(path, "pintohome")?;
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-
-            let _ = invoke_on_namespace(path, "unpinfromhome");
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-
-            invoke_on_self(path, "pintohome")?;
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-        }
-        FrequentFolderPinStatus::NotFound => {
-            let _ = invoke_on_namespace(path, "unpinfromhome");
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-
-            invoke_on_self(path, "pintohome")?;
-            if wait_for_frequent_folder_removed(
-                path,
-                verification_timeout,
-                poll_interval,
-                &mut contains,
-                &mut sleep,
-            )? {
-                return Ok(());
-            }
-        }
-    }
-
-    Err(WincentError::SystemError(format!(
-        "Failed to remove frequent folder: {}",
-        path
-    )))
-}
-
-///
-/// This function implements a **state-first compatible strategy**:
-///
-/// 1. **Check if folder is present**
-///    - Query the Frequent Folders namespace to verify the folder is visible
-///    - If absent, return `NotInQuickAccess` error immediately
-///
-/// 2. **Pinned entries**
-///    - Prefer `unpinfromhome`, then verify removal
-///
-/// 3. **Unpinned or unknown entries**
-///    - Try `pintohome`/`unpinfromhome` as compatible Shell verbs
-///    - Verify after every verb because `pintohome` can add or remove state
-///
-/// Every removal attempt is followed by a Frequent Folders query; the state
-/// machine does not trust `InvokeVerb` success alone.
-///
-/// # Observed Shell Verb Behavior
-///
-/// Manual diagnostics on Windows 10 `10.0.19041.6456` and Windows 11
-/// `10.0.26200.8655` both showed:
-///
-/// - `unpinfromhome` can remove a pinned Frequent Folders item when invoked on
-///   the matching item from the Frequent Folders namespace.
-/// - [`crate::manager::QuickAccessManager::remove_item`] can remove an
-///   unpinned frequent entry.
-/// - `pintohome` can add a folder, but can also toggle-remove existing
-///   Frequent Folders state.
-///
-/// Shell verb behavior should not be modeled by Windows version alone; keep
-/// this path state-first and verification-driven.
-///
-/// # Threading Model
-///
-/// Runs the full check, mutation, verification, and fallback sequence inside a
-/// single dedicated STA thread to avoid repeated COM thread dispatches.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be unpinned
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was successfully unpinned.
-///
-/// # Errors
-///
-/// - `NotInQuickAccess`: The folder is not in Frequent Folders
-/// - `SystemError`: COM operation failed (e.g., permission denied, COM error)
-///
-/// # See Also
-///
-/// - [`unpin_frequent_folder()`] - Higher-level internal wrapper with PowerShell fallback
-fn unpin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
-        move || {
-            run_unpin_frequent_folder_state_machine(
-                &path,
-                frequent_folder_pinned_status(&path),
-                FREQUENT_FOLDER_VERIFICATION_TIMEOUT,
-                FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL,
-                contains_frequent_folder_current_sta,
-                try_invoke_verb_on_frequent_folder_current_sta,
-                invoke_verb_on_self_current_sta,
-                std::thread::sleep,
-            )
-        },
-        timeout,
-    )
-}
-
-/// Executes a PowerShell script after validating the given path
-///
-/// This function provides a safe wrapper for PowerShell script execution with:
-///
-/// 1. **Path validation**: Ensures the path exists and matches the expected type
-/// 2. **Script path resolution**: Gets the dynamic script path for the operation
-/// 3. **Script execution**: Executes the PowerShell script with the path parameter
-/// 4. **Error handling**: Converts PowerShell errors to structured `WincentError`
-///
-/// # Arguments
-///
-/// * `script` - The PowerShell script type to execute for supported removal or
-///   compatibility operations
-/// * `path` - The file or folder path to pass to the script
-/// * `path_type` - The expected path type (`PathType::File` or `PathType::Directory`)
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the script executed successfully (exit code 0).
-///
-/// # Errors
-///
-/// - `InvalidPath`: Path validation failed (empty, doesn't exist, wrong type)
-/// - `PowerShellExecution`: Script execution failed (non-zero exit code)
-///   - Includes detailed error information: exit code, stdout, stderr, duration
-///   - Error kind is inferred from stderr content (e.g., `NotFound`, `PermissionDenied`)
-///
-/// # Performance
-///
-/// PowerShell script execution is significantly slower than native COM:
-/// - Typical execution time: 200-500ms
-/// - Includes PowerShell startup overhead (~100-200ms)
-///
-/// # Safety
-///
-/// - Paths are validated before script generation
-/// - Path parameters are embedded only after PowerShell single-quote escaping
-/// - Scripts are executed with `Command::args`, avoiding shell command-line interpolation
-/// - Generated scripts are stored under wincent's temp-script directory and refreshed when stale
-///
-/// # See Also
-///
-/// - [`crate::script_executor::ScriptExecutor`] - PowerShell script executor
-/// - [`crate::script_storage::ScriptStorage`] - Script storage and retrieval
-#[allow(dead_code)]
-pub(crate) fn execute_script_with_validation(
-    script: PSScript,
-    path: &str,
-    path_type: PathType,
-) -> WincentResult<()> {
-    execute_script_with_validation_and_timeout(
-        script,
-        path,
-        path_type,
-        ScriptExecutor::execute_ps_script,
-    )
-}
-
-fn execute_script_with_validation_and_timeout<F>(
-    script: PSScript,
-    path: &str,
-    path_type: PathType,
-    mut execute: F,
-) -> WincentResult<()>
-where
-    F: FnMut(PSScript, Option<&str>) -> WincentResult<std::process::Output>,
-{
-    validate_path(path, path_type)?;
-
-    let start = std::time::Instant::now();
-    let script_path = match path_type {
-        PathType::File | PathType::Directory => {
-            crate::script_storage::ScriptStorage::get_dynamic_script_path(script, path)?
-        }
-    };
-    let output = execute(script, Some(path))?;
-    let duration = start.elapsed();
-
-    parse_script_execution_result(output, script, script_path, path, duration)
-}
-
-fn parse_script_execution_result(
-    output: std::process::Output,
-    script: PSScript,
-    script_path: std::path::PathBuf,
-    path: &str,
-    duration: Duration,
-) -> WincentResult<()> {
-    if output.status.success() {
-        return Ok(());
-    }
-
-    use crate::error::PowerShellError;
-    let stderr = String::from_utf8(output.stderr)
-        .unwrap_or_else(|_| "Unable to parse script error output".to_string());
-    let stdout = String::from_utf8(output.stdout).unwrap_or_default();
-
-    // Infer error kind from stderr content
-    let kind = PowerShellError::infer_kind_from_stderr(&stderr);
-
-    Err(WincentError::PowerShellExecution(Box::new(
-        PowerShellError::builder(script.operation())
-            .kind(kind)
-            .exit_code(output.status.code())
-            .stdout(stdout)
-            .stderr(stderr)
-            .script_path(script_path)
-            .parameters(path)
-            .duration(duration)
-            .build(),
-    )))
 }
 
 /// Inner: runs on the current STA thread. Only call from within `run_on_sta_thread`.
@@ -794,7 +434,6 @@ pub(crate) fn add_file_to_recent_native(path: &str, timeout: Duration) -> Wincen
 ///
 /// # See Also
 ///
-/// - [`remove_recent_file_powershell()`] - PowerShell fallback implementation
 /// - [`crate::manager::QuickAccessManager::remove_item`] - Public removal API
 fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
     let path = path.to_owned();
@@ -858,160 +497,11 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
     )
 }
 
-/// Removes a file from the Windows Recent Items list using PowerShell
-///
-/// This is the PowerShell fallback implementation for removing recent files.
-/// It's used when the native COM approach fails (e.g., permission issues,
-/// COM initialization failures).
-///
-/// # Arguments
-///
-/// * `path` - The full path to the file to be removed
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the PowerShell script executed successfully.
-///
-/// # Errors
-///
-/// - `InvalidPath`: Path validation failed
-/// - `PowerShellExecution`: Script execution failed
-///
-/// # Performance
-///
-/// - Typical execution time: 200-500ms (significantly slower than native COM)
-/// - Includes PowerShell startup overhead
-///
-/// # See Also
-///
-/// - [`remove_recent_file_native()`] - Native COM implementation (fast path)
-/// - [`crate::manager::QuickAccessManager::remove_item`] - Public removal API
-#[allow(dead_code)]
-pub(crate) fn remove_recent_file_powershell(path: &str) -> WincentResult<()> {
-    remove_recent_file_powershell_with_timeout(path, DEFAULT_COM_TIMEOUT)
-}
-
-fn remove_recent_file_powershell_with_timeout(path: &str, timeout: Duration) -> WincentResult<()> {
-    match execute_remove_recent_file_script_with_timeout(
-        path,
-        timeout,
-        |script, parameter, timeout| {
-            ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
-        },
-    ) {
-        Err(error) => Err(map_remove_recent_file_powershell_error(path, error)),
-        ok => ok,
-    }
-}
-
-fn execute_remove_recent_file_script_with_timeout<F>(
-    path: &str,
-    timeout: Duration,
-    mut execute: F,
-) -> WincentResult<()>
-where
-    F: FnMut(PSScript, Option<&str>, Duration) -> WincentResult<std::process::Output>,
-{
-    execute_script_with_validation_and_timeout(
-        PSScript::RemoveRecentFile,
-        path,
-        PathType::File,
-        |script, parameter| execute(script, parameter, timeout),
-    )
-}
-
-fn map_remove_recent_file_powershell_error(path: &str, error: WincentError) -> WincentError {
-    const NOT_IN_QUICK_ACCESS_SENTINEL: &str = "WINCENT_NOT_IN_QUICK_ACCESS";
-
-    match error {
-        WincentError::PowerShellExecution(ref powershell_error)
-            if powershell_error
-                .raw_stdout()
-                .contains(NOT_IN_QUICK_ACCESS_SENTINEL) =>
-        {
-            WincentError::not_in_quick_access(path, QuickAccess::RecentFiles)
-        }
-        other => other,
-    }
-}
-
-/// Unpins a folder from the Windows Quick Access Frequent Folders list using PowerShell
-///
-/// This is the PowerShell fallback implementation for unpinning folders.
-/// It's used when the native COM approach fails (e.g., permission issues,
-/// COM initialization failures, Windows 11 deadlock without message pump).
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be unpinned
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the PowerShell script executed successfully.
-///
-/// # Errors
-///
-/// - `InvalidPath`: Path validation failed (not a directory, doesn't exist)
-/// - `PowerShellExecution`: Script execution failed (e.g., folder could not be removed)
-///
-/// # Performance
-///
-/// - Typical execution time: 200-500ms (significantly slower than native COM)
-/// - Includes PowerShell startup overhead (~100-200ms)
-///
-/// # See Also
-///
-/// - [`unpin_frequent_folder_native()`] - Native COM implementation (fast path)
-/// - [`unpin_frequent_folder()`] - Internal wrapper with fallback strategy
-fn unpin_frequent_folder_powershell(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    match execute_unpin_frequent_folder_script_with_timeout(
-        path,
-        timeout,
-        |script, parameter, timeout| {
-            ScriptExecutor::execute_ps_script_with_timeout(script, parameter, timeout)
-        },
-    ) {
-        Err(error) => Err(map_unpin_frequent_folder_powershell_error(path, error)),
-        ok => ok,
-    }
-}
-
-fn execute_unpin_frequent_folder_script_with_timeout<F>(
-    path: &str,
-    timeout: Duration,
-    mut execute: F,
-) -> WincentResult<()>
-where
-    F: FnMut(PSScript, Option<&str>, Duration) -> WincentResult<std::process::Output>,
-{
-    execute_script_with_validation_and_timeout(
-        PSScript::UnpinFromFrequentFolder,
-        path,
-        PathType::Directory,
-        |script, parameter| execute(script, parameter, timeout),
-    )
-}
-
-fn map_unpin_frequent_folder_powershell_error(path: &str, error: WincentError) -> WincentError {
-    const NOT_IN_QUICK_ACCESS_SENTINEL: &str = "WINCENT_NOT_IN_QUICK_ACCESS";
-
-    match error {
-        WincentError::PowerShellExecution(ref powershell_error)
-            if powershell_error
-                .raw_stdout()
-                .contains(NOT_IN_QUICK_ACCESS_SENTINEL) =>
-        {
-            WincentError::not_in_quick_access(path, QuickAccess::FrequentFolders)
-        }
-        other => other,
-    }
-}
-
 /// Pins a folder to the Windows Quick Access Frequent Folders list with COM.
 ///
 /// The folder must exist and be a directory. The implementation performs its
 /// pinned-state check and invokes the canonical `pintohome` verb through native
-/// Shell COM on one dedicated STA thread. There is no PowerShell fallback.
+/// Shell COM on one dedicated STA thread.
 ///
 /// Observed Windows 10 22H2 behavior:
 ///
@@ -1037,88 +527,12 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
     pin_frequent_folder_native(path, timeout)
 }
 
-/// Removes a folder from the Windows Quick Access Frequent Folders list
-///
-/// This is the internal implementation that uses a **two-tier fallback strategy**:
-///
-/// 1. **Native COM API** (fast path, 10-50ms): Uses [`unpin_frequent_folder_native()`]
-///    - Uses Frequent Folder pin status to choose the first compatible verb
-///    - Verifies after every `unpinfromhome` or `pintohome` attempt
-///    - Runs on dedicated STA thread to avoid Windows 11 deadlock
-///
-/// 2. **PowerShell fallback** (slow path, 200-500ms): Uses [`unpin_frequent_folder_powershell()`]
-///    - Executes PowerShell script if native COM fails
-///    - Provides broader compatibility at the cost of performance
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be removed. Must be an existing directory.
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the folder was successfully removed (by either strategy).
-///
-/// # Errors
-///
-/// - `InvalidPath`: Path validation failed (not a directory, doesn't exist)
-/// - `NotInQuickAccess`: Folder not in Frequent Folders (returned immediately, no PowerShell fallback)
-/// - `SystemError` or `PowerShellExecution`: Both native COM and PowerShell strategies failed
-///
-/// Note: when removing an unpinned frequent entry, the implementation first pins
-/// it and then removes it using the version-appropriate verb. If the removal
-/// step fails, the folder may remain pinned. `InvalidPath` errors are returned
-/// directly without fallback, as the path is definitively wrong.
-///
-/// # Performance
-///
-/// - Native COM: ~10-50ms (typical case)
-/// - PowerShell fallback: ~200-500ms (when COM fails)
-///
-/// # See Also
-///
-/// - [`crate::manager::QuickAccessManager::remove_item`] - Public mutation API
-/// - [`unpin_frequent_folder_native()`] - Native COM implementation
-/// - [`unpin_frequent_folder_powershell()`] - PowerShell fallback
-pub(crate) fn unpin_frequent_folder(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
-    validate_path(path, PathType::Directory)?;
-
-    // Try native COM first (fast path)
-    match unpin_frequent_folder_native(path, timeout) {
-        Ok(()) => Ok(()),
-        // NotInQuickAccess means the folder is absent - this is a semantic error,
-        // not a system failure. Falling back to PowerShell would not help and
-        // could mask the real cause from the caller.
-        // InvalidPath should also not fallback as the path is definitively wrong.
-        Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
-        Err(e @ WincentError::InvalidPath(_)) => Err(e),
-        // For system/COM errors, fallback to PowerShell for broader compatibility
-        Err(_) => unpin_frequent_folder_powershell(path, timeout),
-    }
-}
-
 /****************************************************** Handle Quick Access ******************************************************/
-
-/// Test-only wrapper for removing a file from Windows Recent Files.
-///
-/// Production callers should use [`crate::manager::QuickAccessManager::remove_item`].
-#[cfg(test)]
-pub(crate) fn remove_from_recent_files(path: &str) -> WincentResult<()> {
-    validate_path(path, PathType::File)?;
-
-    // Try native COM first (fast path), fallback to PowerShell if it fails
-    match remove_recent_file_native(path, DEFAULT_COM_TIMEOUT) {
-        Ok(()) => Ok(()),
-        Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
-        Err(e @ WincentError::InvalidPath(_)) => Err(e),
-        Err(_) => remove_recent_file_powershell(path),
-    }
-}
 
 /// Removes a file from Windows Recent Files with a custom COM STA thread timeout.
 ///
 /// Internal timeout-aware variant used by [`crate::manager::QuickAccessManager::remove_item`].
-/// It tries native COM first and falls back to PowerShell only for system-level
-/// native failures.
+/// Removal is performed only through the native Shell COM path.
 ///
 /// # Arguments
 ///
@@ -1136,12 +550,7 @@ pub(crate) fn remove_from_recent_files_with_timeout(
         ));
     }
     validate_path(path, PathType::File)?;
-    match remove_recent_file_native(path, timeout) {
-        Ok(()) => Ok(()),
-        Err(e @ WincentError::NotInQuickAccess { .. }) => Err(e),
-        Err(e @ WincentError::InvalidPath(_)) => Err(e),
-        Err(_) => remove_recent_file_powershell_with_timeout(path, timeout),
-    }
+    remove_recent_file_native(path, timeout)
 }
 
 /// Pins a folder to Windows Quick Access with a custom COM STA thread timeout.
@@ -1166,30 +575,6 @@ pub(crate) fn add_to_frequent_folders_with_timeout(
         ));
     }
     pin_frequent_folder(path, timeout)
-}
-
-/// Unpins a folder from Windows Quick Access with a custom COM STA thread timeout.
-///
-/// Internal timeout-aware variant used by [`crate::manager::QuickAccessManager::remove_item`].
-/// It uses native COM with a PowerShell fallback and rejects zero timeouts before
-/// attempting any mutation.
-///
-/// # Arguments
-///
-/// * `path` - The full path to the folder to be unpinned. Must be an existing directory.
-/// * `timeout` - Timeout for the COM STA thread operation. Must be non-zero;
-///   passing [`std::time::Duration::ZERO`] returns
-///   [`WincentError::InvalidArgument`] immediately without attempting any operation.
-pub(crate) fn remove_from_frequent_folders_with_timeout(
-    path: &str,
-    timeout: std::time::Duration,
-) -> WincentResult<()> {
-    if timeout.is_zero() {
-        return Err(WincentError::InvalidArgument(
-            "timeout must be greater than zero".to_string(),
-        ));
-    }
-    unpin_frequent_folder(path, timeout)
 }
 
 /// Hides a visible unpinned Frequent Folders entry with the native
@@ -1233,1177 +618,99 @@ pub(crate) fn remove_pinned_frequent_folder_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::query_recent;
-    use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
-    use std::{thread, time::Duration};
-    use windows::Win32::UI::Shell::FolderItem;
-
-    fn path_to_str(path: &std::path::Path) -> WincentResult<&str> {
-        path.to_str()
-            .ok_or_else(|| WincentError::invalid_path(path, "Invalid path encoding"))
-    }
-
-    fn wait_for_folder_status(
-        path: &str,
-        should_exist: bool,
-        max_retries: u32,
-    ) -> WincentResult<bool> {
-        for _ in 0..max_retries {
-            let frequent_folders = query_recent(crate::QuickAccess::FrequentFolders)?;
-            let exists = frequent_folders.iter().any(|p| paths_equal(p, path));
-
-            if exists == should_exist {
-                return Ok(true);
-            }
-
-            thread::sleep(Duration::from_millis(500));
-        }
-        Ok(false)
-    }
-
-    fn wait_for_file_status(
-        path: &str,
-        should_exist: bool,
-        max_retries: u32,
-    ) -> WincentResult<bool> {
-        for _ in 0..max_retries {
-            let recent_files = query_recent(crate::QuickAccess::RecentFiles)?;
-            let exists = recent_files.iter().any(|p| p == path);
-
-            if exists == should_exist {
-                return Ok(true);
-            }
-
-            thread::sleep(Duration::from_millis(500));
-        }
-        Ok(false)
-    }
-
-    // Legacy test helper for invoking an unpin verb directly on a FolderItem.
-    // Production frequent-folder removal uses the state-first machine above.
-    fn unpin_folder_item(item: &FolderItem) -> WincentResult<()> {
-        let verb_variant = VARIANT::from("unpinfromhome");
-        // SAFETY: Test helper receives a live FolderItem from a COM STA worker;
-        // the verb VARIANT remains alive for the InvokeVerb call.
-        match unsafe { item.InvokeVerb(&verb_variant) } {
-            Ok(()) => Ok(()),
-            Err(_) => {
-                let verb_variant = VARIANT::from("pintohome");
-                // SAFETY: Same live FolderItem as above, with the fallback verb
-                // VARIANT alive until InvokeVerb returns.
-                unsafe {
-                    item.InvokeVerb(&verb_variant).map_err(|e| {
-                        WincentError::SystemError(format!("Failed to unpin folder item: {}", e))
-                    })
-                }
-            }
-        }
-    }
+    use std::cell::{Cell, RefCell};
 
     #[test]
-    fn test_path_normalization() {
-        // Test case insensitivity
-        assert!(paths_equal("C:\\Users\\Test", "c:\\users\\test"));
-        assert!(paths_equal("C:\\Users\\Test", "C:\\USERS\\TEST"));
-
-        // Test trailing backslash
-        assert!(paths_equal("C:\\Users\\Test", "C:\\Users\\Test\\"));
-        assert!(paths_equal("C:\\Users\\Test\\", "C:\\Users\\Test"));
-
-        // Test forward slash vs backslash
-        assert!(paths_equal("C:\\Users\\Test", "C:/Users/Test"));
-
-        // Test different paths should not match
-        assert!(!paths_equal("C:\\Users\\Test", "C:\\Users\\Other"));
+    fn path_comparison_uses_windows_semantics() {
+        assert!(paths_equal("C:\\Users\\Test", "c:/users/test/"));
         assert!(!paths_equal("C:\\Users\\Test", "D:\\Users\\Test"));
     }
 
     #[test]
-    fn test_path_normalization_stages() -> WincentResult<()> {
-        // Tests the two-stage path comparison logic in paths_equal()
-        // Stage 1: Lightweight normalization (no I/O) - fast path
-        // Stage 2: Canonicalization (with I/O) - for symlinks/relative paths
-
-        // Stage 1 tests - should succeed with lightweight normalization
-        assert!(
-            paths_equal("C:\\Users\\Test", "c:\\users\\test"),
-            "Case insensitivity should work in stage 1"
-        );
-        assert!(
-            paths_equal("C:\\Users\\Test", "C:/Users/Test"),
-            "Slash normalization should work in stage 1"
-        );
-        assert!(
-            paths_equal("C:\\Users\\Test\\", "C:\\Users\\Test"),
-            "Trailing slash should work in stage 1"
-        );
-
-        // Stage 2 tests - require canonicalization
-        // Note: These tests use real paths to trigger canonicalization
-        let temp_dir = std::env::temp_dir();
-        let temp_str = path_to_str(&temp_dir)?;
-
-        // Test with different representations of the same path
-        assert!(paths_equal(temp_str, temp_str), "Same path should be equal");
-
-        // Test that different paths are not equal
-        assert!(
-            !paths_equal("C:\\Windows", "C:\\Users"),
-            "Different paths should not be equal"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_rejects_initial_absence() {
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-        let action_log = std::rc::Rc::clone(&actions);
-
-        let result = run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::NotFound,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            |_| Ok(false),
-            move |_, verb| {
-                action_log.borrow_mut().push(format!("namespace:{verb}"));
-                Ok(true)
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    Ok(())
-                }
-            },
-            |_| {},
-        );
-
-        assert!(
-            matches!(result, Err(WincentError::NotInQuickAccess { .. })),
-            "initial absence should be NotInQuickAccess, got: {:?}",
-            result
-        );
-        assert!(
-            actions.borrow().is_empty(),
-            "no verbs should be invoked when the folder is absent"
-        );
-    }
-
-    #[test]
-    fn test_unpin_state_machine_pinned_uses_unpinfromhome_first() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Pinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                let present = std::rc::Rc::clone(&present);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    *present.borrow_mut() = false;
-                    Ok(true)
-                }
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    Ok(())
-                }
-            },
-            |_| {},
-        )?;
-
-        assert_eq!(actions.borrow().as_slice(), ["namespace:unpinfromhome"]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_pinned_falls_back_to_pintohome() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Pinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    Ok(true)
-                }
-            },
-            {
-                let present = std::rc::Rc::clone(&present);
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    *present.borrow_mut() = false;
-                    Ok(())
-                }
-            },
-            |_| {},
-        )?;
-
-        assert_eq!(
-            actions.borrow().as_slice(),
-            ["namespace:unpinfromhome", "self:pintohome"]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_unpinned_uses_pintohome_first() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Unpinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    Ok(true)
-                }
-            },
-            {
-                let present = std::rc::Rc::clone(&present);
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    *present.borrow_mut() = false;
-                    Ok(())
-                }
-            },
-            |_| {},
-        )?;
-
-        assert_eq!(actions.borrow().as_slice(), ["self:pintohome"]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_unpinned_falls_back_to_unpinfromhome() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Unpinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                let present = std::rc::Rc::clone(&present);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    *present.borrow_mut() = false;
-                    Ok(true)
-                }
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    Ok(())
-                }
-            },
-            |_| {},
-        )?;
-
-        assert_eq!(
-            actions.borrow().as_slice(),
-            ["self:pintohome", "namespace:unpinfromhome"]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_unpin_state_machine_returns_pintohome_error() {
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        let result = run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::Unpinned,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            |_| Ok(true),
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    Ok(true)
-                }
-            },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    Err(WincentError::SystemError("pintohome failed".to_string()))
-                }
-            },
-            |_| {},
-        );
-
-        assert!(
-            matches!(result, Err(WincentError::SystemError(ref message)) if message == "pintohome failed"),
-            "pintohome failure should be returned directly, got: {:?}",
-            result
-        );
-        assert_eq!(actions.borrow().as_slice(), ["self:pintohome"]);
-    }
-
-    #[test]
-    fn test_pin_checked_rejects_existing_without_invoking() {
-        let invoked = std::rc::Rc::new(std::cell::RefCell::new(false));
-        let invoked_for_closure = std::rc::Rc::clone(&invoked);
-
+    fn pin_check_rejects_existing_folder_without_invoking_verb() {
+        let invoked = Cell::new(false);
         let result = run_pin_frequent_folder_checked(
             "C:\\Folder",
             |_| Ok(true),
-            move |_, _| {
-                *invoked_for_closure.borrow_mut() = true;
+            |_, _| {
+                invoked.set(true);
                 Ok(())
             },
         );
 
-        assert!(
-            matches!(result, Err(WincentError::AlreadyExists { .. })),
-            "existing folder should be AlreadyExists, got: {:?}",
-            result
-        );
-        assert!(!*invoked.borrow(), "pintohome must not be invoked");
+        assert!(matches!(result, Err(WincentError::AlreadyExists { .. })));
+        assert!(!invoked.get());
     }
 
     #[test]
-    fn test_pin_checked_invokes_pintohome_when_absent() -> WincentResult<()> {
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-        let actions_for_closure = std::rc::Rc::clone(&actions);
+    fn pin_check_invokes_pintohome_for_absent_folder() -> WincentResult<()> {
+        let actions = RefCell::new(Vec::new());
 
         run_pin_frequent_folder_checked(
             "C:\\Folder",
             |_| Ok(false),
-            move |path, verb| {
-                actions_for_closure
-                    .borrow_mut()
-                    .push(format!("{path}:{verb}"));
+            |path, verb| {
+                actions.borrow_mut().push(format!("{path}:{verb}"));
                 Ok(())
             },
         )?;
 
-        assert_eq!(actions.borrow().as_slice(), ["C:\\Folder:pintohome"]);
+        assert_eq!(actions.into_inner(), ["C:\\Folder:pintohome"]);
         Ok(())
     }
 
     #[test]
-    fn test_pin_checked_propagates_contains_error_without_invoking() {
-        let invoked = std::rc::Rc::new(std::cell::RefCell::new(false));
-        let invoked_for_closure = std::rc::Rc::clone(&invoked);
-
+    fn pin_check_propagates_lookup_error() {
+        let invoked = Cell::new(false);
         let result = run_pin_frequent_folder_checked(
             "C:\\Folder",
-            |_| Err(WincentError::SystemError("contains failed".to_string())),
-            move |_, _| {
-                *invoked_for_closure.borrow_mut() = true;
+            |_| Err(WincentError::SystemError("lookup failed".to_string())),
+            |_, _| {
+                invoked.set(true);
                 Ok(())
             },
         );
 
-        assert!(
-            matches!(result, Err(WincentError::SystemError(ref message)) if message == "contains failed"),
-            "contains error should propagate, got: {:?}",
-            result
-        );
-        assert!(!*invoked.borrow(), "pintohome must not be invoked");
+        assert!(matches!(
+            result,
+            Err(WincentError::SystemError(ref message)) if message == "lookup failed"
+        ));
+        assert!(!invoked.get());
     }
 
     #[test]
-    fn test_unpin_state_machine_unknown_uses_unpinfromhome_then_pintohome() -> WincentResult<()> {
-        let present = std::rc::Rc::new(std::cell::RefCell::new(true));
-        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        run_unpin_frequent_folder_state_machine(
+    fn removal_wait_stops_when_folder_disappears() -> WincentResult<()> {
+        let checks = Cell::new(0);
+        let removed = wait_for_frequent_folder_removed(
             "C:\\Folder",
-            FrequentFolderPinStatus::NotFound,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            {
-                let present = std::rc::Rc::clone(&present);
-                move |_| Ok(*present.borrow())
+            Duration::from_millis(10),
+            Duration::from_millis(1),
+            &mut |_| {
+                let current = checks.get();
+                checks.set(current + 1);
+                Ok(current == 0)
             },
-            {
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("namespace:{verb}"));
-                    Ok(true)
-                }
-            },
-            {
-                let present = std::rc::Rc::clone(&present);
-                let actions = std::rc::Rc::clone(&actions);
-                move |_, verb| {
-                    actions.borrow_mut().push(format!("self:{verb}"));
-                    *present.borrow_mut() = false;
-                    Ok(())
-                }
-            },
-            |_| {},
+            &mut |_| {},
         )?;
 
-        assert_eq!(
-            actions.borrow().as_slice(),
-            ["namespace:unpinfromhome", "self:pintohome"]
-        );
+        assert!(removed);
+        assert!(checks.get() >= 2);
         Ok(())
     }
 
     #[test]
-    fn test_unpin_state_machine_errors_when_folder_remains_present() {
-        let result = run_unpin_frequent_folder_state_machine(
-            "C:\\Folder",
-            FrequentFolderPinStatus::NotFound,
-            Duration::from_nanos(1),
-            Duration::from_nanos(1),
-            |_| Ok(true),
-            |_, _| Ok(true),
-            |_, _| Ok(()),
-            |_| {},
-        );
+    fn timeout_aware_operations_reject_zero_timeout() {
+        let recent = "C:\\Windows\\notepad.exe";
+        let folder = "C:\\Windows";
 
-        assert!(
-            matches!(result, Err(WincentError::SystemError(ref message)) if message.contains("Failed to remove frequent folder")),
-            "persistent presence should be SystemError, got: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_pin_unpin_frequent_folder -- --ignored --nocapture"]
-    fn test_pin_unpin_frequent_folder() -> WincentResult<()> {
-        let test_dir = setup_test_env()?;
-        let test_path = path_to_str(&test_dir)?;
-
-        pin_frequent_folder(test_path, DEFAULT_COM_TIMEOUT)?;
-
-        assert!(
-            wait_for_folder_status(test_path, true, 5)?,
-            "Pin operation failed: folder did not appear in frequent folders list"
-        );
-
-        unpin_frequent_folder(test_path, DEFAULT_COM_TIMEOUT)?;
-
-        assert!(
-            wait_for_folder_status(test_path, false, 5)?,
-            "Unpin operation failed: folder still exists in frequent folders list"
-        );
-
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_pin_unpin_error_handling() -> WincentResult<()> {
-        // Test pin errors
-        let result = pin_frequent_folder("Z:\\NonExistentFolder", DEFAULT_COM_TIMEOUT);
-        assert!(result.is_err(), "Should fail with non-existent folder");
-
-        let result = pin_frequent_folder("", DEFAULT_COM_TIMEOUT);
-        assert!(result.is_err(), "Should fail with empty path");
-
-        // Test unpin errors
-        let result = unpin_frequent_folder("Z:\\NonExistentFolder", DEFAULT_COM_TIMEOUT);
-        assert!(result.is_err(), "Should fail with non-existent folder");
-
-        let result = unpin_frequent_folder("", DEFAULT_COM_TIMEOUT);
-        assert!(result.is_err(), "Should fail with empty path");
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_unpin_native_error_classification -- --ignored --nocapture"]
-    fn test_unpin_native_error_classification() -> WincentResult<()> {
-        // Tests the critical error classification logic in unpin_frequent_folder_native()
-        // The function checks namespace presence before any Shell verb and handles
-        // unpinned entries with an explicit pin-then-unpin flow.
-        //
-        // Key logic:
-        // 1. Check if folder is present in Frequent Folders
-        // 2. If absent, return NotInQuickAccess immediately
-        // 3. If present, remove via unpinfromhome/pintohome Shell verbs
-
-        let test_dir = setup_test_env()?;
-        let test_path = path_to_str(&test_dir)?;
-
-        // Scenario 1: Unpin a folder that is NOT in frequent folders
-        // Expected: Should return NotInQuickAccess error immediately
-        let result = unpin_frequent_folder_native(test_path, DEFAULT_COM_TIMEOUT);
-
-        assert!(
-            result.is_err(),
-            "Unpinning a non-pinned folder should return error"
-        );
-
-        if let Err(e) = result {
-            assert!(
-                matches!(e, WincentError::NotInQuickAccess { .. }),
-                "Unpinning a non-pinned folder should return NotInQuickAccess, got: {:?}",
-                e
-            );
+        for result in [
+            remove_from_recent_files_with_timeout(recent, Duration::ZERO),
+            add_to_frequent_folders_with_timeout(folder, Duration::ZERO),
+            remove_unpinned_frequent_folder_with_timeout(folder, Duration::ZERO),
+            remove_pinned_frequent_folder_with_timeout(folder, Duration::ZERO),
+            add_file_to_recent_native(recent, Duration::ZERO),
+        ] {
+            assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
         }
-
-        // Scenario 2: Pin the folder first, then unpin it
-        // Expected: Should succeed (folder is pinned, so unpin works)
-        pin_frequent_folder(test_path, DEFAULT_COM_TIMEOUT)?;
-        thread::sleep(Duration::from_millis(500));
-
-        let result = unpin_frequent_folder_native(test_path, DEFAULT_COM_TIMEOUT);
-        assert!(
-            result.is_ok(),
-            "Unpinning a pinned folder should succeed: {:?}",
-            result
-        );
-
-        // Scenario 3: Verify the folder is no longer pinned after unpin
-        thread::sleep(Duration::from_millis(500));
-        let is_pinned = crate::query::is_frequent_folder_exact(test_path)?;
-        assert!(!is_pinned, "Folder should not be pinned after unpinning");
-
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_add_remove_file_in_recent -- --ignored --nocapture"]
-    fn test_add_remove_file_in_recent() -> WincentResult<()> {
-        // Note: This test depends on Windows Shell's asynchronous behavior
-        // SHAddToRecentDocs API does not guarantee immediate visibility
-        // Test may be skipped if file doesn't appear within timeout period
-
-        let test_dir = setup_test_env()?;
-
-        // Use unique filename to avoid Windows caching/deduplication issues
-        // Windows has a built-in deduplication mechanism that ignores repeated
-        // additions of the same file within a short time window. Using a timestamp
-        // ensures each test run uses a unique file, preventing false negatives.
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let filename = format!("recent_test_{}.txt", timestamp);
-        let test_file = create_test_file(&test_dir, &filename, "test content")?;
-        let test_path = path_to_str(&test_file)?;
-
-        // Use public API consistently
-        add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT)?;
-
-        // Wait longer for Windows Shell to process the recent item (20 retries = 10 seconds)
-        assert!(
-            wait_for_file_status(test_path, true, 20)?,
-            "Add operation failed: file did not appear in recent files list after 10 seconds"
-        );
-
-        remove_from_recent_files(test_path)?;
-
-        assert!(
-            wait_for_file_status(test_path, false, 10)?,
-            "Remove operation failed: file still exists in recent files list"
-        );
-
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_remove_recent_file_native_direct -- --ignored --nocapture"]
-    fn test_remove_recent_file_native_direct() -> WincentResult<()> {
-        // Tests the native removal logic directly to verify the "find item and invoke remove verb" path
-        // Implementation: src/handle.rs:400-451
-        // Key logic:
-        // 1. Enumerate items in Recent namespace
-        // 2. Find target file by path comparison
-        // 3. Invoke "remove" verb on the found item
-        //
-        // This test validates that remove_recent_file_native() correctly:
-        // - Finds the file in the Recent Items namespace
-        // - Invokes the remove verb on the correct item
-        // - Returns NotInQuickAccess when file is not found
-        //
-        // Note: This test depends on Windows Shell's asynchronous behavior
-        // SHAddToRecentDocs API does not guarantee immediate visibility
-
-        let test_dir = setup_test_env()?;
-
-        // Use unique filename to avoid Windows deduplication issues
-        // Windows may ignore repeated additions of the same file within a short time window
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let filename = format!("native_remove_test_{}.txt", timestamp);
-        let test_file = create_test_file(&test_dir, &filename, "test content")?;
-        let test_path = path_to_str(&test_file)?;
-
-        // Add file to recent using native API
-        add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT)?;
-
-        // Wait longer for Windows to process the recent item (20 retries = 10 seconds)
-        if !wait_for_file_status(test_path, true, 20)? {
-            // If file doesn't appear, skip this test (Windows Recent Items can be flaky)
-            cleanup_test_env(&test_dir)?;
-            println!(
-                "Skipping test - file did not appear in recent items (Windows Shell timing issue)"
-            );
-            return Ok(());
-        }
-
-        // Test native removal directly (not through public API with fallback)
-        let result = remove_recent_file_native(test_path, DEFAULT_COM_TIMEOUT);
-        assert!(
-            result.is_ok(),
-            "Native removal should succeed for existing file: {:?}",
-            result
-        );
-
-        // Verify file was actually removed
-        assert!(
-            wait_for_file_status(test_path, false, 10)?,
-            "File should be removed from recent items"
-        );
-
-        // Test removing non-existent file - should return NotInQuickAccess
-        let result = remove_recent_file_native(test_path, DEFAULT_COM_TIMEOUT);
-        assert!(result.is_err(), "Should fail when file not in recent");
-
-        if let Err(e) = result {
-            let error_msg = format!("{:?}", e);
-            assert!(
-                error_msg.contains("NotInQuickAccess")
-                    || error_msg.contains("not found in recent items"),
-                "Should return NotInQuickAccess error when file not found: {:?}",
-                e
-            );
-        }
-
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_recent_files_error_handling() -> WincentResult<()> {
-        // Tests error handling consistency across native and PowerShell implementations
-        // remove_from_recent_files() has fallback from native to PowerShell
-        // Both implementations should fail consistently for the same invalid inputs
-
-        // Test add errors
-        let result = add_file_to_recent_native("Z:\\NonExistentFile.txt", DEFAULT_COM_TIMEOUT);
-        assert!(result.is_err(), "Should fail with non-existent file");
-
-        let result = add_file_to_recent_native("", DEFAULT_COM_TIMEOUT);
-        assert!(result.is_err(), "Should fail with empty path");
-
-        let result = add_file_to_recent_native("\0invalid\0path", DEFAULT_COM_TIMEOUT);
-        assert!(
-            result.is_err(),
-            "Invalid path characters should not be allowed"
-        );
-
-        // Test remove errors - validates fallback consistency
-        // If native fails, PowerShell should also fail for the same reasons
-        let result = remove_from_recent_files("Z:\\NonExistentFile.txt");
-        assert!(result.is_err(), "Should fail with non-existent file");
-
-        let result = remove_from_recent_files("");
-        assert!(result.is_err(), "Should fail with empty path");
-
-        let result = remove_from_recent_files("invalid\\path\\*");
-        assert!(result.is_err(), "Should fail with invalid path");
-
-        Ok(())
-    }
-
-    #[test]
-    fn remove_recent_file_powershell_sentinel_maps_to_not_in_quick_access() {
-        let error = WincentError::PowerShellExecution(Box::new(
-            crate::error::PowerShellError::builder(
-                crate::error::PowerShellOperation::RemoveRecentFile,
-            )
-            .stdout("WINCENT_NOT_IN_QUICK_ACCESS")
-            .stderr("")
-            .parameters("C:\\report.docx")
-            .build(),
-        ));
-
-        let mapped = map_remove_recent_file_powershell_error("C:\\report.docx", error);
-
-        assert!(
-            matches!(
-                mapped,
-                WincentError::NotInQuickAccess {
-                    ref path,
-                    qa_type: QuickAccess::RecentFiles,
-                } if path == "C:\\report.docx"
-            ),
-            "sentinel should map to NotInQuickAccess, got: {:?}",
-            mapped
-        );
-    }
-
-    #[test]
-    fn remove_recent_file_powershell_keeps_non_sentinel_error() {
-        let error = WincentError::PowerShellExecution(Box::new(
-            crate::error::PowerShellError::builder(
-                crate::error::PowerShellOperation::RemoveRecentFile,
-            )
-            .stdout("ordinary output")
-            .stderr("ordinary failure")
-            .parameters("C:\\report.docx")
-            .build(),
-        ));
-
-        let mapped = map_remove_recent_file_powershell_error("C:\\report.docx", error);
-
-        assert!(
-            matches!(mapped, WincentError::PowerShellExecution(_)),
-            "ordinary PowerShell failures should remain PowerShellExecution, got: {:?}",
-            mapped
-        );
-    }
-
-    #[test]
-    fn remove_recent_file_script_uses_caller_timeout() -> WincentResult<()> {
-        use std::os::windows::process::ExitStatusExt;
-        use std::process::Output;
-
-        let temp_file =
-            tempfile::NamedTempFile::new().map_err(|e| WincentError::SystemError(e.to_string()))?;
-        let file = temp_file.path().to_string_lossy().into_owned();
-        let expected_file = file.clone();
-        let expected_timeout = Duration::from_millis(1234);
-        let observed_timeout = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let observed_timeout_for_closure = std::rc::Rc::clone(&observed_timeout);
-
-        execute_remove_recent_file_script_with_timeout(
-            &file,
-            expected_timeout,
-            move |script, parameter, timeout| {
-                assert_eq!(script, PSScript::RemoveRecentFile);
-                assert_eq!(parameter, Some(expected_file.as_str()));
-                *observed_timeout_for_closure.borrow_mut() = Some(timeout);
-                Ok(Output {
-                    status: std::process::ExitStatus::from_raw(0),
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                })
-            },
-        )?;
-
-        assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
-        Ok(())
-    }
-
-    #[test]
-    fn unpin_frequent_folder_powershell_sentinel_maps_to_not_in_quick_access() {
-        let error = WincentError::PowerShellExecution(Box::new(
-            crate::error::PowerShellError::builder(
-                crate::error::PowerShellOperation::UnpinFrequentFolder,
-            )
-            .stdout("WINCENT_NOT_IN_QUICK_ACCESS")
-            .stderr("")
-            .parameters("C:\\Folder")
-            .build(),
-        ));
-
-        let mapped = map_unpin_frequent_folder_powershell_error("C:\\Folder", error);
-
-        assert!(
-            matches!(
-                mapped,
-                WincentError::NotInQuickAccess {
-                    ref path,
-                    qa_type: QuickAccess::FrequentFolders,
-                } if path == "C:\\Folder"
-            ),
-            "sentinel should map to NotInQuickAccess, got: {:?}",
-            mapped
-        );
-    }
-
-    #[test]
-    fn unpin_frequent_folder_powershell_keeps_non_sentinel_error() {
-        let error = WincentError::PowerShellExecution(Box::new(
-            crate::error::PowerShellError::builder(
-                crate::error::PowerShellOperation::UnpinFrequentFolder,
-            )
-            .stdout("ordinary output")
-            .stderr("ordinary failure")
-            .parameters("C:\\Folder")
-            .build(),
-        ));
-
-        let mapped = map_unpin_frequent_folder_powershell_error("C:\\Folder", error);
-
-        assert!(
-            matches!(mapped, WincentError::PowerShellExecution(_)),
-            "ordinary PowerShell failures should remain PowerShellExecution, got: {:?}",
-            mapped
-        );
-    }
-
-    #[test]
-    fn unpin_frequent_folder_script_uses_caller_timeout() -> WincentResult<()> {
-        use std::os::windows::process::ExitStatusExt;
-        use std::process::Output;
-
-        let temp_dir = tempfile::tempdir().map_err(|e| WincentError::SystemError(e.to_string()))?;
-        let folder = temp_dir.path().join("timeout-unpin");
-        std::fs::create_dir(&folder).map_err(WincentError::Io)?;
-        let folder = folder.to_string_lossy().into_owned();
-        let expected_folder = folder.clone();
-        let expected_timeout = Duration::from_millis(1234);
-        let observed_timeout = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let observed_timeout_for_closure = std::rc::Rc::clone(&observed_timeout);
-
-        execute_unpin_frequent_folder_script_with_timeout(
-            &folder,
-            expected_timeout,
-            move |script, parameter, timeout| {
-                assert_eq!(script, PSScript::UnpinFromFrequentFolder);
-                assert_eq!(parameter, Some(expected_folder.as_str()));
-                *observed_timeout_for_closure.borrow_mut() = Some(timeout);
-                Ok(Output {
-                    status: std::process::ExitStatus::from_raw(0),
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                })
-            },
-        )?;
-
-        assert_eq!(*observed_timeout.borrow(), Some(expected_timeout));
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_remove_from_recent_files_preserves_not_in_recent -- --ignored --nocapture"]
-    fn test_remove_from_recent_files_preserves_not_in_recent() -> WincentResult<()> {
-        let test_dir = setup_test_env()?;
-        let test_file =
-            create_test_file(&test_dir, "not_in_recent_wrapper_test.txt", "test content")?;
-        let test_path = path_to_str(&test_file)?;
-
-        let _ = remove_recent_file_native(test_path, DEFAULT_COM_TIMEOUT);
-        let result = remove_from_recent_files(test_path);
-
-        cleanup_test_env(&test_dir)?;
-
-        assert!(
-            matches!(result, Err(WincentError::NotInQuickAccess { .. })),
-            "public wrapper should preserve NotInQuickAccess instead of falling back to PowerShell: {:?}",
-            result
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_add_file_to_recent_with_spaces -- --ignored --nocapture"]
-    fn test_add_file_to_recent_with_spaces() -> WincentResult<()> {
-        // Tests that add_file_to_recent_native() works for filenames that contain spaces.
-        // Uses timestamp-suffixed names to avoid Windows Shell deduplication:
-        // repeated additions of the same filename within a short window may be silently ignored.
-        //
-        // Note: SHAddToRecentDocs is asynchronous; files are polled until visible
-        // or the test is skipped on timeout (Windows Shell timing is not guaranteed).
-
-        let test_dir = setup_test_env()?;
-
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-
-        // Test regular file
-        let filename1 = format!("test_file_{}.txt", timestamp);
-        let test_file = create_test_file(&test_dir, &filename1, "test content")?;
-        let test_path = path_to_str(&test_file)?;
-        add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT)?;
-
-        // Test file with spaces
-        let filename2 = format!("test file with spaces {}.txt", timestamp);
-        let test_file2 = create_test_file(&test_dir, &filename2, "test content")?;
-        let test_path2 = path_to_str(&test_file2)?;
-        add_file_to_recent_native(test_path2, DEFAULT_COM_TIMEOUT)?;
-
-        // Wait for both files to appear (20 retries 閼?500ms = 10 seconds)
-        if !wait_for_file_status(test_path, true, 20)? {
-            cleanup_test_env(&test_dir)?;
-            println!(
-                "Skipping test - file did not appear in recent items (Windows Shell timing issue)"
-            );
-            return Ok(());
-        }
-        if !wait_for_file_status(test_path2, true, 20)? {
-            cleanup_test_env(&test_dir)?;
-            println!("Skipping test - file with spaces did not appear in recent items (Windows Shell timing issue)");
-            return Ok(());
-        }
-
-        let _ = remove_from_recent_files(test_path);
-        let _ = remove_from_recent_files(test_path2);
-
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_unpin_folder_item_compatibility -- --ignored --nocapture"]
-    fn test_unpin_folder_item_compatibility() -> WincentResult<()> {
-        // Tests the legacy direct FolderItem helper used by this integration test.
-        // Implementation: src/handle.rs:258-272
-        // Production removal uses the state-first machine above.
-        //
-        // This test directly verifies the fallback mechanism by:
-        // 1. Pinning a folder to get a real FolderItem
-        // 2. Calling unpin_folder_item() on it
-        // 3. Verifying the folder is actually unpinned
-        //
-        // This test focuses on the single-item unpin compatibility path
-
-        use crate::query::query_recent_native;
-        use crate::QuickAccess;
-
-        let test_dir = setup_test_env()?;
-        let test_path = path_to_str(&test_dir)?;
-
-        // Pin a folder
-        pin_frequent_folder(test_path, DEFAULT_COM_TIMEOUT)?;
-        thread::sleep(Duration::from_millis(500));
-
-        // Verify it was pinned
-        let folders = query_recent_native(QuickAccess::FrequentFolders)?;
-        assert!(
-            folders.iter().any(|p| p == test_path),
-            "Test folder should be pinned"
-        );
-
-        // Get the FolderItem and test unpin_folder_item() directly.
-        // Must run on a dedicated STA thread: on Win11, shell_folder() for frequent folders
-        // requires cross-process calls to explorer.exe that need a message pump.
-        let test_path_owned = test_path.to_owned();
-        let found = crate::com_thread::run_on_sta_thread(
-            move || {
-                let folder = shell_folder(FREQUENT_FOLDERS_NAMESPACE)?;
-                let items = folder_items(&folder)?;
-
-                // SAFETY: `items` is a live FolderItems collection on the STA worker.
-                let count = unsafe {
-                    items.Count().map_err(|e| {
-                        WincentError::SystemError(format!("Failed to get item count: {}", e))
-                    })?
-                };
-
-                for index in 0..count {
-                    let index_variant = VARIANT::from(index);
-                    // SAFETY: `items` is live for this loop and the VARIANT
-                    // index lives until Item returns. Per-item failures are skipped.
-                    let item = unsafe {
-                        match items.Item(&index_variant) {
-                            Ok(item) => item,
-                            Err(_) => continue,
-                        }
-                    };
-
-                    if let Some(item_path_str) = item_path(&item) {
-                        if paths_equal(&item_path_str, &test_path_owned) {
-                            // Found our test folder - test unpin_folder_item()
-                            // Production removal uses run_unpin_frequent_folder_state_machine().
-                            unpin_folder_item(&item)?;
-                            return Ok(true);
-                        }
-                    }
-                }
-
-                Ok(false)
-            },
-            DEFAULT_COM_TIMEOUT,
-        )?;
-
-        assert!(
-            found,
-            "Should have found the test folder in frequent folders"
-        );
-
-        // Verify the folder was actually unpinned
-        thread::sleep(Duration::from_millis(500));
-        let folders_after = query_recent_native(QuickAccess::FrequentFolders)?;
-        assert!(
-            !folders_after.iter().any(|p| p == test_path),
-            "Test folder should be unpinned after unpin_folder_item()"
-        );
-
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Performance benchmark - run with: cargo test test_native_pin_unpin_performance -- --ignored --nocapture"]
-    fn test_native_pin_unpin_performance() -> WincentResult<()> {
-        use std::time::Instant;
-
-        let test_dir = setup_test_env()?;
-        let test_path = path_to_str(&test_dir)?;
-
-        // Benchmark native API
-        let start = Instant::now();
-        pin_frequent_folder_native(test_path, DEFAULT_COM_TIMEOUT)?;
-        let native_pin = start.elapsed();
-
-        thread::sleep(Duration::from_millis(100));
-
-        let start = Instant::now();
-        unpin_frequent_folder_native(test_path, DEFAULT_COM_TIMEOUT)?;
-        let native_unpin = start.elapsed();
-
-        println!(
-            "Native API - Pin: {:?}, Unpin: {:?}",
-            native_pin, native_unpin
-        );
-        println!("Total: {:?}", native_pin + native_unpin);
-
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
-    fn test_com_s_false_reference_counting() -> WincentResult<()> {
-        // add_file_to_recent_native now runs on a dedicated STA thread via
-        // run_on_sta_thread, so COM reference counting on the calling thread
-        // is not affected. This test verifies the calling thread's apartment
-        // model is unaffected after several calls.
-        use windows::Win32::System::Com::{
-            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
-        };
-
-        let test_dir = setup_test_env()?;
-        let test_file = create_test_file(&test_dir, "s_false_test.txt", "content")?;
-        let test_path = path_to_str(&test_file)?;
-
-        // SAFETY: The test pairs each successful CoInitializeEx with
-        // CoUninitialize on the same thread.
-        unsafe {
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            assert_eq!(hr.0, 0, "First CoInitializeEx should return S_OK");
-
-            for _ in 0..3 {
-                let result = add_file_to_recent_native(test_path, DEFAULT_COM_TIMEOUT);
-                assert!(result.is_ok(), "Should succeed: {:?}", result);
-            }
-
-            CoUninitialize();
-
-            // The calling thread has fully uninitialised; MTA should succeed.
-            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
-            assert!(
-                hr.0 == 0 || hr.0 == 1,
-                "Should be able to initialize with MTA (no leaked STA references). Got: 0x{:08X}",
-                hr.0
-            );
-            CoUninitialize();
-        }
-
-        let _ = remove_recent_file_native(test_path, DEFAULT_COM_TIMEOUT);
-        cleanup_test_env(&test_dir)?;
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_com_apartment_mismatch -- --ignored --nocapture"]
-    fn test_com_apartment_mismatch() -> WincentResult<()> {
-        // add_file_to_recent_native now routes through run_on_sta_thread which
-        // spawns a fresh STA thread regardless of the caller's apartment model.
-        // Calling from an MTA thread must NOT return ComApartmentMismatch.
-        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
-
-        // SAFETY: The MTA initialization in this test is balanced by
-        // CoUninitialize before returning.
-        unsafe {
-            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
-            assert!(hr.is_ok() || hr.0 == 1, "MTA init should succeed");
-
-            let result = add_file_to_recent_native("C:\\Windows\\notepad.exe", DEFAULT_COM_TIMEOUT);
-            assert!(
-                !matches!(result, Err(WincentError::ComApartmentMismatch(_))),
-                "MTA caller should no longer get ComApartmentMismatch, got: {:?}",
-                result
-            );
-
-            CoUninitialize();
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_with_timeout_zero_rejected() {
-        // All three *_with_timeout public functions must reject Duration::ZERO
-        // before any operation (path validation, native COM, PowerShell fallback).
-        let r = remove_from_recent_files_with_timeout(
-            "C:\\Windows\\notepad.exe",
-            std::time::Duration::ZERO,
-        );
-        assert!(
-            matches!(r, Err(WincentError::InvalidArgument(_))),
-            "got: {:?}",
-            r
-        );
-
-        let r = add_to_frequent_folders_with_timeout("C:\\Windows", std::time::Duration::ZERO);
-        assert!(
-            matches!(r, Err(WincentError::InvalidArgument(_))),
-            "got: {:?}",
-            r
-        );
-
-        let r = remove_from_frequent_folders_with_timeout("C:\\Windows", std::time::Duration::ZERO);
-        assert!(
-            matches!(r, Err(WincentError::InvalidArgument(_))),
-            "got: {:?}",
-            r
-        );
-
-        let r = add_file_to_recent_native("C:\\Windows\\notepad.exe", std::time::Duration::ZERO);
-        assert!(
-            matches!(r, Err(WincentError::InvalidArgument(_))),
-            "got: {:?}",
-            r
-        );
     }
 }

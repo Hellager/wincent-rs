@@ -27,10 +27,16 @@
   now distinguishes successful Shell invocation, persisted DestList state, and
   the currently rendered Explorer UI. Mutation timeouts are explicitly
   documented as indeterminate outcomes.
+- Recent File removal now uses only the native Shell COM `remove` verb, without
+  a fallback implementation.
 
 ### Removed
 - Public `RetryPolicy` configuration, `QuickAccessManagerBuilder::retry_policy`,
   `QuickAccessManagerBuilder::try_build`, and the example CLI `retry` command
+- PowerShell script generation, caching, execution, and public error types
+- Legacy live Shell query helpers and the Explorer Desktop-navigation refresh
+  experiment
+- Production-unreachable generic Frequent Folder removal compatibility helpers
 
 ## [0.2.6] - 2026-07-09
 

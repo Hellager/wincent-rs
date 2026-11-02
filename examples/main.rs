@@ -4,7 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use wincent::error::{InvalidPathError, PowerShellError, PowerShellErrorKind, WincentError};
+use wincent::error::{InvalidPathError, WincentError};
 use wincent::prelude::*;
 
 use wincent::destlist::{
@@ -101,7 +101,6 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "refresh" => cmd_refresh(&manager, &args[1..]),
         "lock" => cmd_lock(&manager, &args[1..]),
         "empty" => cmd_empty(&manager, &args[1..]),
-        "classify" => cmd_classify(&args[1..]),
         "invalid-path" => cmd_invalid_path(&args[1..]),
         "visible" => cmd_visible(&manager, &args[1..]),
         "dest" => cmd_dest(&manager, &args[1..]),
@@ -179,7 +178,6 @@ Core:
     Locked targets block Explorer from adding or removing matching Quick Access items.
   empty <recent|frequent|all>
 Utility APIs:
-  classify <stderr text>
   invalid-path <reason> [path]
 
 Visibility APIs:
@@ -473,32 +471,6 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
     manager.empty_items(qa_type)?;
     println!("cleared {}", category_name(qa_type));
     Ok(())
-}
-
-fn cmd_classify(args: &[String]) -> WincentResult<()> {
-    if args.is_empty() {
-        return Err(WincentError::InvalidArgument(
-            "classify requires stderr text".to_string(),
-        ));
-    }
-
-    let stderr = args.join(" ");
-    let inferred = PowerShellError::infer_kind_from_stderr(&stderr);
-    let classified = PowerShellError::classify_with(&stderr, Some(&custom_classifier));
-    println!("infer_kind_from_stderr: {inferred:?}");
-    println!("classify_with: {classified:?}");
-    Ok(())
-}
-
-fn custom_classifier(stderr: &str) -> Option<PowerShellErrorKind> {
-    let lower = stderr.to_lowercase();
-    if lower.contains("access denied") || lower.contains("拒绝访问") {
-        Some(PowerShellErrorKind::AccessDenied)
-    } else if lower.contains("timed out") || lower.contains("timeout") {
-        Some(PowerShellErrorKind::Timeout)
-    } else {
-        None
-    }
 }
 
 fn cmd_invalid_path(args: &[String]) -> WincentResult<()> {
@@ -1021,38 +993,6 @@ fn print_strings(label: &str, values: &[String]) {
 fn print_error(error: &WincentError) {
     eprintln!("error: {error}");
     match error {
-        WincentError::PowerShellExecution(error) => {
-            eprintln!("powershell.kind: {:?}", error.kind());
-            eprintln!("powershell.operation: {:?}", error.operation());
-            eprintln!("powershell.exit_code: {:?}", error.exit_code());
-            eprintln!("powershell.script_path: {}", error.script_path().display());
-            eprintln!("powershell.parameters: {:?}", error.parameters());
-            eprintln!("powershell.duration: {:?}", error.duration());
-            eprintln!("powershell.io_error: {:?}", error.io_error());
-            eprintln!("powershell.os_error: {:?}", error.os_error());
-            eprintln!("powershell.is_access_denied: {}", error.is_access_denied());
-            eprintln!(
-                "powershell.is_execution_policy_error: {}",
-                error.is_execution_policy_error()
-            );
-            eprintln!("powershell.is_timeout: {}", error.is_timeout());
-            eprintln!(
-                "powershell.is_cmdlet_not_found: {}",
-                error.is_cmdlet_not_found()
-            );
-            eprintln!("powershell.is_transient: {}", error.is_transient());
-            eprintln!("powershell.suggest_fix: {:?}", error.suggest_fix());
-            eprintln!(
-                "powershell.stderr_has_error: {}",
-                error.stderr_contains("error")
-            );
-            eprintln!("powershell.stdout: {}", error.raw_stdout());
-            eprintln!("powershell.stderr: {}", error.raw_stderr());
-            eprintln!(
-                "powershell.classification_with: {:?}",
-                error.classification_with(custom_classifier)
-            );
-        }
         WincentError::InvalidPath(error) => {
             eprintln!("invalid_path.reason: {}", error.reason_text());
             eprintln!("invalid_path.path: {:?}", error.path().map(Path::display));

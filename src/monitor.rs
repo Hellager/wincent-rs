@@ -264,7 +264,19 @@ mod tests {
             Ok(())
         }
 
-        fn remove_frequent_folder(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
+        fn remove_pinned_frequent_folder(
+            &self,
+            _path: &str,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn remove_unpinned_frequent_folder(
+            &self,
+            _path: &str,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
             Ok(())
         }
 

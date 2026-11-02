@@ -10,7 +10,7 @@ Read this in other languages: [English](README.md) | [中文](README.cn.md)
 
 ## Overview
 
-Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Explorer behavior. Add mutations use `SHAddToRecentDocs` or native Shell COM; PowerShell remains only for selected removal compatibility paths.
+Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Explorer behavior. Mutations use `SHAddToRecentDocs` or native Shell COM.
 
 ## Features
 
@@ -19,7 +19,7 @@ Wincent is a Rust library for managing Windows Quick Access functionality. Queri
 - Clear Recent Files, Frequent Folders, or both categories
 - Check item existence by exact path or keyword
 - Query persisted Recent Files positions and Frequent Folders positions/pin state
-- Caller-side timeout protection for native Shell mutations, refreshes, and remaining compatibility paths
+- Caller-side timeout protection for native Shell mutations and refreshes
 - Visibility control for Quick Access sections
 - Recent files visibility control in Windows Recommended items
 - DestList parsing and diagnostics

@@ -18,7 +18,7 @@
 //!
 //! ### System Integration
 //! - Windows API integration for reliable operations
-//! - PowerShell compatibility paths for selected removals
+//! - Native Shell and COM mutation paths
 //! - Cross-version Windows support
 //!
 //! ## Quick Start
@@ -44,7 +44,7 @@
 //! ## Implementation Details
 //!
 //! - Implements timeout mechanism to prevent deadlocks
-//! - Reads Quick Access directly from DestList data without Shell or PowerShell queries
+//! - Reads Quick Access directly from DestList data without live Shell queries
 //! - Applies Quick Access UI filtering recovered from observed Explorer behavior
 //! - Handles system-specific edge cases
 //!
@@ -77,9 +77,7 @@ pub mod monitor;
 mod query;
 mod quick_access_lock;
 mod recent_links;
-mod script_executor;
-mod script_storage;
-mod script_strategy;
+#[cfg(test)]
 mod test_utils;
 pub mod utils;
 
@@ -92,10 +90,7 @@ pub mod status;
 #[allow(unused)]
 /// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
-    pub use crate::error::{
-        PowerShellError, PowerShellErrorKind, PowerShellOperation, QuickAccessPostMutationStep,
-        WincentError,
-    };
+    pub use crate::error::{QuickAccessPostMutationStep, WincentError};
     pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
     pub use crate::monitor::{
         QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions,

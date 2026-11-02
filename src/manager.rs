@@ -65,9 +65,9 @@ impl Default for QuickAccessManagerBuilder {
 impl QuickAccessManagerBuilder {
     /// Sets the caller-side wait timeout for shell operations that support timeout control.
     ///
-    /// This bounds how long wincent waits for supported Shell, COM, and
-    /// PowerShell operations to report a result. It does not cancel a Shell COM
-    /// call that is already running inside Windows. A timeout therefore means
+    /// This bounds how long wincent waits for supported Shell and COM
+    /// operations to report a result. It does not cancel a Shell COM call that
+    /// is already running inside Windows. A timeout therefore means
     /// the final mutation state is unknown: the underlying operation may still
     /// complete later and affect Explorer state. Mutation operations are not
     /// retried automatically.
@@ -83,9 +83,9 @@ impl QuickAccessManagerBuilder {
 
     /// Tries to set the caller-side wait timeout for shell operations that support timeout control.
     ///
-    /// This bounds how long wincent waits for supported Shell, COM, and
-    /// PowerShell operations to report a result. It does not cancel a Shell COM
-    /// call that is already running inside Windows. A timeout therefore means
+    /// This bounds how long wincent waits for supported Shell and COM
+    /// operations to report a result. It does not cancel a Shell COM call that
+    /// is already running inside Windows. A timeout therefore means
     /// the final mutation state is unknown: the underlying operation may still
     /// complete later and affect Explorer state. Mutation operations are not
     /// retried automatically.
@@ -178,8 +178,8 @@ impl QuickAccessManager {
         Self::builder().build()
     }
 
-    /// Returns the configured caller-side wait timeout for supported Shell,
-    /// COM, and PowerShell operations.
+    /// Returns the configured caller-side wait timeout for supported Shell and
+    /// COM operations.
     #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
@@ -197,7 +197,7 @@ impl QuickAccessManager {
     ///
     /// This reads Explorer's on-disk DestList directly and applies the
     /// `CAutoList` rules plus Explorer's Folder Options hidden-item setting.
-    /// Queries do not invoke Shell COM or PowerShell.
+    /// Queries do not invoke Shell COM.
     ///
     /// The returned values match the UI-visible result from persisted backing
     /// data. Hidden filtering uses the attributes serialized when each item
@@ -643,8 +643,8 @@ impl QuickAccessManager {
     ///
     /// # Errors
     ///
-    /// Returns Shell, PowerShell, registry, or I/O errors from the requested
-    /// cleanup operations. If one category is cleared and a later cleanup step
+    /// Returns Shell, registry, or I/O errors from the requested cleanup
+    /// operations. If one category is cleared and a later cleanup step
     /// fails, returns [`WincentError::PartialEmpty`] so callers can distinguish
     /// partial progress from a complete failure.
     ///
@@ -1092,14 +1092,6 @@ mod tests {
             if let Some(error) = self.remove_recent_file_error.lock().unwrap().take() {
                 return Err(error);
             }
-            Ok(())
-        }
-
-        fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-            self.record(format!(
-                "remove_frequent_folder:{path}:{}",
-                timeout.as_secs()
-            ));
             Ok(())
         }
 

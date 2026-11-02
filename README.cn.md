@@ -10,7 +10,7 @@
 
 ## 概述
 
-Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库。查询操作直接解析 Explorer 的 DestList 文件，并应用从 Shell 查询行为逆向得到的规则；修改操作优先使用原生 Windows API，仅在部分删除兼容路径中使用有针对性的 PowerShell 兜底。
+Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库。查询操作直接解析 Explorer 的 DestList 文件，并应用从 Shell 查询行为逆向得到的规则；修改操作使用 `SHAddToRecentDocs` 或原生 Shell COM。
 
 ## 功能特性
 
@@ -19,7 +19,7 @@ Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库。查询操
 - 清空最近文件、常用文件夹或两个分类
 - 精确路径或关键词检查项目是否存在
 - 查询持久化的最近文件位置与常用文件夹位置/固定状态
-- Shell 修改、刷新和 PowerShell 兜底操作具备调用方等待超时保护
+- 原生 Shell 修改和刷新操作具备调用方等待超时保护
 - 快速访问分区可见性控制
 - Windows 推荐的项目中最近使用文件可见性控制
 - DestList 解析与诊断

@@ -6,8 +6,8 @@ use crate::{
     empty,
     handle::{
         add_file_to_recent_native, add_to_frequent_folders_with_timeout,
-        remove_from_frequent_folders_with_timeout, remove_from_recent_files_with_timeout,
-        remove_pinned_frequent_folder_with_timeout, remove_unpinned_frequent_folder_with_timeout,
+        remove_from_recent_files_with_timeout, remove_pinned_frequent_folder_with_timeout,
+        remove_unpinned_frequent_folder_with_timeout,
     },
     utils::PathType,
     QuickAccess, WincentResult,
@@ -24,19 +24,14 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()>;
-    fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn frequent_folder_pin_status(
         &self,
         _path: &str,
     ) -> WincentResult<crate::destlist::FrequentFolderPinStatus> {
         Ok(crate::destlist::FrequentFolderPinStatus::NotFound)
     }
-    fn remove_pinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        self.remove_frequent_folder(path, timeout)
-    }
-    fn remove_unpinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        self.remove_frequent_folder(path, timeout)
-    }
+    fn remove_pinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
+    fn remove_unpinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()>;
     fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()>;
     fn notify_shell_change(&self);
@@ -113,10 +108,6 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
 
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {
         remove_from_recent_files_with_timeout(path, timeout)
-    }
-
-    fn remove_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        remove_from_frequent_folders_with_timeout(path, timeout)
     }
 
     fn frequent_folder_pin_status(

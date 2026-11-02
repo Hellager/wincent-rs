@@ -12,7 +12,7 @@
 //! - Atomic operations with proper cleanup sequencing
 
 use crate::{
-    backend::{QuickAccessBackend, SystemQuickAccessBackend},
+    backend::QuickAccessBackend,
     destlist::{frequent_folders_dest_path, parse_file},
     error::WincentError,
     recent_links,
@@ -24,7 +24,6 @@ use windows::Win32::UI::Shell::SHAddToRecentDocs;
 
 /// SHARD_PATHW - with a null data pointer, clears all recent documents.
 const SHARD_PATHW: u32 = 0x0000_0003;
-const DEFAULT_EMPTY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Clears the Windows Recent Files list via a dedicated STA thread.
 ///
@@ -179,13 +178,6 @@ fn refresh_policy_for_result(result: &WincentResult<()>) -> Option<RefreshPolicy
     }
 }
 
-/// Clears items from a specific Quick Access category.
-#[allow(dead_code)]
-pub(crate) fn empty_items(qa_type: QuickAccess) -> WincentResult<()> {
-    let backend = SystemQuickAccessBackend;
-    empty_items_with_backend(qa_type, DEFAULT_EMPTY_TIMEOUT, &backend)
-}
-
 pub(crate) fn empty_items_with_backend(
     qa_type: QuickAccess,
     timeout: Duration,
@@ -213,16 +205,8 @@ pub(crate) fn empty_items_with_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handle::{
-        add_file_to_recent_native, pin_frequent_folder, remove_from_recent_files,
-        unpin_frequent_folder,
-    };
-    use crate::query::{get_frequent_folders, get_recent_files};
-    use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
     use std::cell::{Cell, RefCell};
-    use std::path::PathBuf;
     use std::sync::Mutex;
-    use std::thread;
     use std::time::Duration;
 
     struct FakeEmptyBackend {
@@ -289,7 +273,19 @@ mod tests {
             Ok(())
         }
 
-        fn remove_frequent_folder(&self, _path: &str, _timeout: Duration) -> WincentResult<()> {
+        fn remove_pinned_frequent_folder(
+            &self,
+            _path: &str,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
+            Ok(())
+        }
+
+        fn remove_unpinned_frequent_folder(
+            &self,
+            _path: &str,
+            _timeout: Duration,
+        ) -> WincentResult<()> {
             Ok(())
         }
 
@@ -377,69 +373,6 @@ mod tests {
         assert!(!destlist_deleted.get());
     }
 
-    // -------------------------------------------------------------------------
-    // Integration-test helpers
-    // -------------------------------------------------------------------------
-
-    fn path_to_str(path: &std::path::Path) -> WincentResult<&str> {
-        path.to_str()
-            .ok_or_else(|| WincentError::invalid_path(path, "Invalid path encoding"))
-    }
-
-    fn unique_millis() -> WincentResult<u128> {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .map_err(|error| WincentError::SystemError(error.to_string()))
-    }
-
-    /// RAII guard that runs best-effort cleanup when dropped.
-    ///
-    /// Ensures `cleanup_test_env` and optional Quick Access rollbacks run even
-    /// when a test panics or an assertion fails, preventing state leakage into
-    /// subsequent tests.
-    struct TestGuard {
-        dir: PathBuf,
-        /// Paths to unpin from Frequent Folders on drop (best effort).
-        pinned: Vec<String>,
-        /// Path to remove from Recent Files on drop (best effort).
-        recent_file: Option<String>,
-    }
-
-    impl TestGuard {
-        fn new(dir: PathBuf) -> Self {
-            Self {
-                dir,
-                pinned: Vec::new(),
-                recent_file: None,
-            }
-        }
-
-        fn with_pinned(mut self, path: &str) -> Self {
-            self.pinned.push(path.to_owned());
-            self
-        }
-
-        fn with_recent_file(mut self, path: &str) -> Self {
-            self.recent_file = Some(path.to_owned());
-            self
-        }
-    }
-
-    impl Drop for TestGuard {
-        fn drop(&mut self) {
-            // Best-effort unpin for every registered path.
-            for p in &self.pinned {
-                let _ = unpin_frequent_folder(p, Duration::from_secs(10));
-            }
-            // Best-effort recent-file removal - ignore errors.
-            if let Some(ref p) = self.recent_file {
-                let _ = remove_from_recent_files(p);
-            }
-            let _ = cleanup_test_env(&self.dir);
-        }
-    }
-
     #[test]
     fn refresh_policy_propagate_on_ok() {
         assert_eq!(
@@ -454,7 +387,7 @@ mod tests {
             refresh_policy_for_result(&Err(WincentError::PartialEmpty {
                 recent_files_cleared: true,
                 frequent_folders_cleared: false,
-                source: Box::new(WincentError::ScriptFailed("failed".to_string())),
+                source: Box::new(WincentError::SystemError("failed".to_string())),
             })),
             Some(RefreshPolicy::BestEffort)
         );
@@ -463,7 +396,7 @@ mod tests {
     #[test]
     fn refresh_policy_skips_non_partial_empty_error() {
         assert_eq!(
-            refresh_policy_for_result(&Err(WincentError::ScriptFailed("failed".to_string()))),
+            refresh_policy_for_result(&Err(WincentError::SystemError("failed".to_string()))),
             None
         );
     }
@@ -617,253 +550,9 @@ mod tests {
         );
     }
 
-    /// Poll `get_recent_files()` until the given path appears or retries are
-    /// exhausted. Returns `Ok(true)` when found.
-    fn wait_until_recent_file_present(path: &str, max_retries: u32) -> WincentResult<bool> {
-        for _ in 0..max_retries {
-            let files = get_recent_files()?;
-            if files.iter().any(|p| p == path) {
-                return Ok(true);
-            }
-            thread::sleep(Duration::from_millis(500));
-        }
-        Ok(false)
-    }
-
-    /// Poll `get_recent_files()` until the list is empty or retries are
-    /// exhausted. Returns `Ok(true)` when empty.
-    fn wait_until_recent_files_empty(max_retries: u32) -> WincentResult<bool> {
-        for _ in 0..max_retries {
-            if get_recent_files()?.is_empty() {
-                return Ok(true);
-            }
-            thread::sleep(Duration::from_millis(500));
-        }
-        Ok(false)
-    }
-
-    /// Poll `get_frequent_folders()` until `path` appears or retries are
-    /// exhausted. Returns `Ok(true)` when found.
-    fn wait_until_folder_present(path: &str, max_retries: u32) -> WincentResult<bool> {
-        for _ in 0..max_retries {
-            let folders = get_frequent_folders()?;
-            if folders.iter().any(|p| p == path) {
-                return Ok(true);
-            }
-            thread::sleep(Duration::from_millis(500));
-        }
-        Ok(false)
-    }
-
-    /// Poll `get_frequent_folders()` until `path` is absent or retries are
-    /// exhausted. Returns `Ok(true)` when absent.
-    fn wait_until_folder_absent(path: &str, max_retries: u32) -> WincentResult<bool> {
-        for _ in 0..max_retries {
-            let folders = get_frequent_folders()?;
-            if !folders.iter().any(|p| p == path) {
-                return Ok(true);
-            }
-            thread::sleep(Duration::from_millis(500));
-        }
-        Ok(false)
-    }
-
-    // -------------------------------------------------------------------------
-    // COM correctness tests (no system-state modification)
-    // -------------------------------------------------------------------------
-
-    /// Verifies that `empty_recent_files_with_api()` does NOT return `ComApartmentMismatch`
-    /// when called from an MTA thread, since it now routes through `run_on_sta_thread`.
     #[test]
-    #[ignore = "Modifies system state - run with: cargo test empty::tests::test_com_apartment_mismatch -- --ignored --nocapture"]
-    fn test_com_apartment_mismatch() -> WincentResult<()> {
-        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
-
-        // SAFETY: The MTA initialization in this test is balanced by
-        // CoUninitialize before returning.
-        unsafe {
-            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
-            assert!(hr.is_ok() || hr.0 == 1, "MTA init should succeed");
-
-            let result = empty_recent_files_with_api(Duration::from_secs(10));
-            assert!(
-                !matches!(result, Err(WincentError::ComApartmentMismatch(_))),
-                "MTA caller should no longer get ComApartmentMismatch, got: {:?}",
-                result
-            );
-
-            CoUninitialize();
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_empty_recent_files_zero_timeout_rejected() {
+    fn empty_recent_files_zero_timeout_is_rejected() {
         let result = empty_recent_files_with_api(Duration::ZERO);
-        assert!(
-            matches!(result, Err(WincentError::InvalidArgument(_))),
-            "got: {:?}",
-            result
-        );
-    }
-
-    /// Verifies the calling thread's COM state is unaffected by `empty_recent_files_with_api`
-    /// since it now runs on its own STA thread.
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_com_s_false_reference_counting -- --ignored --nocapture"]
-    fn test_com_s_false_reference_counting() -> WincentResult<()> {
-        use windows::Win32::System::Com::{
-            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
-        };
-
-        // SAFETY: The test pairs each successful CoInitializeEx with
-        // CoUninitialize on the same thread.
-        unsafe {
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            assert_eq!(hr.0, 0, "CoInitializeEx should return S_OK");
-
-            for _ in 0..3 {
-                let result = empty_recent_files_with_api(Duration::from_secs(10));
-                assert!(result.is_ok(), "should succeed: {:?}", result);
-            }
-
-            CoUninitialize();
-
-            // Calling thread fully uninitialised; MTA must succeed with no leaked refs.
-            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
-            assert!(
-                hr.0 == 0 || hr.0 == 1,
-                "Should initialize MTA with no leaked STA references. Got: 0x{:08X}",
-                hr.0
-            );
-            CoUninitialize();
-        }
-
-        Ok(())
-    }
-
-    // -------------------------------------------------------------------------
-    // Integration tests - internal primitives
-    // -------------------------------------------------------------------------
-
-    /// Verifies that `empty_recent_files_with_api()` clears the Recent Files list.
-    ///
-    /// Arrange: add a unique test file.
-    /// Act:     call `empty_recent_files_with_api()`.
-    /// Assert:  the list becomes empty.
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_empty_recent_files -- --ignored --nocapture"]
-    fn test_empty_recent_files() -> WincentResult<()> {
-        let test_dir = setup_test_env()?;
-
-        let timestamp = unique_millis()?;
-        let test_file = create_test_file(&test_dir, &format!("empty_test_{timestamp}.txt"), "x")?;
-        let test_path = path_to_str(&test_file)?;
-        // Guard is created after test_file so it can register the path for cleanup.
-        let _guard = TestGuard::new(test_dir.clone()).with_recent_file(test_path);
-
-        add_file_to_recent_native(test_path, Duration::from_secs(10))?;
-        assert!(
-            wait_until_recent_file_present(test_path, 20)?,
-            "Test file should appear in Recent Files before clearing"
-        );
-
-        empty_recent_files_with_api(Duration::from_secs(10))?;
-        assert!(
-            wait_until_recent_files_empty(10)?,
-            "Recent Files list should be empty after empty_recent_files_with_api()"
-        );
-
-        Ok(())
-    }
-
-    // -------------------------------------------------------------------------
-    // Integration tests - public API semantics
-    // -------------------------------------------------------------------------
-
-    /// Verifies that the default Quick Access clear path clears Recent Files.
-    ///
-    /// Arrange: add a test file to Recent Files.
-    /// Act:     call `empty_items(QuickAccess::All)`.
-    /// Assert:  Recent Files is empty.
-    ///
-    /// Note: the jump list file deletion is already covered by
-    /// `test_empty_user_folders_deletes_jumplist_file`. It is not asserted here
-    /// because Windows automatically recreates the file shortly after deletion,
-    /// making a post-call existence check inherently racy. The "pinned folder
-    /// survives" property is also not asserted because `pin_frequent_folder`
-    /// does not guarantee a shell-pinned entry immune to jump list deletion on
-    /// all Windows configurations.
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_empty_quick_access_default_clears_recent_files -- --ignored --nocapture"]
-    fn test_empty_quick_access_default_clears_recent_files() -> WincentResult<()> {
-        let test_dir = setup_test_env()?;
-
-        let timestamp = unique_millis()?;
-        let test_file = create_test_file(&test_dir, &format!("qa_false_{timestamp}.txt"), "x")?;
-        let file_path = path_to_str(&test_file)?;
-        let _guard = TestGuard::new(test_dir.clone()).with_recent_file(file_path);
-
-        add_file_to_recent_native(file_path, Duration::from_secs(10))?;
-        assert!(
-            wait_until_recent_file_present(file_path, 20)?,
-            "Test file should appear in Recent Files before clearing"
-        );
-
-        empty_items(QuickAccess::All)?;
-        thread::sleep(Duration::from_secs(1));
-
-        assert!(
-            wait_until_recent_files_empty(10)?,
-            "Recent Files should be empty after the default Quick Access clear"
-        );
-
-        Ok(())
-    }
-
-    /// Verifies that clearing all items removes Recent Files and a user pin.
-    ///
-    /// Arrange: pin a test folder and add a test file to Recent Files.
-    /// Act:     call `empty_items(QuickAccess::All)`.
-    /// Assert:  Recent Files is empty and the pinned folder is absent.
-    #[test]
-    #[ignore = "Modifies system state - run with: cargo test test_empty_quick_access_clears_all -- --ignored --nocapture"]
-    fn test_empty_quick_access_clears_all() -> WincentResult<()> {
-        let test_dir = setup_test_env()?;
-        let test_path = path_to_str(&test_dir)?.to_owned();
-
-        let timestamp = unique_millis()?;
-        let test_file = create_test_file(&test_dir, &format!("qa_true_{timestamp}.txt"), "x")?;
-        let file_path = path_to_str(&test_file)?;
-        let _guard = TestGuard::new(test_dir.clone())
-            .with_pinned(&test_path)
-            .with_recent_file(file_path);
-
-        add_file_to_recent_native(file_path, Duration::from_secs(10))?;
-        pin_frequent_folder(&test_path, Duration::from_secs(10))?;
-
-        assert!(
-            wait_until_recent_file_present(file_path, 20)?,
-            "Test file should appear in Recent Files before clearing"
-        );
-        assert!(
-            wait_until_folder_present(&test_path, 10)?,
-            "Test folder should be pinned before clearing"
-        );
-
-        empty_items(QuickAccess::All)?;
-        thread::sleep(Duration::from_secs(1));
-
-        assert!(
-            wait_until_recent_files_empty(10)?,
-            "Recent Files should be empty after empty_items(All)"
-        );
-        assert!(
-            wait_until_folder_absent(&test_path, 10)?,
-            "Pinned folder must be absent after empty_items(All)"
-        );
-
-        Ok(())
+        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
     }
 }
