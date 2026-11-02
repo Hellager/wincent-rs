@@ -1,8 +1,7 @@
 # Status Query VM Validation
 
-Validates `QuickAccessManager::quick_access_status()`, `recent_file_position()`,
-and `frequent_folder_slot()` against Explorer Shell query results and measures
-their query cost.
+Validates `QuickAccessManager::get_item_status()` against Explorer Shell query
+results and measures its query cost.
 
 ## Run
 

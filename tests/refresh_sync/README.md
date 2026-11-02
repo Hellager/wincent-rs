@@ -8,7 +8,7 @@ and the **on-disk file** agree?
 
 The experiment compares:
 
-1. **current program refresh**: `QuickAccessManager::refresh_explorer()`
+1. **current program refresh**: `QuickAccessManager::refresh()`
    (`SHChangeNotify(SHCNE_ASSOCCHANGED)` followed by `IShellView::Refresh` on
    matching Quick Access/Home windows);
 2. **explicit SHChangeNotify + refresh**: an additional explicit notification
@@ -23,8 +23,7 @@ itself updates the open view.
 
 | State | Raw entries | Visible items |
 | --- | ---: | --- |
-| Windows 10 A (baseline) | 5 | 5 |
-| Windows 10 B | 6 | 6 (adds `refresh-sync-marker.txt`) |
+| Windows 10 A/B | Native v4 snapshots created through system APIs | Records actual Shell counts; B adds the marker |
 | Windows 11 A/B | Native v6 snapshots created through system APIs | Records actual Shell counts; B adds the marker |
 
 The test:
@@ -75,10 +74,9 @@ correct screenshot.
 Encrypted VMs can set the optional `WINCENT_VM_PASSWORD`; the host passes it
 through `vmrun -vp`.
 
-Windows 10 uses deterministic synthetic-v4 A/B states. Windows 11 creates
-native-v6 A/B snapshots through system `add_item`, then performs whole-file
-replacement. This does not implement or validate a v6 entry writer.
-If native Recent tracking cannot produce both snapshots, the Windows 11 run
+Windows 10 and Windows 11 create native A/B snapshots through system
+`add_item`, then perform whole-file replacement. This does not implement or
+validate a DestList entry writer. If native Recent tracking cannot produce both snapshots, the run
 returns `status: "skipped"` with reason `native_recent_tracking_unavailable`.
 That result is an expected capability outcome, not a successful refresh sample.
 
@@ -136,7 +134,7 @@ the notification does not materially change the measured refresh cost.
   file already in sync. Its measured cost is about **57.8 ms**, dominated by
   the refresh; the notification adds about **0.09 ms**.
 
-The public `QuickAccessManager::refresh_explorer()` now implements that
+The public `QuickAccessManager::refresh()` now implements that
 notification-plus-targeted-view-refresh sequence as one operation.
 
 ## Limitations

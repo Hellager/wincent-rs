@@ -3,16 +3,15 @@
 use crate::error::WincentError;
 use crate::script_storage::ScriptStorage;
 use crate::script_strategy::PSScript;
-use crate::utils::get_windows_recent_folder;
 use crate::WincentResult;
-use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const RECENT_FILES_AUTOMATIC_DESTINATION: &str = "5f7b5f1e01b83767.automaticDestinations-ms";
 const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// PowerShell script executor.
@@ -193,6 +192,7 @@ impl ScriptExecutor {
     }
 
     /// Parses script output into a string collection.
+    #[cfg(test)]
     pub fn parse_output_to_strings(
         output: Output,
         script_type: PSScript,
@@ -229,39 +229,6 @@ impl ScriptExecutor {
             .collect();
 
         Ok(lines)
-    }
-}
-
-/// Windows Quick Access data file information.
-pub(crate) struct QuickAccessDataFiles {
-    recent_files_path: PathBuf,
-}
-
-impl QuickAccessDataFiles {
-    /// Retrieves Quick Access data file paths.
-    pub fn new() -> WincentResult<Self> {
-        let recent_folder = get_windows_recent_folder()?;
-        let automatic_dest_dir = Path::new(&recent_folder).join("AutomaticDestinations");
-
-        Ok(Self {
-            // Explorer's Recent Files automatic destination AppID hash on
-            // supported Windows 10/11 builds. This is an implementation detail
-            // of the shell and may need updating if Windows changes the AppID.
-            recent_files_path: automatic_dest_dir.join(RECENT_FILES_AUTOMATIC_DESTINATION),
-        })
-    }
-
-    fn remove_file(&self, path: &Path) -> WincentResult<()> {
-        match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(WincentError::Io(e)),
-        }
-    }
-
-    /// Removes the Recent Files data file, ignoring missing-file errors.
-    pub fn remove_recent_file(&self) -> WincentResult<()> {
-        self.remove_file(&self.recent_files_path)
     }
 }
 

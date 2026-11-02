@@ -57,7 +57,7 @@ use crate::{QuickAccess, WincentResult};
 ///
 /// # fn main() -> WincentResult<()> {
 /// let manager = QuickAccessManager::new();
-/// if let Some(slot) = manager.frequent_folder_slot(r"C:\Work")? {
+/// if let Some(slot) = manager.get_item_status(r"C:\Work")?.frequent_folder() {
 ///     println!("position={} pinned={}", slot.position(), slot.is_pinned());
 /// }
 /// # Ok(())
@@ -102,7 +102,7 @@ impl FrequentFolderSlot {
 ///
 /// # fn main() -> WincentResult<()> {
 /// let manager = QuickAccessManager::new();
-/// let status = manager.quick_access_status(r"C:\Work\report.docx")?;
+/// let status = manager.get_item_status(r"C:\Work\report.docx")?;
 /// if let Some(position) = status.recent_file() {
 ///     println!("recent file at position {position}");
 /// }
@@ -205,29 +205,6 @@ pub(crate) fn status_for_path(path: &str) -> WincentResult<QuickAccessStatus> {
     let recent = load_list(recent_files_dest_path()?)?;
     let frequent = load_list(frequent_folders_dest_path()?)?;
     Ok(status_for_parsed(recent.as_ref(), frequent.as_ref(), path))
-}
-
-/// Reads the Recent Files backing file and returns the visible position of `path`.
-pub(crate) fn recent_position_for_path(path: &str) -> WincentResult<Option<usize>> {
-    let Some(dest) = load_list(recent_files_dest_path()?)? else {
-        return Ok(None);
-    };
-    Ok(locate(&recent_visible(&dest), path))
-}
-
-/// Reads the Frequent Folders backing file and returns the visible slot of `path`.
-pub(crate) fn frequent_slot_for_path(path: &str) -> WincentResult<Option<FrequentFolderSlot>> {
-    let Some(dest) = load_list(frequent_folders_dest_path()?)? else {
-        return Ok(None);
-    };
-    let visible = frequent_visible(&dest);
-    let Some(position) = locate(&visible, path) else {
-        return Ok(None);
-    };
-    Ok(Some(FrequentFolderSlot::new(
-        position,
-        visible[position].is_pinned(),
-    )))
 }
 
 /// Parses one backing file, treating a missing file as an empty list.

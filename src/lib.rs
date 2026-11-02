@@ -8,7 +8,6 @@
 //! ### Core Operations
 //! - Query Quick Access items (recent files and frequent folders)
 //! - Add/Remove items to/from Quick Access
-//! - Direct DestList v4 entry and stream removal for targeted cleanup
 //! - Clear Quick Access categories
 //! - Check item existence
 //!
@@ -19,7 +18,7 @@
 //!
 //! ### System Integration
 //! - Windows API integration for reliable operations
-//! - PowerShell compatibility paths for selected removals and Explorer refreshes
+//! - PowerShell compatibility paths for selected removals
 //! - Cross-version Windows support
 //!
 //! ## Quick Start
@@ -62,7 +61,6 @@
 //!
 
 mod backend;
-mod batch;
 mod com;
 mod com_thread;
 mod empty;
@@ -74,7 +72,6 @@ pub mod monitor;
 mod query;
 mod quick_access_lock;
 mod recent_links;
-mod restore;
 mod retry;
 mod script_executor;
 mod script_storage;
@@ -95,10 +92,7 @@ pub mod prelude {
         PowerShellError, PowerShellErrorKind, PowerShellOperation, QuickAccessPostMutationStep,
         WincentError,
     };
-    pub use crate::manager::{
-        QuickAccessItem, QuickAccessManager, QuickAccessManagerBuilder, RemoveOptions,
-        RemoveTimingReport,
-    };
+    pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
     pub use crate::monitor::{
         QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions,
     };
@@ -106,11 +100,6 @@ pub mod prelude {
         QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
         QuickAccessUnlockReport,
     };
-    pub use crate::restore::{
-        FrequentRawPathRemoveReport, FrequentRestoreReport, RecentRestoreReport,
-        RestoreDefaultsOptions, RestoreDefaultsReport,
-    };
-
     pub use crate::status::{FrequentFolderSlot, QuickAccessStatus};
 
     pub use crate::visible::{
@@ -125,7 +114,7 @@ pub mod prelude {
 
     pub use crate::utils::{get_windows_version, WindowsVersion};
 
-    pub use crate::{BatchOptions, BatchResult, QuickAccess, RetryPolicy, WincentResult};
+    pub use crate::{QuickAccess, RetryPolicy, WincentResult};
 
     pub use crate::destlist::{
         entries, filetime_to_system_time, frequent_folders_dest_path,
@@ -133,8 +122,7 @@ pub mod prelude {
         parse_file as parse_dest_file, parse_file_with_kind as parse_dest_file_with_kind,
         quick_access_entries, quick_access_entries_for_kind, recent_files_dest_path,
         visible_entries, visible_entries_for_kind, AutomaticDestinations, CfbInfo, CfbStream,
-        DestList, DestListEntry, DestListItemUpdate, DestListKind, DestListPosition, Diagnostic,
-        DiagnosticSeverity, FrequentFolderPinStatus, PathSource,
+        DestList, DestListEntry, DestListKind, Diagnostic, DiagnosticSeverity, PathSource,
         DEFAULT_FREQUENT_FOLDERS_NORMAL_SLOTS, DEFAULT_RECENT_FILES_RESULT_LIMIT,
         DEST_LIST_PROPERTY_STORE_STREAM, FREQUENT_FOLDERS_MIN_ACCESS_COUNT,
     };
@@ -142,20 +130,13 @@ pub mod prelude {
 
 use crate::error::WincentError;
 
-pub use crate::batch::{BatchOptions, BatchResult};
-pub use crate::destlist::{DestListItemUpdate, DestListPosition};
 pub use crate::error::QuickAccessPostMutationStep;
-pub use crate::manager::{QuickAccessItem, RemoveOptions, RemoveTimingReport};
 pub use crate::monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions};
 pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
     QuickAccessUnlockReport,
 };
 pub use crate::recent_links::find_windows_recent_links_for_target;
-pub use crate::restore::{
-    FrequentRawPathRemoveReport, FrequentRestoreReport, RecentRestoreReport,
-    RestoreDefaultsOptions, RestoreDefaultsReport,
-};
 pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.

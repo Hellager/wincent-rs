@@ -1,7 +1,7 @@
 # 状态查询 VM 验证
 
-验证 `QuickAccessManager::quick_access_status()` / `recent_file_position()` /
-`frequent_folder_slot()` 与 Explorer Shell 结果的一致性，并测量查询成本。
+验证 `QuickAccessManager::get_item_status()` 与 Explorer Shell 结果的一致性，
+并测量查询成本。
 
 ## 运行
 

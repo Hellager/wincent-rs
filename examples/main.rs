@@ -91,28 +91,20 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "list" => cmd_list(&manager, &args[1..]),
         "list-paths" => cmd_list_paths(&manager, &args[1..]),
         "contains-path" => cmd_contains_path(&manager, &args[1..]),
-        "pin-status" => cmd_pin_status(&manager, &args[1..]),
         "status" => cmd_status(&manager, &args[1..]),
         "contains-keyword" => cmd_contains_keyword(&manager, &args[1..]),
         "find" => cmd_find(&manager, &args[1..]),
         "watch" => cmd_watch(&manager, &args[1..]),
         "add" => cmd_add(&manager, &args[1..]),
-        "add-direct" => cmd_add_direct(&manager, &args[1..]),
         "add-timed" => cmd_add_timed(&manager, &args[1..]),
-        "modify-direct" => cmd_modify_direct(&manager, &args[1..]),
-        "pin" => cmd_pin(&manager, &args[1..]),
         "remove" => cmd_remove(&manager, &args[1..]),
-        "remove-direct" => cmd_remove_direct(&manager, &args[1..]),
-        "remove-timed" => cmd_remove_timed(&manager, &args[1..]),
-        "batch-add" => cmd_batch_add(&manager, &args[1..]),
-        "batch-remove" => cmd_batch_remove(&manager, &args[1..]),
+        "refresh" => cmd_refresh(&manager, &args[1..]),
         "lock" => cmd_lock(&manager, &args[1..]),
         "empty" => cmd_empty(&manager, &args[1..]),
         "retry" => cmd_retry(&args[1..]),
         "classify" => cmd_classify(&args[1..]),
         "invalid-path" => cmd_invalid_path(&args[1..]),
         "visible" => cmd_visible(&manager, &args[1..]),
-        "restore" => cmd_restore(&manager, &args[1..]),
         "dest" => cmd_dest(&manager, &args[1..]),
         "bench" => cmd_bench(&manager, &args[1..]),
         other => Err(WincentError::InvalidArgument(format!(
@@ -171,7 +163,6 @@ Core:
   list <recent|frequent|all> [--paths]
   list-paths <recent|frequent|all>
   contains-path <recent|frequent|all> <path>
-  pin-status <path>
   status <path>
     prints where the DestList rules place the path in a default Shell query:
     recent position, frequent position and pin state, or none.
@@ -179,26 +170,15 @@ Core:
   find <recent|frequent|all> <keyword>
   watch <recent|frequent|all> [--poll-ms N]
   add <path>
-  add-direct <recent|frequent> <path>
-    writes a DestList v4 entry, numeric stream, and Recent shortcuts when applicable.
-  add-timed shell <path> | add-timed direct <recent|frequent> <path>
+  add-timed <path>
     prints successful addition time as one JSON object.
-  modify-direct <recent|frequent> <path> [--show|--hide] [--pin|--unpin]
-    [--position <first|last|N>]
-    updates DestList v4 visibility, Frequent pin state, or zero-based group position.
-  pin <path>
-  remove <path> [--deep-clean] [--refresh-explorer]
+  remove <path>
     detects Recent files and pinned or unpinned Frequent Folders automatically.
-  remove-direct <recent|frequent> <path>
-    rewrites DestList v4, removes the numeric stream and Recent shortcut, then refreshes Explorer.
-  remove-timed shell <path> | remove-timed direct <recent|frequent> <path>
-    prints successful removal phase timings as one JSON object.
-  batch-add [--force-recent-files-rebuild] [--refresh-explorer] <recent:path|frequent:path>...
-  batch-remove [--deep-clean] [--refresh-explorer] <recent:path|frequent:path>...
+  refresh
+    notifies the Shell, then refreshes open Explorer views.
   lock [recent|frequent|all] [--cleanup-new-links]
     Locked targets block Explorer from adding or removing matching Quick Access items.
   empty <recent|frequent|all>
-  restore <recent|frequent|all> [--deep] [--no-refresh-explorer] [--rebuild-delay-ms N] [--rebuild-poll-timeout-ms N] [--lnk-resolve-timeout-ms N] [--clear-timeout-ms N]
 Utility APIs:
   retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
   classify <stderr text>
@@ -303,16 +283,10 @@ fn cmd_contains_path(manager: &QuickAccessManager, args: &[String]) -> WincentRe
     Ok(())
 }
 
-fn cmd_pin_status(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "pin-status <path>")?;
-    println!("{:?}", manager.frequent_folder_pin_status(&args[0])?);
-    Ok(())
-}
-
 fn cmd_status(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "status <path>")?;
     let path = &args[0];
-    let status = manager.quick_access_status(path)?;
+    let status = manager.get_item_status(path)?;
     let recent_file = match status.recent_file() {
         Some(position) => position.to_string(),
         None => "null".to_string(),
@@ -402,162 +376,30 @@ fn cmd_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     Ok(())
 }
 
-fn cmd_add_direct(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 2, "add-direct <recent|frequent> <path>")?;
-    let qa_type = parse_category(&args[0], false)?;
-    manager.add_item_direct(&args[1], qa_type)?;
-    println!("directly added {}", args[1]);
-    Ok(())
-}
-
 fn cmd_add_timed(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    require_len(args, 1, "add-timed <path>")?;
     let started = std::time::Instant::now();
-    let category = match args.first().map(String::as_str) {
-        Some("shell") => {
-            require_len(args, 2, "add-timed shell <path>")?;
-            manager.add_item(&args[1])?;
-            "auto"
-        }
-        Some("direct") => {
-            require_len(args, 3, "add-timed direct <recent|frequent> <path>")?;
-            let category = args[1].as_str();
-            manager.add_item_direct(&args[2], parse_category(category, false)?)?;
-            category
-        }
-        Some(other) => {
-            return Err(WincentError::InvalidArgument(format!(
-                "unknown add timing mode: {other}"
-            )));
-        }
-        None => {
-            return Err(WincentError::InvalidArgument(
-                "usage: add-timed shell <path> | add-timed direct <recent|frequent> <path>"
-                    .to_string(),
-            ));
-        }
-    };
+    manager.add_item(&args[0])?;
     println!(
-        "{{\"mode\":\"{}\",\"category\":\"{}\",\"total_ns\":{}}}",
-        args[0],
-        category,
+        "{{\"mode\":\"shell\",\"category\":\"auto\",\"total_ns\":{}}}",
         started.elapsed().as_nanos()
     );
     Ok(())
 }
 
-fn cmd_modify_direct(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(
-        args,
-        2,
-        "modify-direct <recent|frequent> <path> [--show|--hide] [--pin|--unpin] \
-         [--position <first|last|N>]",
-    )?;
-    let qa_type = parse_category(&args[0], false)?;
-    let update = parse_destlist_update(&args[2..])?;
-    manager.update_item_direct(&args[1], qa_type, update)?;
-    println!("directly updated {}", args[1]);
-    Ok(())
-}
-
-fn cmd_pin(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "pin <path>")?;
-
-    manager.pin_frequent_folder(&args[0])?;
-    println!("pinned {}", args[0]);
-    Ok(())
-}
-
 fn cmd_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "remove <path> [--deep-clean] [--refresh-explorer]")?;
-    let options = parse_remove_options(&args[1..])?;
-
-    manager.remove_item_with_options(&args[0], options)?;
+    require_len(args, 1, "remove <path>")?;
+    manager.remove_item(&args[0])?;
     println!("removed {}", args[0]);
     Ok(())
 }
 
-fn cmd_remove_direct(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 2, "remove-direct <recent|frequent> <path>")?;
-    let qa_type = parse_category(&args[0], false)?;
-
-    manager.remove_item_direct(&args[1], qa_type)?;
-    println!("directly removed {}", args[1]);
-    Ok(())
-}
-
-fn cmd_remove_timed(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(
-        args,
-        2,
-        "remove-timed shell <path> | remove-timed direct <recent|frequent> <path>",
-    )?;
-    let (report, category) = match args[0].as_str() {
-        "shell" => (
-            manager.remove_item_with_options_timed(
-                &args[1],
-                RemoveOptions::new()
-                    .deep_clean_recent_links()
-                    .refresh_explorer(),
-            )?,
-            "auto",
-        ),
-        "direct" => {
-            require_len(args, 3, "remove-timed direct <recent|frequent> <path>")?;
-            let qa_type = parse_category(&args[1], false)?;
-            (
-                manager.remove_item_direct_timed(&args[2], qa_type)?,
-                args[1].as_str(),
-            )
-        }
-        mode => {
-            return Err(WincentError::InvalidArgument(format!(
-                "unknown remove timing mode: {mode}"
-            )))
-        }
-    };
-    println!(
-        concat!(
-            "{{\"mode\":\"{}\",\"category\":\"{}\",",
-            "\"mutation_ns\":{},\"lnk_cleanup_ns\":{},",
-            "\"explorer_refresh_ns\":{},\"other_ns\":{},\"total_ns\":{}}}"
-        ),
-        args[0],
-        category,
-        report.mutation().as_nanos(),
-        report.recent_link_cleanup().as_nanos(),
-        report.explorer_refresh().as_nanos(),
-        report.other().as_nanos(),
-        report.total().as_nanos(),
-    );
-    Ok(())
-}
-
-fn cmd_batch_add(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    let (options, item_args) = split_batch_add_options(args)?;
-    if item_args.is_empty() {
-        return Err(WincentError::InvalidArgument(
-            "batch-add requires at least one item".to_string(),
-        ));
+fn cmd_refresh(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+    if !args.is_empty() {
+        return Err(WincentError::InvalidArgument("usage: refresh".to_string()));
     }
-
-    let items = parse_batch_items(&item_args)?;
-    let result = manager.add_items_batch(&items, options);
-    print_batch_result(result);
-    Ok(())
-}
-
-fn cmd_batch_remove(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    let (batch_options, remove_options, item_args) = split_batch_remove_options(args)?;
-    if item_args.is_empty() {
-        return Err(WincentError::InvalidArgument(
-            "batch-remove requires at least one item".to_string(),
-        ));
-    }
-
-    let items = parse_batch_items(&item_args)?;
-    let result =
-        manager.remove_items_batch_with_batch_options(&items, batch_options, remove_options);
-    print_batch_result(result);
+    manager.refresh()?;
+    println!("refreshed Explorer");
     Ok(())
 }
 
@@ -632,56 +474,6 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
 
     manager.empty_items(qa_type)?;
     println!("cleared {}", category_name(qa_type));
-    Ok(())
-}
-
-fn cmd_restore(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "restore <recent|frequent|all> [options]")?;
-    let qa_type = parse_category(&args[0], true)?;
-    let mut options = RestoreDefaultsOptions::new();
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--deep" => options = options.deep_lnk_cleanup(),
-            "--no-refresh-explorer" => options = options.with_refresh_explorer(false),
-            "--rebuild-delay-ms" => {
-                index += 1;
-                options = options.with_rebuild_delay(Duration::from_millis(parse_u64(
-                    required_arg(args.get(index), "rebuild-delay-ms")?,
-                    "rebuild-delay-ms",
-                )?));
-            }
-            "--rebuild-poll-timeout-ms" => {
-                index += 1;
-                options = options.with_rebuild_poll_timeout(Duration::from_millis(parse_u64(
-                    required_arg(args.get(index), "rebuild-poll-timeout-ms")?,
-                    "rebuild-poll-timeout-ms",
-                )?));
-            }
-            "--lnk-resolve-timeout-ms" => {
-                index += 1;
-                options = options.with_lnk_resolve_timeout(Duration::from_millis(parse_u64(
-                    required_arg(args.get(index), "lnk-resolve-timeout-ms")?,
-                    "lnk-resolve-timeout-ms",
-                )?));
-            }
-            "--clear-timeout-ms" => {
-                index += 1;
-                options = options.with_clear_timeout(Duration::from_millis(parse_u64(
-                    required_arg(args.get(index), "clear-timeout-ms")?,
-                    "clear-timeout-ms",
-                )?));
-            }
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown restore option: {other}"
-                )))
-            }
-        }
-        index += 1;
-    }
-    let report = manager.restore_defaults(qa_type, options)?;
-    print_restore_report(&report);
     Ok(())
 }
 
@@ -1064,12 +856,12 @@ fn cmd_dest_parse_bytes(args: &[String]) -> WincentResult<()> {
     Ok(())
 }
 
-fn cmd_dest_manager(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
+fn cmd_dest_manager(_manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "dest manager <recent|frequent> [--limit N]")?;
     let limit = parse_limit(&args[1..], 20)?;
     let entries = match args[0].as_str() {
-        "recent" => manager.get_recent_files_metadata()?,
-        "frequent" => manager.get_frequent_folders_metadata()?,
+        "recent" => read_metadata(QuickAccess::RecentFiles)?,
+        "frequent" => read_metadata(QuickAccess::FrequentFolders)?,
         other => {
             return Err(WincentError::InvalidArgument(format!(
                 "unknown metadata target: {other}"
@@ -1092,11 +884,7 @@ fn cmd_bench(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
 
     // Warm-up pass keeps one-time costs (COM init, file cache) out of the loop.
     let _ = manager.get_items(category)?;
-    if category == QuickAccess::RecentFiles {
-        let _ = manager.get_recent_files_metadata()?;
-    } else {
-        let _ = manager.get_frequent_folders_metadata()?;
-    }
+    let _ = read_metadata(category)?;
 
     let mut shell_ms = Vec::with_capacity(iterations);
     let mut rules_ms = Vec::with_capacity(iterations);
@@ -1106,11 +894,7 @@ fn cmd_bench(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
         shell_ms.push(start.elapsed().as_secs_f64() * 1000.0);
 
         let start = Instant::now();
-        if category == QuickAccess::RecentFiles {
-            let _ = manager.get_recent_files_metadata()?;
-        } else {
-            let _ = manager.get_frequent_folders_metadata()?;
-        }
+        let _ = read_metadata(category)?;
         rules_ms.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -1169,6 +953,20 @@ fn dest_path(kind: DestKind) -> WincentResult<PathBuf> {
     }
 }
 
+fn read_metadata(qa_type: QuickAccess) -> WincentResult<Vec<wincent::destlist::DestListEntry>> {
+    let path = match qa_type {
+        QuickAccess::RecentFiles => recent_files_dest_path()?,
+        QuickAccess::FrequentFolders => frequent_folders_dest_path()?,
+        _ => {
+            return Err(WincentError::UnsupportedOperation(
+                "metadata requires Recent Files or Frequent Folders".to_string(),
+            ));
+        }
+    };
+    let parsed = parse_dest_file(path)?;
+    Ok(dest_entries(parsed.dest_list()))
+}
+
 fn category_name(qa_type: QuickAccess) -> &'static str {
     match qa_type {
         QuickAccess::RecentFiles => "Recent Files",
@@ -1176,121 +974,6 @@ fn category_name(qa_type: QuickAccess) -> &'static str {
         QuickAccess::All => "All",
         _ => "Unknown",
     }
-}
-
-fn parse_batch_items(args: &[String]) -> WincentResult<Vec<QuickAccessItem>> {
-    args.iter()
-        .map(|item| {
-            let (kind, path) = item.split_once(':').ok_or_else(|| {
-                WincentError::InvalidArgument(format!(
-                    "batch item must be recent:path or frequent:path: {item}"
-                ))
-            })?;
-            match kind {
-                "recent" | "file" | "files" => Ok(QuickAccessItem::recent_file(path)),
-                "frequent" | "folder" | "folders" => Ok(QuickAccessItem::frequent_folder(path)),
-                other => Err(WincentError::InvalidArgument(format!(
-                    "unknown batch item type: {other}"
-                ))),
-            }
-        })
-        .collect()
-}
-
-fn parse_remove_options(args: &[String]) -> WincentResult<RemoveOptions> {
-    let mut options = RemoveOptions::new();
-    for arg in args {
-        match arg.as_str() {
-            "--deep-clean" => options = options.deep_clean_recent_links(),
-            "--refresh-explorer" => options = options.refresh_explorer(),
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown remove option: {other}"
-                )))
-            }
-        }
-    }
-    Ok(options)
-}
-
-fn parse_destlist_update(args: &[String]) -> WincentResult<DestListItemUpdate> {
-    let mut update = DestListItemUpdate::new();
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--show" => update = update.show(),
-            "--hide" => update = update.hide(),
-            "--pin" => update = update.pin(),
-            "--unpin" => update = update.unpin(),
-            "--position" => {
-                index += 1;
-                let value = required_arg(args.get(index), "position")?;
-                let position = match value {
-                    "first" => DestListPosition::First,
-                    "last" => DestListPosition::Last,
-                    value => DestListPosition::Index(value.parse::<usize>().map_err(|_| {
-                        WincentError::InvalidArgument(format!(
-                            "position must be first, last, or a non-negative integer: {value}"
-                        ))
-                    })?),
-                };
-                update = update.with_position(position);
-            }
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown modify-direct option: {other}"
-                )));
-            }
-        }
-        index += 1;
-    }
-    if update.is_empty() {
-        return Err(WincentError::InvalidArgument(
-            "modify-direct requires at least one update option".to_string(),
-        ));
-    }
-    Ok(update)
-}
-
-fn split_batch_add_options(args: &[String]) -> WincentResult<(BatchOptions, Vec<String>)> {
-    let mut options = BatchOptions::new();
-    let mut rest = Vec::new();
-    for arg in args {
-        match arg.as_str() {
-            "--force-recent-files-rebuild" => options = options.force_recent_files_rebuild(),
-            "--refresh-explorer" => options = options.refresh_explorer(),
-            other if other.starts_with("--") => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown batch-add option: {other}"
-                )))
-            }
-            _ => rest.push(arg.clone()),
-        }
-    }
-    Ok((options, rest))
-}
-
-fn split_batch_remove_options(
-    args: &[String],
-) -> WincentResult<(BatchOptions, RemoveOptions, Vec<String>)> {
-    let mut batch_options = BatchOptions::new();
-    let mut remove_options = RemoveOptions::new();
-    let mut rest = Vec::new();
-    for arg in args {
-        match arg.as_str() {
-            "--deep-clean" => remove_options = remove_options.deep_clean_recent_links(),
-            "--refresh-explorer" => {
-                batch_options = batch_options.refresh_explorer();
-            }
-            other if other.starts_with("--") => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown batch-remove option: {other}"
-                )))
-            }
-            _ => rest.push(arg.clone()),
-        }
-    }
-    Ok((batch_options, remove_options, rest))
 }
 
 fn parse_visibility_options(args: &[String]) -> WincentResult<VisibilityOptions> {
@@ -1306,22 +989,6 @@ fn parse_visibility_options(args: &[String]) -> WincentResult<VisibilityOptions>
         }
     }
     Ok(options)
-}
-
-fn print_batch_result(result: BatchResult) {
-    println!("total: {}", result.total());
-    println!("succeeded: {}", result.succeeded().len());
-    println!("failed: {}", result.failed().len());
-    println!("success_rate: {:.1}%", result.success_rate() * 100.0);
-    println!("complete_success: {}", result.is_complete_success());
-    println!("partial_success: {}", result.has_partial_success());
-
-    for path in result.succeeded() {
-        println!("ok: {path}");
-    }
-    for failure in result.failed() {
-        println!("failed: {}: {}", failure.path(), failure.error());
-    }
 }
 
 fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
@@ -1416,56 +1083,6 @@ fn print_dest_entries(entries: &[wincent::destlist::DestListEntry], limit: usize
             entry.raw_path(),
             entry.path()
         );
-    }
-}
-
-fn print_restore_report(report: &RestoreDefaultsReport) {
-    println!("success: {}", report.success());
-    if let Some(r) = report.recent_report() {
-        println!("recent.success: {}", r.success());
-        println!("recent.cleared: {}", r.recent_files_cleared());
-        println!("recent.deleted_lnk_paths: {}", r.deleted_lnk_paths().len());
-        for p in r.deleted_lnk_paths() {
-            println!("  {}", p.display());
-        }
-        if let Some(e) = r.error() {
-            println!("recent.error: {e}");
-        }
-    }
-    if let Some(f) = report.frequent_report() {
-        println!("frequent.success: {}", f.success());
-        println!(
-            "frequent.backing_file_deleted: {}",
-            f.backing_file_deleted()
-        );
-        println!("frequent.rebuilt: {}", f.rebuilt());
-        println!(
-            "frequent.deleted_lnk_paths: {}",
-            f.deleted_lnk_paths().len()
-        );
-        for p in f.deleted_lnk_paths() {
-            println!("  {}", p.display());
-        }
-        print_strings("frequent.non_default_raw_paths", f.non_default_raw_paths());
-        if let Some(rr) = f.raw_path_remove_report() {
-            println!("frequent.raw_remove.success: {}", rr.success());
-            println!(
-                "frequent.raw_remove.backing_file_deleted: {}",
-                rr.backing_file_deleted()
-            );
-            println!("frequent.raw_remove.rebuilt: {}", rr.rebuilt());
-            print_strings("frequent.raw_remove.requested", rr.requested_raw_paths());
-            print_strings(
-                "frequent.raw_remove.remaining",
-                rr.remaining_non_default_raw_paths(),
-            );
-            if let Some(e) = rr.error() {
-                println!("frequent.raw_remove.error: {e}");
-            }
-        }
-        if let Some(e) = f.error() {
-            println!("frequent.error: {e}");
-        }
     }
 }
 
@@ -1634,30 +1251,6 @@ mod tests {
 
         assert!(
             matches!(error, WincentError::InvalidArgument(message) if message == "unterminated quote: \"")
-        );
-    }
-
-    #[test]
-    fn parse_destlist_update_combines_supported_changes() {
-        let update = parse_destlist_update(&[
-            "--show".to_string(),
-            "--unpin".to_string(),
-            "--position".to_string(),
-            "2".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(update.visible_value(), Some(true));
-        assert_eq!(update.pinned_value(), Some(false));
-        assert_eq!(update.position_value(), Some(DestListPosition::Index(2)));
-    }
-
-    #[test]
-    fn parse_destlist_update_requires_a_change() {
-        let error = parse_destlist_update(&[]).unwrap_err();
-
-        assert!(
-            matches!(error, WincentError::InvalidArgument(message) if message.contains("at least one"))
         );
     }
 

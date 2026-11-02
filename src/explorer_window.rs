@@ -11,9 +11,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Ole::READYSTATE_COMPLETE;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{
-    FOLDERID_Desktop, IShellBrowser, IShellWindows, IWebBrowser2, SHChangeNotify,
-    SHGetKnownFolderPath, SID_STopLevelBrowser, ShellWindows, KNOWN_FOLDER_FLAG,
-    SHCNE_ASSOCCHANGED, SHCNF_IDLIST,
+    FOLDERID_Desktop, IShellBrowser, IShellWindows, IWebBrowser2, SHGetKnownFolderPath,
+    SID_STopLevelBrowser, ShellWindows, KNOWN_FOLDER_FLAG,
 };
 
 const QUICK_ACCESS_NAMESPACE: &str = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
@@ -28,16 +27,8 @@ pub(crate) struct NavigationCycleResult {
     pub(crate) restored: ExplorerLocation,
 }
 
-pub(crate) fn refresh_explorer() -> WincentResult<()> {
-    refresh_explorer_with_timeout(Duration::from_secs(10))
-}
-
-pub(crate) fn refresh_explorer_with_timeout(timeout: Duration) -> WincentResult<()> {
-    // SAFETY: SHCNE_ASSOCCHANGED with SHCNF_IDLIST accepts null item pointers.
-    unsafe {
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
-    }
-    crate::com_thread::run_on_sta_thread(refresh_explorer_on_sta, timeout)
+pub(crate) fn refresh_shell_views_with_timeout(timeout: Duration) -> WincentResult<()> {
+    crate::com_thread::run_on_sta_thread(refresh_shell_views_on_sta, timeout)
 }
 
 #[allow(dead_code)]
@@ -49,7 +40,7 @@ pub(crate) fn navigate_recent_access_window_to_desktop_and_back(
     )
 }
 
-fn refresh_explorer_on_sta() -> WincentResult<()> {
+fn refresh_shell_views_on_sta() -> WincentResult<()> {
     let (shell_windows, count) = shell_windows_with_count()?;
 
     let recent_result = refresh_recent_access_shell_views(&shell_windows, count)?;

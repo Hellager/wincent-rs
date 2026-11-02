@@ -3,23 +3,18 @@
 use crate::visible;
 use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
-    batch::{self, BatchFailure, BatchOptions, BatchResult},
     empty,
-    error::{QuickAccessPostMutationStep, WincentError},
+    error::WincentError,
     monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions},
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
-    restore::{
-        self, FrequentRestoreReport, RecentRestoreReport, RestoreDefaultsOptions,
-        RestoreDefaultsReport,
-    },
-    status::{FrequentFolderSlot, QuickAccessStatus},
+    status::QuickAccessStatus,
     utils::paths_equal,
     QuickAccess, RetryPolicy, WincentResult,
 };
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn path_to_shell_string(path: &Path) -> WincentResult<String> {
     if path.as_os_str().is_empty() {
@@ -27,169 +22,6 @@ fn path_to_shell_string(path: &Path) -> WincentResult<String> {
     }
 
     Ok(path.to_string_lossy().into_owned())
-}
-
-/// Options for removing a single item from Quick Access.
-///
-/// By default removal uses the native operation selected from the path type and
-/// Frequent Folders pin state. Use [`RemoveOptions::deep_clean_recent_links`]
-/// when matching shortcuts in the Windows Recent folder should be deleted too.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RemoveOptions {
-    deep_clean_recent_links: bool,
-    refresh_explorer: bool,
-}
-
-impl RemoveOptions {
-    /// Creates default remove options.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Whether matching `.lnk` files in the Windows Recent folder are deleted.
-    #[must_use]
-    pub fn deep_clean_recent_links_enabled(&self) -> bool {
-        self.deep_clean_recent_links
-    }
-
-    /// Sets whether matching `.lnk` files in the Windows Recent folder are deleted.
-    #[must_use]
-    pub fn with_deep_clean_recent_links(mut self, deep_clean_recent_links: bool) -> Self {
-        self.deep_clean_recent_links = deep_clean_recent_links;
-        self
-    }
-
-    /// Deletes matching `.lnk` files from the Windows Recent folder after removing an item.
-    #[must_use]
-    pub fn deep_clean_recent_links(self) -> Self {
-        self.with_deep_clean_recent_links(true)
-    }
-
-    /// Whether open Explorer windows are refreshed after a successful remove.
-    #[must_use]
-    pub fn refresh_explorer_enabled(&self) -> bool {
-        self.refresh_explorer
-    }
-
-    /// Sets whether open Explorer windows are refreshed after a successful remove.
-    #[must_use]
-    pub fn with_refresh_explorer(mut self, enabled: bool) -> Self {
-        self.refresh_explorer = enabled;
-        self
-    }
-
-    /// Refreshes open Explorer windows after a successful remove.
-    #[must_use]
-    pub fn refresh_explorer(self) -> Self {
-        self.with_refresh_explorer(true)
-    }
-
-    pub(crate) fn should_deep_clean_links_for(&self, qa_type: QuickAccess) -> bool {
-        matches!(
-            qa_type,
-            QuickAccess::RecentFiles | QuickAccess::FrequentFolders
-        ) && self.deep_clean_recent_links
-    }
-}
-
-/// Phase timings for a successful Quick Access removal.
-///
-/// `mutation` measures the backing-data mutation. For direct removal this is
-/// the CFB rewrite and atomic replacement. For Shell removal it includes the
-/// Shell verb and the system's persistence work. `total` also includes path
-/// conversion, validation, presence checks, retries, and report construction.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RemoveTimingReport {
-    mutation: Duration,
-    recent_link_cleanup: Duration,
-    explorer_refresh: Duration,
-    total: Duration,
-}
-
-impl RemoveTimingReport {
-    #[must_use]
-    pub fn mutation(&self) -> Duration {
-        self.mutation
-    }
-
-    #[must_use]
-    pub fn recent_link_cleanup(&self) -> Duration {
-        self.recent_link_cleanup
-    }
-
-    #[must_use]
-    pub fn explorer_refresh(&self) -> Duration {
-        self.explorer_refresh
-    }
-
-    #[must_use]
-    pub fn total(&self) -> Duration {
-        self.total
-    }
-
-    /// Time spent outside the three explicitly measured mutation phases.
-    #[must_use]
-    pub fn other(&self) -> Duration {
-        self.total
-            .saturating_sub(self.mutation + self.recent_link_cleanup + self.explorer_refresh)
-    }
-}
-
-/// Item used by batch Quick Access operations.
-///
-/// Batch operations accept typed items instead of a bare `(path, category)`
-/// tuple so each path carries its intended Quick Access category.
-///
-/// # Examples
-///
-/// ```rust
-/// use std::path::Path;
-/// use wincent::{QuickAccess, QuickAccessItem};
-///
-/// let file = QuickAccessItem::recent_file("C:\\Work\\report.docx");
-/// assert_eq!(file.qa_type(), QuickAccess::RecentFiles);
-/// assert_eq!(file.path(), Path::new("C:\\Work\\report.docx"));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QuickAccessItem {
-    path: PathBuf,
-    qa_type: QuickAccess,
-}
-
-impl QuickAccessItem {
-    /// Creates a batch item for the given Quick Access category.
-    #[must_use]
-    pub fn new<P: Into<PathBuf>>(path: P, qa_type: QuickAccess) -> Self {
-        Self {
-            path: path.into(),
-            qa_type,
-        }
-    }
-
-    /// Creates a Recent Files batch item.
-    #[must_use]
-    pub fn recent_file<P: Into<PathBuf>>(path: P) -> Self {
-        Self::new(path, QuickAccess::RecentFiles)
-    }
-
-    /// Creates a Frequent Folders batch item.
-    #[must_use]
-    pub fn frequent_folder<P: Into<PathBuf>>(path: P) -> Self {
-        Self::new(path, QuickAccess::FrequentFolders)
-    }
-
-    /// Path to process.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Quick Access category for this item.
-    #[must_use]
-    pub fn qa_type(&self) -> QuickAccess {
-        self.qa_type
-    }
 }
 
 /// Builder for configuring [`QuickAccessManager`].
@@ -495,40 +327,6 @@ impl QuickAccessManager {
         Ok(items.iter().any(|item| paths_equal(item, &path)))
     }
 
-    /// Returns whether a Frequent Folders path is pinned, unpinned, or absent.
-    ///
-    /// This reads Explorer's Frequent Folders DestList metadata directly. It
-    /// does not call Shell verbs and does not mutate Explorer state.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Also returns
-    /// I/O or DestList parse errors when Explorer's Frequent Folders backing
-    /// file cannot be read or parsed.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # fn main() -> WincentResult<()> {
-    /// let manager = QuickAccessManager::new();
-    /// match manager.frequent_folder_pin_status("C:\\Work")? {
-    ///     FrequentFolderPinStatus::Pinned => println!("pinned"),
-    ///     FrequentFolderPinStatus::Unpinned => println!("frequent but not pinned"),
-    ///     FrequentFolderPinStatus::NotFound => println!("not in Frequent Folders"),
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn frequent_folder_pin_status<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> WincentResult<crate::destlist::FrequentFolderPinStatus> {
-        let path = path_to_shell_string(path.as_ref())?;
-        crate::destlist::frequent_folder_pin_status(&path)
-    }
-
     /// Returns where a path appears in a default Quick Access Shell query.
     ///
     /// Both lists are read from Explorer's `.automaticDestinations-ms` backing
@@ -541,8 +339,7 @@ impl QuickAccessManager {
     /// [`QuickAccessStatus`], for which
     /// [`QuickAccessStatus::is_visible`] is `false`. This does not distinguish
     /// "absent from the backing file" from "present but filtered out"; use
-    /// [`QuickAccessManager::get_recent_files_metadata`] or
-    /// [`QuickAccessManager::get_frequent_folders_metadata`] to inspect the raw
+    /// [`crate::destlist::entries`] on a parsed backing file to inspect the raw
     /// entries.
     ///
     /// Explorer persists its own changes asynchronously, so a path that was
@@ -563,7 +360,7 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// let status = manager.quick_access_status(r"C:\Work\report.docx")?;
+    /// let status = manager.get_item_status(r"C:\Work\report.docx")?;
     /// if let Some(position) = status.recent_file() {
     ///     println!("recent file at position {position}");
     /// }
@@ -573,76 +370,9 @@ impl QuickAccessManager {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn quick_access_status<P: AsRef<Path>>(&self, path: P) -> WincentResult<QuickAccessStatus> {
+    pub fn get_item_status<P: AsRef<Path>>(&self, path: P) -> WincentResult<QuickAccessStatus> {
         let path = path_to_shell_string(path.as_ref())?;
         crate::status::status_for_path(&path)
-    }
-
-    /// Returns a path's position in the rule-based Recent Files result.
-    ///
-    /// This reads only the Recent Files backing file. See
-    /// [`QuickAccessManager::quick_access_status`] for the visibility contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Returns I/O or
-    /// DestList parse errors when the backing file exists but cannot be read or
-    /// parsed.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # fn main() -> WincentResult<()> {
-    /// let manager = QuickAccessManager::new();
-    /// if let Some(position) = manager.recent_file_position(r"C:\Work\report.docx")? {
-    ///     println!("position {position}");
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn recent_file_position<P: AsRef<Path>>(&self, path: P) -> WincentResult<Option<usize>> {
-        let path = path_to_shell_string(path.as_ref())?;
-        crate::status::recent_position_for_path(&path)
-    }
-
-    /// Returns a path's position and pin state in the rule-based Frequent Folders result.
-    ///
-    /// This reads only the Frequent Folders backing file. A pinned entry is
-    /// included regardless of its access count; an unpinned entry must meet the
-    /// access-count threshold and fit in the unpinned slot window.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Returns I/O or
-    /// DestList parse errors when the backing file exists but cannot be read or
-    /// parsed.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # fn main() -> WincentResult<()> {
-    /// let manager = QuickAccessManager::new();
-    /// match manager.frequent_folder_slot(r"C:\Work")? {
-    ///     Some(slot) => println!(
-    ///         "position {} pinned {}",
-    ///         slot.position(),
-    ///         slot.is_pinned()
-    ///     ),
-    ///     None => println!("not in the rule-based result"),
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn frequent_folder_slot<P: AsRef<Path>>(
-        &self,
-        path: P,
-    ) -> WincentResult<Option<FrequentFolderSlot>> {
-        let path = path_to_shell_string(path.as_ref())?;
-        crate::status::frequent_slot_for_path(&path)
     }
 
     /// Finds Quick Access items containing the given keyword.
@@ -800,146 +530,6 @@ impl QuickAccessManager {
         }
     }
 
-    /// Adds an item by directly updating the DestList v4 backing file.
-    ///
-    /// Recent Files also receives the corresponding file and parent-folder
-    /// shortcuts in the Windows Recent directory. Frequent Folders is created
-    /// as a visible unpinned entry (`access_count = 3`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidPath`] for a missing path or wrong target
-    /// type, [`WincentError::AlreadyExists`] when a matching raw entry exists,
-    /// [`WincentError::DestListUnsupportedVersion`] for non-v4 backing data,
-    /// [`WincentError::UnsupportedOperation`] for [`QuickAccess::All`], or a
-    /// [`WincentError::PostMutationFailure`] when backing-data addition succeeded
-    /// but shortcut creation or Explorer refresh failed.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # fn main() -> WincentResult<()> {
-    /// let manager = QuickAccessManager::new();
-    /// manager.add_item_direct("C:\\Work\\report.docx", QuickAccess::RecentFiles)?;
-    /// manager.add_item_direct("C:\\Work", QuickAccess::FrequentFolders)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn add_item_direct<P: AsRef<Path>>(
-        &self,
-        path: P,
-        qa_type: QuickAccess,
-    ) -> WincentResult<()> {
-        let path = path_to_shell_string(path.as_ref())?;
-        match qa_type {
-            QuickAccess::RecentFiles => self
-                .backend
-                .validate_path(&path, crate::utils::PathType::File)?,
-            QuickAccess::FrequentFolders => self
-                .backend
-                .validate_path(&path, crate::utils::PathType::Directory)?,
-            QuickAccess::All => return Err(unsupported_add(qa_type)),
-        }
-        self.backend
-            .add_destlist_entry(&path, qa_type, self.timeout)?;
-        self.refresh_explorer_after_mutation(&path, qa_type)
-    }
-
-    /// Updates visibility, pin state, or order in a DestList v4 backing file.
-    ///
-    /// Recent Files ordering rewrites the raw entry sequence. Frequent Folders
-    /// ordering updates pin order for pinned entries and rank plus candidate
-    /// sequence for unpinned entries. Pin changes are supported only for
-    /// Frequent Folders; unpinning retains the entry and numeric stream as an
-    /// unpinned item.
-    ///
-    /// This operation never changes score or last-interaction time. Showing an
-    /// unpinned Frequent Folder raises its access count to the observed minimum
-    /// and assigns a non-negative rank when needed. Capacity limits can still
-    /// keep an eligible unpinned folder outside Explorer's visible window. A
-    /// pinned Frequent Folder cannot be hidden; explicitly unpin it in the same
-    /// update when hiding it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidArgument`] for an empty update or an
-    /// out-of-range position, [`WincentError::UnsupportedOperation`] for
-    /// [`QuickAccess::All`] or a Recent Files pin change,
-    /// [`WincentError::NotInQuickAccess`] when no raw entry matches, or a
-    /// DestList/CFB error when the v4 backing file cannot be validated and
-    /// replaced.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # fn main() -> WincentResult<()> {
-    /// let manager = QuickAccessManager::new();
-    /// manager.update_item_direct(
-    ///     "C:\\Work\\report.docx",
-    ///     QuickAccess::RecentFiles,
-    ///     DestListItemUpdate::new()
-    ///         .show()
-    ///         .with_position(DestListPosition::First),
-    /// )?;
-    /// manager.update_item_direct(
-    ///     "C:\\Work",
-    ///     QuickAccess::FrequentFolders,
-    ///     DestListItemUpdate::new().unpin(),
-    /// )?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn update_item_direct<P: AsRef<Path>>(
-        &self,
-        path: P,
-        qa_type: QuickAccess,
-        update: crate::destlist::DestListItemUpdate,
-    ) -> WincentResult<()> {
-        let path = path_to_shell_string(path.as_ref())?;
-        if qa_type == QuickAccess::All {
-            return Err(WincentError::UnsupportedOperation(
-                "QuickAccess::All is not valid for direct DestList updates".to_string(),
-            ));
-        }
-        self.backend.update_destlist_entry(&path, qa_type, update)?;
-        self.refresh_explorer_after_mutation(&path, qa_type)
-    }
-
-    /// Pins a directory to Quick Access Frequent Folders.
-    ///
-    /// This is a convenience wrapper around [`QuickAccessManager::add_item`] for
-    /// callers that only need to pin a folder. The directory must exist. A
-    /// folder that is already pinned is rejected; otherwise the new pin appears
-    /// after existing pinned folders. Explorer updates its UI asynchronously.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
-    /// is not a directory; [`WincentError::AlreadyExists`] when the folder is
-    /// already pinned; or the underlying operation error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # fn main() -> WincentResult<()> {
-    /// let manager = QuickAccessManager::new();
-    /// manager.pin_frequent_folder("C:\\Work")?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn pin_frequent_folder<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
-        let path = path_to_shell_string(path.as_ref())?;
-        self.backend
-            .validate_path(&path, crate::utils::PathType::Directory)?;
-        self.backend.add_frequent_folder(&path, self.timeout)
-    }
-
     /// Removes an existing file or directory from Quick Access.
     ///
     /// The operation is selected automatically:
@@ -958,9 +548,7 @@ impl QuickAccessManager {
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
     /// is neither a file nor directory;
     /// [`WincentError::NotInQuickAccess`] if the preflight query does not find
-    /// the item; [`WincentError::PostMutationFailure`] when removal succeeded
-    /// but an explicitly requested Explorer refresh or shortcut cleanup failed;
-    /// or an underlying Shell/COM error.
+    /// the item, or an underlying Shell/COM error.
     ///
     /// # Examples
     ///
@@ -974,32 +562,6 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn remove_item<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
-        self.remove_item_with_options(path, RemoveOptions::new())
-    }
-
-    /// Removes an item from Quick Access with additional cleanup options.
-    ///
-    /// Path type and Frequent Folders pin state are detected in the same way as
-    /// [`QuickAccessManager::remove_item`].
-    ///
-    /// [`RemoveOptions::deep_clean_recent_links`] applies to both
-    /// [`QuickAccess::RecentFiles`] and [`QuickAccess::FrequentFolders`].
-    pub fn remove_item_with_options<P: AsRef<Path>>(
-        &self,
-        path: P,
-        options: RemoveOptions,
-    ) -> WincentResult<()> {
-        self.remove_item_with_options_timed(path, options)
-            .map(|_| ())
-    }
-
-    /// Removes an automatically classified item and returns phase timings.
-    pub fn remove_item_with_options_timed<P: AsRef<Path>>(
-        &self,
-        path: P,
-        options: RemoveOptions,
-    ) -> WincentResult<RemoveTimingReport> {
-        let total_started = Instant::now();
         let path = path_to_shell_string(path.as_ref())?;
         let path_type = self.backend.path_type(&path)?;
         let qa_type = match path_type {
@@ -1010,33 +572,11 @@ impl QuickAccessManager {
         match path_type {
             crate::utils::PathType::File => {
                 self.ensure_present(&path, qa_type)?;
-                let mutation_started = Instant::now();
-                self.execute_with_retry(|| self.backend.remove_recent_file(&path, self.timeout))?;
-                let mutation = mutation_started.elapsed();
-                let mut explorer_refresh = Duration::ZERO;
-                if options.refresh_explorer_enabled() {
-                    let refresh_started = Instant::now();
-                    self.refresh_explorer_after_mutation(&path, qa_type)?;
-                    explorer_refresh = refresh_started.elapsed();
-                }
-                let mut recent_link_cleanup = Duration::ZERO;
-                if options.should_deep_clean_links_for(qa_type) {
-                    let cleanup_started = Instant::now();
-                    self.backend
-                        .delete_recent_links_for_target(&path, self.timeout)?;
-                    recent_link_cleanup = cleanup_started.elapsed();
-                }
-                Ok(RemoveTimingReport {
-                    mutation,
-                    recent_link_cleanup,
-                    explorer_refresh,
-                    total: total_started.elapsed(),
-                })
+                self.execute_with_retry(|| self.backend.remove_recent_file(&path, self.timeout))
             }
             crate::utils::PathType::Directory => {
                 self.ensure_present(&path, qa_type)?;
                 let pin_status = self.backend.frequent_folder_pin_status(&path)?;
-                let mutation_started = Instant::now();
                 match pin_status {
                     crate::destlist::FrequentFolderPinStatus::Pinned => {
                         self.execute_with_retry(|| {
@@ -1054,184 +594,9 @@ impl QuickAccessManager {
                         return Err(WincentError::not_in_quick_access(&path, qa_type));
                     }
                 }
-                let mutation = mutation_started.elapsed();
-                let mut explorer_refresh = Duration::ZERO;
-                if options.refresh_explorer_enabled() {
-                    let refresh_started = Instant::now();
-                    self.refresh_explorer_after_mutation(&path, qa_type)?;
-                    explorer_refresh = refresh_started.elapsed();
-                }
-                let mut recent_link_cleanup = Duration::ZERO;
-                if options.should_deep_clean_links_for(qa_type) {
-                    let cleanup_started = Instant::now();
-                    self.backend
-                        .delete_recent_links_for_target(&path, self.timeout)?;
-                    recent_link_cleanup = cleanup_started.elapsed();
-                }
-                Ok(RemoveTimingReport {
-                    mutation,
-                    recent_link_cleanup,
-                    explorer_refresh,
-                    total: total_started.elapsed(),
-                })
+                Ok(())
             }
         }
-    }
-
-    /// Physically removes an item from Explorer's DestList v4 backing file.
-    ///
-    /// Unlike [`QuickAccessManager::remove_item`], this method does not invoke
-    /// Shell removal APIs. It rewrites the matching v4 `DestList` stream,
-    /// removes the entry's numeric Shell Link stream, deletes matching `.lnk`
-    /// files from the Windows Recent directory, and refreshes Explorer.
-    ///
-    /// This operation can remove hidden, blocked, dangling, or missing-target
-    /// records because it does not require the target file or directory to
-    /// exist. `QuickAccess::All` is not supported.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::DestListUnsupportedVersion`] for formats other
-    /// than v4, [`WincentError::NotInQuickAccess`] when no raw entry matches,
-    /// or CFB/I/O errors when the backing file cannot be validated and replaced.
-    /// A [`WincentError::PostMutationFailure`] means the CFB removal completed,
-    /// but Recent-link cleanup or Explorer refresh failed.
-    pub fn remove_item_direct<P: AsRef<Path>>(
-        &self,
-        path: P,
-        qa_type: QuickAccess,
-    ) -> WincentResult<()> {
-        self.remove_item_direct_timed(path, qa_type).map(|_| ())
-    }
-
-    /// Physically removes a DestList v4 item and returns phase timings.
-    pub fn remove_item_direct_timed<P: AsRef<Path>>(
-        &self,
-        path: P,
-        qa_type: QuickAccess,
-    ) -> WincentResult<RemoveTimingReport> {
-        let total_started = Instant::now();
-        let path = path_to_shell_string(path.as_ref())?;
-        if qa_type == QuickAccess::All {
-            return Err(unsupported_remove(qa_type));
-        }
-
-        let mutation_started = Instant::now();
-        self.backend.remove_destlist_entry(&path, qa_type)?;
-        let mutation = mutation_started.elapsed();
-        let cleanup_started = Instant::now();
-        self.backend
-            .delete_recent_links_for_target(&path, self.timeout)
-            .map_err(|source| {
-                WincentError::post_mutation_failure(
-                    &path,
-                    qa_type,
-                    QuickAccessPostMutationStep::DeleteRecentLinks,
-                    source,
-                )
-            })?;
-        let recent_link_cleanup = cleanup_started.elapsed();
-        let refresh_started = Instant::now();
-        self.refresh_explorer_after_mutation(&path, qa_type)?;
-        let explorer_refresh = refresh_started.elapsed();
-        Ok(RemoveTimingReport {
-            mutation,
-            recent_link_cleanup,
-            explorer_refresh,
-            total: total_started.elapsed(),
-        })
-    }
-
-    /// Adds multiple items to Quick Access, collecting per-item failures.
-    ///
-    /// This method does not short-circuit and does not return `Result`.
-    /// Per-item failures are collected in [`BatchResult::failed`].
-    ///
-    /// Failure ordering is phase-based. Items whose paths cannot be converted
-    /// into shell strings are reported first, followed by failures from the
-    /// underlying batch add operations. The failure list is not guaranteed to
-    /// preserve input order.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// let manager = QuickAccessManager::new();
-    /// let items = [
-    ///     QuickAccessItem::recent_file("C:\\Work\\report.docx"),
-    ///     QuickAccessItem::frequent_folder("C:\\Work"),
-    /// ];
-    ///
-    /// let result = manager.add_items_batch(&items, BatchOptions::new());
-    /// for failure in result.failed() {
-    ///     eprintln!("{}: {}", failure.path(), failure.error());
-    /// }
-    /// ```
-    pub fn add_items_batch(&self, items: &[QuickAccessItem], options: BatchOptions) -> BatchResult {
-        let (items, failures) = self.convert_batch_items(items);
-        let result = batch::add_items_batch(&items, options, self.timeout, self.backend.as_ref());
-        merge_batch_failures(result, failures)
-    }
-
-    /// Removes multiple items from Quick Access, collecting per-item failures.
-    ///
-    /// This method does not short-circuit and does not return `Result`.
-    /// Per-item failures are collected in [`BatchResult::failed`].
-    ///
-    /// Failure ordering is phase-based. Items whose paths cannot be converted
-    /// into shell strings are reported first, followed by failures from the
-    /// underlying batch remove operations. The failure list is not guaranteed
-    /// to preserve input order.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// let manager = QuickAccessManager::new();
-    /// let items = [QuickAccessItem::recent_file("C:\\Work\\report.docx")];
-    ///
-    /// let result = manager.remove_items_batch(&items);
-    /// if !result.is_complete_success() {
-    ///     eprintln!("{} item(s) failed", result.failed().len());
-    /// }
-    /// ```
-    pub fn remove_items_batch(&self, items: &[QuickAccessItem]) -> BatchResult {
-        let (items, failures) = self.convert_batch_items(items);
-        let result = batch::remove_items_batch(&items, self.timeout, self.backend.as_ref());
-        merge_batch_failures(result, failures)
-    }
-
-    /// Removes multiple items from Quick Access with additional cleanup options.
-    ///
-    /// If deep link cleanup is enabled and a matching `.lnk` deletion fails
-    /// after the shell remove succeeds, that item is reported in
-    /// [`BatchResult::failed`].
-    pub fn remove_items_batch_with_options(
-        &self,
-        items: &[QuickAccessItem],
-        options: RemoveOptions,
-    ) -> BatchResult {
-        self.remove_items_batch_with_batch_options(items, BatchOptions::new(), options)
-    }
-
-    /// Removes multiple items from Quick Access with batch-level refresh options.
-    pub fn remove_items_batch_with_batch_options(
-        &self,
-        items: &[QuickAccessItem],
-        batch_options: BatchOptions,
-        remove_options: RemoveOptions,
-    ) -> BatchResult {
-        let (items, failures) = self.convert_batch_items(items);
-        let result = batch::remove_items_batch_with_options(
-            &items,
-            batch_options,
-            remove_options,
-            self.timeout,
-            self.backend.as_ref(),
-        );
-        merge_batch_failures(result, failures)
     }
 
     /// Locks Explorer's Recent Files and Frequent Folders automatic destination files.
@@ -1271,8 +636,8 @@ impl QuickAccessManager {
     /// Returns an error when matching Explorer windows are found but none of
     /// their active Shell views can be refreshed, or when the refresh worker
     /// exceeds the manager timeout.
-    pub fn refresh_explorer(&self) -> WincentResult<()> {
-        self.backend.refresh_explorer(self.timeout)
+    pub fn refresh(&self) -> WincentResult<()> {
+        self.backend.refresh(self.timeout)
     }
 
     /// Clears Quick Access items.
@@ -1306,46 +671,6 @@ impl QuickAccessManager {
     /// ```
     pub fn empty_items(&self, qa_type: QuickAccess) -> WincentResult<()> {
         empty::empty_items_with_backend(qa_type, self.timeout, self.backend.as_ref())
-    }
-
-    /// Restores Quick Access categories to their system-default state.
-    ///
-    /// Restore progress and workflow failures are captured in the returned
-    /// report. The `Result` only represents API-level failures that prevent a
-    /// report from being produced.
-    ///
-    /// By default, `.lnk` cleanup deletes only shortcuts whose target type can
-    /// be resolved as the requested file or folder category. Use
-    /// [`RestoreDefaultsOptions::deep_lnk_cleanup`] to also delete shortcuts
-    /// that cannot be resolved or whose target type is unknown.
-    pub fn restore_defaults(
-        &self,
-        qa_type: QuickAccess,
-        options: RestoreDefaultsOptions,
-    ) -> WincentResult<RestoreDefaultsReport> {
-        restore::restore_defaults(qa_type, options, self.backend.as_ref())
-    }
-
-    /// Restores Recent Files to its system-default state.
-    ///
-    /// Default `.lnk` cleanup deletes only shortcuts resolved as file targets.
-    /// Deep cleanup also deletes unresolved or unknown-type shortcuts.
-    pub fn restore_recent_files_defaults(
-        &self,
-        options: RestoreDefaultsOptions,
-    ) -> WincentResult<RecentRestoreReport> {
-        restore::restore_recent_files_defaults(options, self.backend.as_ref())
-    }
-
-    /// Restores Frequent Folders to its system-default state.
-    ///
-    /// Default `.lnk` cleanup deletes only shortcuts resolved as folder targets.
-    /// Deep cleanup also deletes unresolved or unknown-type shortcuts.
-    pub fn restore_frequent_folders_defaults(
-        &self,
-        options: RestoreDefaultsOptions,
-    ) -> WincentResult<FrequentRestoreReport> {
-        restore::restore_frequent_folders_defaults(options, self.backend.as_ref())
     }
 
     /// Checks whether a Quick Access section is visible in Explorer.
@@ -1645,25 +970,6 @@ impl QuickAccessManager {
         self.set_start_recommended_section_visible_with_options(false, options)
     }
 
-    fn convert_batch_items(
-        &self,
-        items: &[QuickAccessItem],
-    ) -> (Vec<(String, QuickAccess)>, Vec<BatchFailure>) {
-        let mut converted = Vec::new();
-        let mut failures = Vec::new();
-
-        for item in items {
-            match path_to_shell_string(item.path()) {
-                Ok(path) => converted.push((path, item.qa_type())),
-                Err(error) => {
-                    failures.push(BatchFailure::new(item.path().display().to_string(), error))
-                }
-            }
-        }
-
-        (converted, failures)
-    }
-
     fn ensure_not_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
         // This preflight check is best-effort; Explorer state may still change
         // before the shell operation runs.
@@ -1683,23 +989,6 @@ impl QuickAccessManager {
         }
 
         Ok(())
-    }
-
-    fn refresh_explorer_after_mutation(
-        &self,
-        path: &str,
-        qa_type: QuickAccess,
-    ) -> WincentResult<()> {
-        self.backend
-            .refresh_explorer(self.timeout)
-            .map_err(|source| {
-                WincentError::post_mutation_failure(
-                    path,
-                    qa_type,
-                    QuickAccessPostMutationStep::RefreshExplorer,
-                    source,
-                )
-            })
     }
 
     fn execute_with_retry<T, F>(&self, mut action: F) -> WincentResult<T>
@@ -1730,85 +1019,6 @@ impl QuickAccessManager {
     }
 }
 
-fn unsupported_add(qa_type: QuickAccess) -> WincentError {
-    WincentError::UnsupportedOperation(format!("Unsupported add operation for {:?}", qa_type))
-}
-
-fn unsupported_remove(qa_type: QuickAccess) -> WincentError {
-    WincentError::UnsupportedOperation(format!("Unsupported remove operation for {:?}", qa_type))
-}
-
-fn merge_batch_failures(
-    result: BatchResult,
-    mut initial_failures: Vec<BatchFailure>,
-) -> BatchResult {
-    if initial_failures.is_empty() {
-        return result;
-    }
-
-    let (succeeded, mut failed) = result.into_parts();
-    initial_failures.append(&mut failed);
-    BatchResult::new(succeeded, initial_failures)
-}
-
-impl QuickAccessManager {
-    /// Parses the recent-files `.automaticDestinations-ms` file and returns all entries.
-    ///
-    /// This is the raw parsed DestList, including entries Explorer may filter
-    /// out. Use [`QuickAccessManager::get_items`] for the UI-visible result.
-    ///
-    /// # Errors
-    ///
-    /// Returns I/O errors when the file cannot be read, or DestList parse errors
-    /// when Explorer's backing file is missing, truncated, corrupt, or uses an
-    /// unsupported format version.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # fn main() -> wincent::WincentResult<()> {
-    /// use wincent::prelude::*;
-    ///
-    /// let manager = QuickAccessManager::new();
-    /// for entry in manager.get_recent_files_metadata()? {
-    ///     println!("{} ({})", entry.path(), entry.access_count());
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn get_recent_files_metadata(&self) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
-        let parsed = crate::destlist::parse_file(crate::destlist::recent_files_dest_path()?)?;
-        Ok(crate::destlist::entries(parsed.dest_list()))
-    }
-
-    /// Parses the frequent-folders `.automaticDestinations-ms` file and returns all entries.
-    ///
-    /// # Errors
-    ///
-    /// Returns I/O errors when the file cannot be read, or DestList parse errors
-    /// when Explorer's backing file is missing, truncated, corrupt, or uses an
-    /// unsupported format version.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # fn main() -> wincent::WincentResult<()> {
-    /// use wincent::prelude::*;
-    ///
-    /// let manager = QuickAccessManager::new();
-    /// let entries = manager.get_frequent_folders_metadata()?;
-    /// println!("{} frequent-folder entries", entries.len());
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn get_frequent_folders_metadata(
-        &self,
-    ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
-        let parsed = crate::destlist::parse_file(crate::destlist::frequent_folders_dest_path()?)?;
-        Ok(crate::destlist::entries(parsed.dest_list()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1818,16 +1028,13 @@ mod tests {
     struct FakeBackend {
         items: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
-        lnk_files: Mutex<Vec<PathBuf>>,
         get_item_timeouts: Mutex<Vec<Duration>>,
         get_items_error: Mutex<Option<WincentError>>,
-        refresh_explorer_timeouts: Mutex<Vec<Duration>>,
+        refresh_timeouts: Mutex<Vec<Duration>>,
         validate_path_error: Mutex<Option<WincentError>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
         frequent_pin_status: Mutex<Option<crate::destlist::FrequentFolderPinStatus>>,
-        refresh_explorer_error: Mutex<Option<WincentError>>,
-        clear_recent_files_error: Mutex<Option<WincentError>>,
-        frequent_rebuild_entries: Mutex<Vec<crate::destlist::DestListEntry>>,
+        refresh_error: Mutex<Option<WincentError>>,
     }
 
     impl FakeBackend {
@@ -1835,16 +1042,13 @@ mod tests {
             Self {
                 items: Mutex::new(items),
                 calls: Mutex::new(Vec::new()),
-                lnk_files: Mutex::new(Vec::new()),
                 get_item_timeouts: Mutex::new(Vec::new()),
                 get_items_error: Mutex::new(None),
-                refresh_explorer_timeouts: Mutex::new(Vec::new()),
+                refresh_timeouts: Mutex::new(Vec::new()),
                 validate_path_error: Mutex::new(None),
                 add_frequent_folder_error: Mutex::new(None),
                 frequent_pin_status: Mutex::new(None),
-                refresh_explorer_error: Mutex::new(None),
-                clear_recent_files_error: Mutex::new(None),
-                frequent_rebuild_entries: Mutex::new(Vec::new()),
+                refresh_error: Mutex::new(None),
             }
         }
 
@@ -1875,18 +1079,6 @@ mod tests {
         fn set_frequent_pin_status(&self, status: crate::destlist::FrequentFolderPinStatus) {
             *self.frequent_pin_status.lock().unwrap() = Some(status);
         }
-
-        fn fail_refresh_explorer_with(&self, error: WincentError) {
-            *self.refresh_explorer_error.lock().unwrap() = Some(error);
-        }
-
-        fn fail_clear_recent_files_with(&self, error: WincentError) {
-            *self.clear_recent_files_error.lock().unwrap() = Some(error);
-        }
-
-        fn set_frequent_rebuild_entries(&self, entries: Vec<crate::destlist::DestListEntry>) {
-            *self.frequent_rebuild_entries.lock().unwrap() = entries;
-        }
     }
 
     impl crate::backend::QuickAccessBackend for FakeBackend {
@@ -1899,17 +1091,6 @@ mod tests {
             } else {
                 Ok(crate::utils::PathType::Directory)
             }
-        }
-
-        fn validate_path(
-            &self,
-            _path: &str,
-            _expected: crate::utils::PathType,
-        ) -> WincentResult<()> {
-            if let Some(error) = self.validate_path_error.lock().unwrap().take() {
-                return Err(error);
-            }
-            Ok(())
         }
 
         fn get_items(
@@ -1934,16 +1115,6 @@ mod tests {
             if let Some(error) = self.add_frequent_folder_error.lock().unwrap().take() {
                 return Err(error);
             }
-            Ok(())
-        }
-
-        fn add_destlist_entry(
-            &self,
-            path: &str,
-            qa_type: QuickAccess,
-            _timeout: Duration,
-        ) -> WincentResult<()> {
-            self.record(format!("add_destlist_entry:{qa_type:?}:{path}"));
             Ok(())
         }
 
@@ -1995,74 +1166,8 @@ mod tests {
             Ok(())
         }
 
-        fn remove_destlist_entry(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
-            self.record(format!("remove_destlist_entry:{qa_type:?}:{path}"));
-            Ok(())
-        }
-
-        fn update_destlist_entry(
-            &self,
-            path: &str,
-            qa_type: QuickAccess,
-            update: crate::destlist::DestListItemUpdate,
-        ) -> WincentResult<()> {
-            self.record(format!(
-                "update_destlist_entry:{qa_type:?}:{path}:{update:?}"
-            ));
-            Ok(())
-        }
-
-        fn delete_recent_links_for_target(
-            &self,
-            path: &str,
-            _timeout: Duration,
-        ) -> WincentResult<()> {
-            self.record(format!("delete_recent_links:{path}"));
-            Ok(())
-        }
-
-        fn list_recent_lnk_files(&self) -> WincentResult<Vec<PathBuf>> {
-            self.record("list_recent_lnk_files");
-            Ok(self.lnk_files.lock().unwrap().clone())
-        }
-
-        fn delete_lnk_file(&self, path: &Path) -> WincentResult<()> {
-            self.record(format!("delete_lnk_file:{}", path.display()));
-            Ok(())
-        }
-
-        fn resolve_lnk_with_type(
-            &self,
-            path: &Path,
-            _timeout: Duration,
-        ) -> WincentResult<Option<crate::recent_links::LnkResolution>> {
-            self.record(format!("resolve_lnk_with_type:{}", path.display()));
-            Ok(None)
-        }
-
-        fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
-            self.record("delete_recent_files_backing_data");
-            Ok(())
-        }
-
-        fn delete_frequent_folders_backing_file(&self) -> WincentResult<()> {
-            self.record("delete_frequent_folders_backing_file");
-            Ok(())
-        }
-
-        fn wait_for_frequent_folders_rebuild(
-            &self,
-            _timeout: Duration,
-        ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
-            self.record("wait_for_frequent_folders_rebuild");
-            Ok(self.frequent_rebuild_entries.lock().unwrap().clone())
-        }
-
         fn clear_recent_files(&self, _timeout: Duration) -> WincentResult<()> {
             self.record("clear_recent_files");
-            if let Some(error) = self.clear_recent_files_error.lock().unwrap().take() {
-                return Err(error);
-            }
             Ok(())
         }
 
@@ -2071,10 +1176,14 @@ mod tests {
             Ok(())
         }
 
-        fn refresh_explorer(&self, timeout: Duration) -> WincentResult<()> {
-            self.record("refresh_explorer");
-            self.refresh_explorer_timeouts.lock().unwrap().push(timeout);
-            if let Some(error) = self.refresh_explorer_error.lock().unwrap().take() {
+        fn notify_shell_change(&self) {
+            self.record("notify_shell_change");
+        }
+
+        fn refresh_shell_views(&self, timeout: Duration) -> WincentResult<()> {
+            self.record("refresh_shell_views");
+            self.refresh_timeouts.lock().unwrap().push(timeout);
+            if let Some(error) = self.refresh_error.lock().unwrap().take() {
                 return Err(error);
             }
             Ok(())
@@ -2242,23 +1351,30 @@ mod tests {
             backend.calls(),
             vec![
                 "clear_frequent_folders_jumplist".to_string(),
-                "refresh_explorer".to_string(),
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
             ]
         );
         Ok(())
     }
 
     #[test]
-    fn refresh_explorer_uses_manager_timeout() -> WincentResult<()> {
+    fn refresh_notifies_before_refreshing_views() -> WincentResult<()> {
         let backend = Arc::new(FakeBackend::with_items(Vec::new()));
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(9), backend.clone());
 
-        manager.refresh_explorer()?;
+        manager.refresh()?;
 
-        assert_eq!(backend.calls(), vec!["refresh_explorer".to_string()]);
         assert_eq!(
-            *backend.refresh_explorer_timeouts.lock().unwrap(),
+            backend.calls(),
+            vec![
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
+            ]
+        );
+        assert_eq!(
+            *backend.refresh_timeouts.lock().unwrap(),
             vec![Duration::from_secs(9)]
         );
         Ok(())
@@ -2408,30 +1524,6 @@ mod tests {
     }
 
     #[test]
-    fn pin_frequent_folder_validates_then_uses_frequent_folder_add_path() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        manager.pin_frequent_folder("C:\\Projects")?;
-
-        assert_eq!(
-            backend.calls(),
-            vec!["add_frequent_folder:C:\\Projects".to_string()]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn pin_frequent_folder_rejects_empty_path() {
-        let manager = QuickAccessManager::new();
-        assert!(matches!(
-            manager.pin_frequent_folder(""),
-            Err(WincentError::InvalidPath(_))
-        ));
-    }
-
-    #[test]
     fn add_duplicate_skips_backend_mutation() {
         let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
         let manager =
@@ -2510,167 +1602,13 @@ mod tests {
     }
 
     #[test]
-    fn frequent_folder_pin_status_rejects_empty_path_before_parsing_destlist() {
-        let manager = QuickAccessManager::new();
-
-        let result = manager.frequent_folder_pin_status("");
-
-        assert!(matches!(result, Err(WincentError::InvalidPath(_))));
-    }
-
-    #[test]
     fn status_queries_reject_empty_path_before_reading_destlist() {
         let manager = QuickAccessManager::new();
 
         assert!(matches!(
-            manager.quick_access_status(""),
+            manager.get_item_status(""),
             Err(WincentError::InvalidPath(_))
         ));
-        assert!(matches!(
-            manager.recent_file_position(""),
-            Err(WincentError::InvalidPath(_))
-        ));
-        assert!(matches!(
-            manager.frequent_folder_slot(""),
-            Err(WincentError::InvalidPath(_))
-        ));
-    }
-
-    #[test]
-    fn remove_deep_clean_runs_after_successful_remove() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        manager.remove_item_with_options(
-            "C:\\report.docx",
-            RemoveOptions::new().deep_clean_recent_links(),
-        )?;
-
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "remove_recent_file:C:\\report.docx".to_string(),
-                "delete_recent_links:C:\\report.docx".to_string(),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn direct_remove_rewrites_cfb_cleans_links_and_refreshes() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(7), backend.clone());
-
-        manager.remove_item_direct("C:\\missing-report.docx", QuickAccess::RecentFiles)?;
-
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "remove_destlist_entry:RecentFiles:C:\\missing-report.docx".to_string(),
-                "delete_recent_links:C:\\missing-report.docx".to_string(),
-                "refresh_explorer".to_string(),
-            ]
-        );
-        assert_eq!(
-            backend.refresh_explorer_timeouts.lock().unwrap().as_slice(),
-            &[Duration::from_secs(7)]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn direct_add_rewrites_cfb_and_refreshes() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(7), backend.clone());
-
-        manager.add_item_direct("C:\\report.docx", QuickAccess::RecentFiles)?;
-
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "add_destlist_entry:RecentFiles:C:\\report.docx".to_string(),
-                "refresh_explorer".to_string(),
-            ]
-        );
-        assert_eq!(
-            backend.refresh_explorer_timeouts.lock().unwrap().as_slice(),
-            &[Duration::from_secs(7)]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn direct_update_rewrites_cfb_and_refreshes() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(7), backend.clone());
-        let update = crate::destlist::DestListItemUpdate::new()
-            .show()
-            .with_position(crate::destlist::DestListPosition::First);
-
-        manager.update_item_direct("C:\\report.docx", QuickAccess::RecentFiles, update)?;
-
-        assert_eq!(
-            backend.calls(),
-            vec![
-                format!("update_destlist_entry:RecentFiles:C:\\report.docx:{update:?}"),
-                "refresh_explorer".to_string(),
-            ]
-        );
-        assert_eq!(
-            backend.refresh_explorer_timeouts.lock().unwrap().as_slice(),
-            &[Duration::from_secs(7)]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn direct_add_rejects_all_before_mutation() {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let error = manager
-            .add_item_direct("C:\\report.docx", QuickAccess::All)
-            .unwrap_err();
-
-        assert!(matches!(error, WincentError::UnsupportedOperation(_)));
-        assert!(backend.calls().is_empty());
-    }
-
-    #[test]
-    fn direct_remove_rejects_all_before_mutation() {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let error = manager
-            .remove_item_direct("C:\\report.docx", QuickAccess::All)
-            .unwrap_err();
-
-        assert!(matches!(error, WincentError::UnsupportedOperation(_)));
-        assert!(backend.calls().is_empty());
-    }
-
-    #[test]
-    fn direct_update_rejects_all_before_mutation() {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let error = manager
-            .update_item_direct(
-                "C:\\report.docx",
-                QuickAccess::All,
-                crate::destlist::DestListItemUpdate::new().hide(),
-            )
-            .unwrap_err();
-
-        assert!(matches!(error, WincentError::UnsupportedOperation(_)));
-        assert!(backend.calls().is_empty());
     }
 
     #[test]
@@ -2686,107 +1624,6 @@ mod tests {
             vec!["remove_recent_file:C:\\report.docx".to_string()]
         );
         Ok(())
-    }
-
-    #[test]
-    fn remove_recent_file_refreshes_explorer_when_requested() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        manager
-            .remove_item_with_options("C:\\report.docx", RemoveOptions::new().refresh_explorer())?;
-
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "remove_recent_file:C:\\report.docx".to_string(),
-                "refresh_explorer".to_string(),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn remove_frequent_folder_refreshes_explorer_when_requested() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\Projects".to_string()]));
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        manager
-            .remove_item_with_options("C:\\Projects", RemoveOptions::new().refresh_explorer())?;
-
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "remove_pinned_frequent_folder:C:\\Projects:10".to_string(),
-                "refresh_explorer".to_string(),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn remove_recent_file_refresh_failure_is_post_mutation_failure() {
-        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
-        backend.fail_refresh_explorer_with(WincentError::SystemError("refresh failed".to_string()));
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let error = manager
-            .remove_item_with_options("C:\\report.docx", RemoveOptions::new().refresh_explorer())
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            WincentError::PostMutationFailure {
-                ref path,
-                qa_type: QuickAccess::RecentFiles,
-                step: crate::error::QuickAccessPostMutationStep::RefreshExplorer,
-                ref source,
-            } if path == "C:\\report.docx"
-                && matches!(source.as_ref(), WincentError::SystemError(message) if message == "refresh failed")
-        ));
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "remove_recent_file:C:\\report.docx".to_string(),
-                "refresh_explorer".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn remove_options_default_disables_deep_clean() {
-        assert!(!RemoveOptions::new().deep_clean_recent_links_enabled());
-        assert!(!RemoveOptions::new().refresh_explorer_enabled());
-    }
-
-    #[test]
-    fn remove_options_builder_enables_deep_clean() {
-        let options = RemoveOptions::new().deep_clean_recent_links();
-        assert!(options.deep_clean_recent_links_enabled());
-        assert!(!options
-            .with_deep_clean_recent_links(false)
-            .deep_clean_recent_links_enabled());
-    }
-
-    #[test]
-    fn remove_options_builder_enables_refresh_explorer() {
-        let options = RemoveOptions::new().refresh_explorer();
-        assert!(options.refresh_explorer_enabled());
-        assert!(!options
-            .with_refresh_explorer(false)
-            .refresh_explorer_enabled());
-    }
-
-    #[test]
-    fn remove_options_deep_clean_targets_recent_files_and_frequent_folders() {
-        let options = RemoveOptions::new().deep_clean_recent_links();
-
-        assert!(options.should_deep_clean_links_for(QuickAccess::RecentFiles));
-        assert!(options.should_deep_clean_links_for(QuickAccess::FrequentFolders));
-        assert!(!options.should_deep_clean_links_for(QuickAccess::All));
     }
 
     #[test]
@@ -2821,164 +1658,6 @@ mod tests {
         let error = manager.remove_item(&missing).unwrap_err();
 
         assert!(matches!(error, WincentError::InvalidPath(_)));
-    }
-
-    #[test]
-    fn quick_access_item_constructors_preserve_path_and_type() {
-        let item = QuickAccessItem::recent_file(PathBuf::from("C:\\test.txt"));
-        assert_eq!(item.path(), Path::new("C:\\test.txt"));
-        assert_eq!(item.qa_type(), QuickAccess::RecentFiles);
-
-        let item = QuickAccessItem::frequent_folder("C:\\test");
-        assert_eq!(item.path(), Path::new("C:\\test"));
-        assert_eq!(item.qa_type(), QuickAccess::FrequentFolders);
-    }
-
-    #[test]
-    fn batch_items_report_invalid_empty_paths_per_item() {
-        let manager = QuickAccessManager::new();
-        let result =
-            manager.add_items_batch(&[QuickAccessItem::recent_file("")], BatchOptions::new());
-
-        assert_eq!(result.failed().len(), 1);
-        assert!(matches!(
-            result.failed()[0].error(),
-            WincentError::InvalidPath(_)
-        ));
-    }
-
-    #[test]
-    fn restore_recent_files_defaults_returns_report_and_records_sequence() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let report = manager.restore_recent_files_defaults(RestoreDefaultsOptions::new())?;
-
-        assert!(report.success());
-        assert!(report.recent_files_cleared());
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "list_recent_lnk_files".to_string(),
-                "clear_recent_files".to_string(),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn restore_recent_files_failure_is_captured_in_report() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        backend.fail_clear_recent_files_with(WincentError::SystemError("clear failed".to_string()));
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let report = manager.restore_recent_files_defaults(RestoreDefaultsOptions::new())?;
-
-        assert!(!report.success());
-        assert!(!report.recent_files_cleared());
-        assert!(matches!(
-            report.error(),
-            Some(WincentError::SystemError(message)) if message == "clear failed"
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn restore_frequent_folders_defaults_success_records_sequence() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        backend.set_frequent_rebuild_entries(vec![destlist_entry_for_test("knownfolder:{guid}")]);
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let report = manager.restore_frequent_folders_defaults(
-            RestoreDefaultsOptions::new().with_rebuild_delay(Duration::ZERO),
-        )?;
-
-        assert!(report.success());
-        assert!(report.backing_file_deleted());
-        assert!(report.rebuilt());
-        assert!(report.non_default_raw_paths().is_empty());
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "list_recent_lnk_files".to_string(),
-                "delete_frequent_folders_backing_file".to_string(),
-                "refresh_explorer".to_string(),
-                "wait_for_frequent_folders_rebuild".to_string(),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn restore_defaults_all_reports_recent_and_frequent_progress() -> WincentResult<()> {
-        let backend = Arc::new(FakeBackend::default());
-        backend.fail_refresh_explorer_with(WincentError::SystemError("refresh failed".to_string()));
-        let manager =
-            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
-
-        let report = manager.restore_defaults(
-            QuickAccess::All,
-            RestoreDefaultsOptions::new()
-                .with_rebuild_delay(Duration::ZERO)
-                .with_rebuild_poll_timeout(Duration::ZERO),
-        )?;
-
-        assert!(report
-            .recent_report()
-            .is_some_and(|report| report.success()));
-        assert!(report
-            .frequent_report()
-            .is_some_and(|report| !report.success()));
-        assert_eq!(
-            backend.calls(),
-            vec![
-                "list_recent_lnk_files".to_string(),
-                "clear_recent_files".to_string(),
-                "list_recent_lnk_files".to_string(),
-                "delete_frequent_folders_backing_file".to_string(),
-                "refresh_explorer".to_string(),
-            ]
-        );
-        Ok(())
-    }
-
-    fn destlist_entry_for_test(raw_path: &str) -> crate::destlist::DestListEntry {
-        crate::destlist::DestListEntry {
-            entry_offset: 0,
-            entry_len: 0,
-            mru_position: 0,
-            checksum: 0,
-            checksum_valid: true,
-            entry_id: 0,
-            entry_number: 0,
-            entry_number_unknown: 0,
-            hostname: String::new(),
-            volume_droid: String::new(),
-            file_droid: String::new(),
-            volume_birth_droid: String::new(),
-            file_birth_droid: String::new(),
-            file_droid_mac: String::new(),
-            stream_name: String::new(),
-            raw_path: raw_path.to_string(),
-            path: raw_path.to_string(),
-            pin_status: -1,
-            pin_order: None,
-            rank: 0,
-            recent_rank: 0,
-            count: 0,
-            access_count: 0,
-            score: 0.0,
-            last_access_filetime: None,
-            last_interaction_filetime: None,
-            sps_size: None,
-            reserved_78: None,
-            reserved_7c: None,
-            path_sources: Vec::new(),
-            warnings: Vec::new(),
-        }
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {

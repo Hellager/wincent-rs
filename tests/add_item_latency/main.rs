@@ -31,6 +31,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use wincent::destlist::{
+    entries as dest_entries, frequent_folders_dest_path, parse_file, recent_files_dest_path,
+    DestListEntry,
+};
 use wincent::prelude::*;
 
 /// Maximum time a single Shell add may take before the manager returns a
@@ -277,11 +281,7 @@ fn add_item_shell_latency() {
         if expected == 0 {
             continue;
         }
-        let parsed = if recent {
-            manager.get_recent_files_metadata()
-        } else {
-            manager.get_frequent_folders_metadata()
-        };
+        let parsed = metadata_entries(recent);
         match parsed {
             Ok(entries) => {
                 let matched = entries
@@ -348,6 +348,16 @@ fn add_item_shell_latency() {
         samples.len(),
         out_path.display()
     );
+}
+
+fn metadata_entries(recent: bool) -> WincentResult<Vec<DestListEntry>> {
+    let path = if recent {
+        recent_files_dest_path()?
+    } else {
+        frequent_folders_dest_path()?
+    };
+    let parsed = parse_file(path)?;
+    Ok(dest_entries(parsed.dest_list()))
 }
 
 fn test_platform() -> &'static str {

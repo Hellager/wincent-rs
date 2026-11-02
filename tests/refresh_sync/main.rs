@@ -6,7 +6,7 @@
 //! open, it swaps only the `.automaticDestinations-ms` bytes to the second
 //! state, with no notification and no refresh, then compares:
 //!
-//! 1. current program refresh (`QuickAccessManager::refresh_explorer`);
+//! 1. current program refresh (`QuickAccessManager::refresh`);
 //! 2. an explicit `SHChangeNotify(SHCNE_ASSOCCHANGED)` followed by the same refresh.
 //!
 //! Phase markers are written for the host to capture screenshots; refresh
@@ -19,7 +19,6 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -147,7 +146,7 @@ fn refresh_sync() {
     phase(&root, "20-b-before-refresh", phase_sleep_ms);
 
     let current_refresh_started = Instant::now();
-    manager.refresh_explorer().expect("current refresh failed");
+    manager.refresh().expect("current refresh failed");
     let current_refresh_ms = current_refresh_started.elapsed().as_secs_f64() * 1000.0;
     std::thread::sleep(Duration::from_millis(1200));
     let after_current = observe(&manager, &marker_path);
@@ -179,7 +178,7 @@ fn refresh_sync() {
     }
     let notify_us = notify_started.elapsed().as_secs_f64() * 1_000_000.0;
     let notify_refresh_started = Instant::now();
-    manager.refresh_explorer().expect("notify refresh failed");
+    manager.refresh().expect("notify refresh failed");
     let notify_refresh_ms = notify_refresh_started.elapsed().as_secs_f64() * 1000.0;
     std::thread::sleep(Duration::from_millis(1200));
     let after_notify = observe(&manager, &marker_path);
@@ -193,7 +192,7 @@ fn refresh_sync() {
     let mut refresh_samples = Vec::new();
     for _ in 0..5 {
         let started = Instant::now();
-        manager.refresh_explorer().expect("repeat refresh failed");
+        manager.refresh().expect("repeat refresh failed");
         refresh_samples.push(started.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -221,7 +220,7 @@ fn refresh_sync() {
 
     let notify_only_refresh_started = Instant::now();
     manager
-        .refresh_explorer()
+        .refresh()
         .expect("notify-only follow-up refresh failed");
     let notify_only_refresh_ms = notify_only_refresh_started.elapsed().as_secs_f64() * 1000.0;
     std::thread::sleep(Duration::from_millis(1200));
@@ -353,23 +352,16 @@ fn build_fixture(
     marker: &Path,
     platform: TestPlatform,
 ) -> Result<Fixture, String> {
-    if platform == TestPlatform::Win10 {
-        stop_explorer()?;
-        write_empty_recent_cfb()?;
-    }
-
     for index in 0..FIXTURE_ITEMS {
         let path = root.join(format!("refresh-item-{index:02}.txt"));
         fs::write(&path, b"wincent refresh-sync fixture\n")
             .map_err(|error| format!("create {}: {error}", path.display()))?;
         add_fixture_item(manager, &path, platform)?;
     }
-    if platform == TestPlatform::Win11 {
-        manager
-            .refresh_explorer()
-            .map_err(|error| format!("refresh native A: {error}"))?;
-        std::thread::sleep(Duration::from_millis(800));
-    }
+    manager
+        .refresh()
+        .map_err(|error| format!("refresh native A: {error}"))?;
+    std::thread::sleep(Duration::from_millis(800));
     let a_bytes = fs::read(recent_files_dest_path().map_err(|error| error.to_string())?)
         .map_err(|error| format!("read A: {error}"))?;
     let a_raw = raw_count()?;
@@ -378,16 +370,14 @@ fn build_fixture(
     fs::write(marker, b"wincent refresh-sync marker\n")
         .map_err(|error| format!("create marker: {error}"))?;
     add_fixture_item(manager, marker, platform)?;
-    if platform == TestPlatform::Win11 {
-        manager
-            .refresh_explorer()
-            .map_err(|error| format!("refresh native B: {error}"))?;
-        std::thread::sleep(Duration::from_millis(800));
-    }
+    manager
+        .refresh()
+        .map_err(|error| format!("refresh native B: {error}"))?;
+    std::thread::sleep(Duration::from_millis(800));
     let b_bytes = fs::read(recent_files_dest_path().map_err(|error| error.to_string())?)
         .map_err(|error| format!("read B: {error}"))?;
     let b_raw = raw_count()?;
-    if platform == TestPlatform::Win10 && (a_raw != FIXTURE_ITEMS || b_raw != FIXTURE_ITEMS + 1) {
+    if b_raw <= a_raw {
         return Err(format!(
             "unexpected fixture raw counts: A={a_raw}, B={b_raw}"
         ));
@@ -410,10 +400,9 @@ fn build_fixture(
         a_raw,
         b_raw,
         a_visible,
-        mode: if platform == TestPlatform::Win10 {
-            "synthetic_v4"
-        } else {
-            "native_v6_snapshots"
+        mode: match platform {
+            TestPlatform::Win10 => "native_v4_snapshots",
+            TestPlatform::Win11 => "native_v6_snapshots",
         },
     })
 }
@@ -425,64 +414,17 @@ fn visible_count() -> Result<usize, String> {
 fn add_fixture_item(
     manager: &QuickAccessManager,
     path: &Path,
-    platform: TestPlatform,
+    _platform: TestPlatform,
 ) -> Result<(), String> {
-    match platform {
-        TestPlatform::Win10 => add_direct(path),
-        TestPlatform::Win11 => manager
-            .add_item(path)
-            .map_err(|error| format!("add native item {}: {error}", path.display())),
-    }
+    manager
+        .add_item(path)
+        .map_err(|error| format!("add native item {}: {error}", path.display()))
 }
 
 fn raw_count() -> Result<usize, String> {
     let path = recent_files_dest_path().map_err(|error| error.to_string())?;
     let parsed = parse_file(&path).map_err(|error| error.to_string())?;
     Ok(parsed.cfb_entries().len())
-}
-
-fn write_empty_recent_cfb() -> Result<(), String> {
-    let path = recent_files_dest_path().map_err(|error| error.to_string())?;
-    let mut header = vec![0u8; 0x20];
-    header[0..4].copy_from_slice(&4u32.to_le_bytes());
-    let mut compound =
-        cfb::CompoundFile::create_with_version(cfb::Version::V3, std::io::Cursor::new(Vec::new()))
-            .map_err(|error| format!("create empty CFB: {error}"))?;
-    compound
-        .create_stream("/DestList")
-        .map_err(|error| format!("create DestList: {error}"))?
-        .write_all(&header)
-        .map_err(|error| format!("write DestList: {error}"))?;
-    compound
-        .flush()
-        .map_err(|error| format!("flush empty CFB: {error}"))?;
-    fs::write(&path, compound.into_inner().into_inner())
-        .map_err(|error| format!("write {}: {error}", path.display()))
-}
-
-fn add_direct(path: &Path) -> Result<(), String> {
-    let manager = QuickAccessManager::builder()
-        .timeout(Duration::from_secs(60))
-        .build();
-    if manager
-        .add_item_direct(path, QuickAccess::RecentFiles)
-        .is_ok()
-    {
-        return Ok(());
-    }
-    // Explorer is stopped during setup, so the post-write refresh can fail
-    // while the direct write itself succeeded.
-    let entries = manager
-        .get_recent_files_metadata()
-        .map_err(|error| error.to_string())?;
-    if entries
-        .iter()
-        .any(|entry| entry.path().eq_ignore_ascii_case(&path.to_string_lossy()))
-    {
-        Ok(())
-    } else {
-        Err(format!("direct add failed for {}", path.display()))
-    }
 }
 
 fn remove_marker_links() -> Result<(), String> {

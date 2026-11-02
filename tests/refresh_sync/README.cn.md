@@ -7,7 +7,7 @@
 
 本实验比较：
 
-1. **当前程序刷新**：`QuickAccessManager::refresh_explorer()`，先调用
+1. **当前程序刷新**：`QuickAccessManager::refresh()`，先调用
    `SHChangeNotify(SHCNE_ASSOCCHANGED)`，再对匹配的 Quick Access/Home 窗口调用
    `IShellView::Refresh`；
 2. **显式 SHChangeNotify + refresh**：额外显式发送一次通知，再执行同一个统一刷新。
@@ -20,8 +20,7 @@
 
 | 状态 | Raw 条目数 | 可见项 |
 | --- | ---: | --- |
-| Win10 A（基线） | 5 | 5 |
-| Win10 B | 6 | 6（新增 `refresh-sync-marker.txt`） |
+| Win10 A/B | 系统 API 生成的原生 v4 快照 | 按实际 Shell 数量记录，B 新增 marker |
 | Win11 A/B | 系统 API 生成的原生 v6 快照 | 按实际 Shell 数量记录，B 新增 marker |
 
 实验步骤：
@@ -66,9 +65,8 @@ VM 较慢时应增大该值，避免 host 截到错误阶段。
 
 加密 VM 可在 `.env` 中设置可选的 `WINCENT_VM_PASSWORD`，host 会通过 `vmrun -vp` 传递。
 
-Win10 使用确定性 synthetic v4 A/B；Win11 通过系统 `add_item` 分别生成原生 v6 A/B
-快照，再进行整文件替换。该流程不实现或验证 v6 entry writer。
-如果原生 Recent 跟踪无法生成两个快照，Win11 运行会返回 `status: "skipped"`，原因是
+Win10 和 Win11 都通过系统 `add_item` 分别生成原生 A/B 快照，再进行整文件替换。
+该流程不实现或验证 DestList entry writer。如果原生 Recent 跟踪无法生成两个快照，运行会返回 `status: "skipped"`，原因是
 `native_recent_tracking_unavailable`。这是预期的能力检测结果，不代表刷新实验成功。
 
 `WINCENT_VM_PLATFORM=win10|win11` 与 `-Platform` 等价，guest 会在修改 Quick Access 前校验
@@ -113,7 +111,7 @@ min **23.224 ms**，max **123.704 ms**。
   （只截到桌面背景，尽管 refresh 调用返回成功）。不能把它作为 raw 替换后的唯一同步步骤。
 - **`SHChangeNotify(SHCNE_ASSOCCHANGED)` + 视图刷新是有效且稳定的组合**：
   3/3 次更新 UI，terminal/file 本来已同步。耗时约 **57.8 ms**，主要来自 refresh。
-公开的 `QuickAccessManager::refresh_explorer()` 现已把通知和定向视图刷新合并为一次操作。
+公开的 `QuickAccessManager::refresh()` 现已把通知和定向视图刷新合并为一次操作。
 
 ## 边界
 

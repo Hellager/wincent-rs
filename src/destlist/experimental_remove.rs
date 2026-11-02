@@ -30,7 +30,7 @@
 //! recovery path is to reset the affected section to its default state with
 //! [`crate::QuickAccessManager::restore_recent_files_defaults`] and
 //! [`crate::RestoreDefaultsOptions`], or reset all Quick Access sections with
-//! [`crate::QuickAccessManager::restore_defaults`] and [`crate::QuickAccess::All`].
+//! crate-level clear operations and [`crate::QuickAccess::All`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -278,7 +278,7 @@ where
         base,
         options,
         resolver,
-        crate::utils::refresh_explorer_window,
+        || crate::utils::refresh_quick_access(Duration::from_secs(10)),
         wait_for_rebuilt_dest,
     ))
 }
@@ -640,7 +640,6 @@ mod tests {
     use super::*;
     use crate::manager::QuickAccessManager;
     use crate::test_utils::{cleanup_test_env, create_test_file, setup_test_env};
-    use crate::RemoveOptions;
     use std::env;
     use std::io::{self, Write};
     use std::process::Command;
@@ -683,7 +682,7 @@ mod tests {
                 println!(
                     "initial parse failed: {error}; refreshing Quick Access windows and retrying"
                 );
-                crate::utils::refresh_explorer_window()?;
+                crate::utils::refresh_quick_access(Duration::from_secs(10))?;
                 thread::sleep(Duration::from_secs(1));
                 parse_file_with_retries(dest_path, Duration::from_secs(5))
             }
@@ -1136,7 +1135,7 @@ mod tests {
         }
 
         fs::remove_file(&dest_path).map_err(WincentError::Io)?;
-        crate::utils::refresh_explorer_window()?;
+        crate::utils::refresh_quick_access(Duration::from_secs(10))?;
         thread::sleep(ExperimentalRemoveOptions::default().rebuild_delay());
 
         let rebuilt = wait_for_rebuilt_dest(&dest_path, &matching_paths, REBUILD_POLL_TIMEOUT)?;
@@ -1916,12 +1915,7 @@ mod tests {
     }
 
     fn remove_added_seed(manager: &QuickAccessManager, seed_path: &Path) -> WincentResult<()> {
-        let removal_result = manager.remove_item_with_options(
-            seed_path,
-            RemoveOptions::new()
-                .deep_clean_recent_links()
-                .refresh_explorer(),
-        );
+        let removal_result = manager.remove_item(seed_path);
         let link_cleanup_result = remove_seed_recent_links(seed_path);
 
         match (removal_result, link_cleanup_result) {

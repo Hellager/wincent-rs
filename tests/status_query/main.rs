@@ -195,10 +195,7 @@ fn build_frequent_fixture(
             continue;
         }
         let result = match platform {
-            TestPlatform::Win10 => {
-                manager.add_item_direct(&directory, QuickAccess::FrequentFolders)
-            }
-            TestPlatform::Win11 => manager.pin_frequent_folder(&directory),
+            TestPlatform::Win10 | TestPlatform::Win11 => manager.add_item(&directory),
         };
         if result.is_ok() {
             added.push(directory);
@@ -316,8 +313,8 @@ fn status_query() {
         let frequent_ready = wait_until(fixture_timeout, || {
             frequent_fixture.iter().all(|path| {
                 manager
-                    .frequent_folder_slot(path)
-                    .map(|slot| slot.is_some())
+                    .get_item_status(path)
+                    .map(|status| status.frequent_folder().is_some())
                     .unwrap_or(false)
             })
         });
@@ -418,14 +415,14 @@ fn status_query() {
 
     // ---- Recent positions ----------------------------------------------
     for (expected, path) in recent_visible.iter().enumerate() {
-        let observed = manager.recent_file_position(path).expect("recent status");
+        let status = manager.get_item_status(path).expect("recent status");
+        let observed = status.recent_file();
         checks.check(
             format!("recent_position_{expected}"),
             observed == Some(expected),
             format!("path={path} expected={expected} observed={observed:?}"),
         );
 
-        let status = manager.quick_access_status(path).expect("aggregate status");
         checks.check(
             format!("recent_aggregate_{expected}"),
             status.recent_file() == Some(expected) && status.frequent_folder().is_none(),
@@ -441,7 +438,10 @@ fn status_query() {
         {
             continue;
         }
-        let observed = manager.recent_file_position(path).expect("recent status");
+        let observed = manager
+            .get_item_status(path)
+            .expect("recent status")
+            .recent_file();
         checks.check(
             format!("recent_outside_window_{recent_filtered}"),
             observed.is_none(),
@@ -453,7 +453,8 @@ fn status_query() {
 
     // ---- Frequent positions --------------------------------------------
     for (expected, (path, pinned)) in frequent_visible.iter().enumerate() {
-        let observed = manager.frequent_folder_slot(path).expect("frequent status");
+        let status = manager.get_item_status(path).expect("frequent status");
+        let observed = status.frequent_folder();
         let matches = observed
             .as_ref()
             .is_some_and(|slot| slot.position() == expected && slot.is_pinned() == *pinned);
@@ -463,7 +464,6 @@ fn status_query() {
             format!("path={path} expected=({expected},{pinned}) observed={observed:?}"),
         );
 
-        let status = manager.quick_access_status(path).expect("aggregate status");
         let aggregate_matches = status
             .frequent_folder()
             .is_some_and(|slot| slot.position() == expected && slot.is_pinned() == *pinned);
@@ -482,7 +482,10 @@ fn status_query() {
         {
             continue;
         }
-        let observed = manager.frequent_folder_slot(path).expect("frequent status");
+        let observed = manager
+            .get_item_status(path)
+            .expect("frequent status")
+            .frequent_folder();
         checks.check(
             format!("frequent_outside_slots_{frequent_filtered}"),
             observed.is_none(),
@@ -499,17 +502,29 @@ fn status_query() {
         let trailing = format!("{first}\\");
         checks.check(
             "recent_variant_forward_slashes",
-            manager.recent_file_position(&forward).expect("variant") == Some(0),
+            manager
+                .get_item_status(&forward)
+                .expect("variant")
+                .recent_file()
+                == Some(0),
             format!("path={forward}"),
         );
         checks.check(
             "recent_variant_lowercase",
-            manager.recent_file_position(&lower).expect("variant") == Some(0),
+            manager
+                .get_item_status(&lower)
+                .expect("variant")
+                .recent_file()
+                == Some(0),
             format!("path={lower}"),
         );
         checks.check(
             "recent_variant_trailing_slash",
-            manager.recent_file_position(&trailing).expect("variant") == Some(0),
+            manager
+                .get_item_status(&trailing)
+                .expect("variant")
+                .recent_file()
+                == Some(0),
             format!("path={trailing}"),
         );
     }
@@ -517,7 +532,7 @@ fn status_query() {
     // ---- Absent paths ----------------------------------------------------
     let absent_path = root.join("definitely-not-in-quick-access.txt");
     let absent = absent_path.to_string_lossy().to_string();
-    let absent_status = manager.quick_access_status(&absent).expect("absent status");
+    let absent_status = manager.get_item_status(&absent).expect("absent status");
     checks.check(
         "absent_path_not_visible",
         !absent_status.is_visible() && absent_status.lists().is_none(),
@@ -525,18 +540,12 @@ fn status_query() {
     );
     checks.check(
         "absent_path_recent_none",
-        manager
-            .recent_file_position(&absent)
-            .expect("absent")
-            .is_none(),
+        absent_status.recent_file().is_none(),
         format!("path={absent}"),
     );
     checks.check(
         "absent_path_frequent_none",
-        manager
-            .frequent_folder_slot(&absent)
-            .expect("absent")
-            .is_none(),
+        absent_status.frequent_folder().is_none(),
         format!("path={absent}"),
     );
 
@@ -544,13 +553,7 @@ fn status_query() {
     checks.check(
         "empty_path_rejected",
         matches!(
-            manager.quick_access_status(""),
-            Err(WincentError::InvalidPath(_))
-        ) && matches!(
-            manager.recent_file_position(""),
-            Err(WincentError::InvalidPath(_))
-        ) && matches!(
-            manager.frequent_folder_slot(""),
+            manager.get_item_status(""),
             Err(WincentError::InvalidPath(_))
         ),
         "empty path must return InvalidPath",
@@ -574,21 +577,22 @@ fn status_query() {
     }
     if let Some(sample) = recent_visible.first() {
         if let Some(stats) = measure(STATUS_ITERATIONS, || {
-            let _ = manager.quick_access_status(sample).expect("status");
+            let _ = manager
+                .get_item_status(sample)
+                .expect("recent")
+                .recent_file();
         }) {
-            timings.insert("status_aggregate".into(), stats);
-        }
-        if let Some(stats) = measure(STATUS_ITERATIONS, || {
-            let _ = manager.recent_file_position(sample).expect("recent");
-        }) {
-            timings.insert("status_recent_only".into(), stats);
+            timings.insert("status_recent_path".into(), stats);
         }
     }
     if let Some(sample) = frequent_visible.first() {
         if let Some(stats) = measure(STATUS_ITERATIONS, || {
-            let _ = manager.frequent_folder_slot(&sample.0).expect("frequent");
+            let _ = manager
+                .get_item_status(&sample.0)
+                .expect("frequent")
+                .frequent_folder();
         }) {
-            timings.insert("status_frequent_only".into(), stats);
+            timings.insert("status_frequent_path".into(), stats);
         }
     }
 
@@ -603,8 +607,8 @@ fn status_query() {
                 let removed = remove_result.is_ok()
                     && wait_until(MUTATION_TIMEOUT, || {
                         manager
-                            .recent_file_position(victim)
-                            .map(|position| position.is_none())
+                            .get_item_status(victim)
+                            .map(|status| status.recent_file().is_none())
                             .unwrap_or(false)
                     });
                 mutation_log.push(format!(
@@ -625,8 +629,8 @@ fn status_query() {
             let recent_became_visible = recent_add_result.is_ok()
                 && wait_until(MUTATION_TIMEOUT, || {
                     manager
-                        .recent_file_position(&recent_target)
-                        .map(|position| position.is_some())
+                        .get_item_status(&recent_target)
+                        .map(|status| status.recent_file().is_some())
                         .unwrap_or(false)
                 });
             let recent_visible_latency = add_started.elapsed().as_secs_f64() * 1000.0;
@@ -645,8 +649,8 @@ fn status_query() {
             let recent_became_hidden = matches!(recent_remove_result.as_ref(), Some(Ok(())))
                 && wait_until(MUTATION_TIMEOUT, || {
                     manager
-                        .recent_file_position(&recent_target)
-                        .map(|position| position.is_none())
+                        .get_item_status(&recent_target)
+                        .map(|status| status.recent_file().is_none())
                         .unwrap_or(false)
                 });
             mutation_log.push(format!(
@@ -666,13 +670,17 @@ fn status_query() {
 
         let folder_target = root.join("status-frequent-target");
         fs::create_dir_all(&folder_target).expect("create frequent target");
-        let pin_result = manager.pin_frequent_folder(&folder_target);
+        let pin_result = manager.add_item(&folder_target);
         let pin_started = Instant::now();
         let pinned_visible = pin_result.is_ok()
             && wait_until(MUTATION_TIMEOUT, || {
                 manager
-                    .frequent_folder_slot(&folder_target)
-                    .map(|slot| slot.is_some_and(|slot| slot.is_pinned()))
+                    .get_item_status(&folder_target)
+                    .map(|status| {
+                        status
+                            .frequent_folder()
+                            .is_some_and(|slot| slot.is_pinned())
+                    })
                     .unwrap_or(false)
             });
         mutation_log.push(format!(
@@ -690,8 +698,8 @@ fn status_query() {
         let unpinned_hidden = matches!(frequent_remove_result.as_ref(), Some(Ok(())))
             && wait_until(MUTATION_TIMEOUT, || {
                 manager
-                    .frequent_folder_slot(&folder_target)
-                    .map(|slot| slot.is_none())
+                    .get_item_status(&folder_target)
+                    .map(|status| status.frequent_folder().is_none())
                     .unwrap_or(false)
             });
         mutation_log.push(format!(

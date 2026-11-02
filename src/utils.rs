@@ -1,6 +1,4 @@
-use crate::{
-    error::WincentError, script_executor::ScriptExecutor, script_strategy::PSScript, WincentResult,
-};
+use crate::{error::WincentError, WincentResult};
 use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::os::windows::ffi::OsStrExt;
@@ -10,7 +8,10 @@ use std::path::Path;
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
-use windows::Win32::UI::Shell::{FOLDERID_Recent, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG};
+use windows::Win32::UI::Shell::{
+    FOLDERID_Recent, SHChangeNotify, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG, SHCNE_ASSOCCHANGED,
+    SHCNF_IDLIST,
+};
 use winreg::enums::HKEY_LOCAL_MACHINE;
 use winreg::RegKey;
 
@@ -210,44 +211,23 @@ pub(crate) fn detect_path_type(path: &str) -> WincentResult<PathType> {
     }
 }
 
-/// Refreshes the Windows Explorer windows.
-///
-/// This function first sends a Shell association-change notification and
-/// refreshes matching Quick Access/Home windows through native COM. It falls
-/// back to the legacy PowerShell refresh script if the native path fails.
-pub(crate) fn refresh_explorer_window() -> WincentResult<()> {
-    // Try native COM first (fast path)
-    refresh_explorer_native().or_else(|_| {
-        // Fallback to PowerShell if COM fails (compatibility)
-        refresh_explorer_powershell()
-    })
+/// Notifies the Shell that associations and related cached data changed.
+pub(crate) fn notify_shell_change() {
+    // SAFETY: SHCNE_ASSOCCHANGED with SHCNF_IDLIST accepts null item pointers.
+    unsafe {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+    }
 }
 
-/// Refreshes Explorer windows using native COM API (fast path).
-///
-/// Sends `SHCNE_ASSOCCHANGED` and refreshes matching Quick Access/Home Shell views.
-fn refresh_explorer_native() -> WincentResult<()> {
-    crate::explorer_window::refresh_explorer()
+/// Refreshes active Quick Access/Home Shell views through `IShellView::Refresh`.
+pub(crate) fn refresh_shell_views(timeout: std::time::Duration) -> WincentResult<()> {
+    crate::explorer_window::refresh_shell_views_with_timeout(timeout)
 }
 
-/// Refreshes Explorer windows using PowerShell script (fallback).
-///
-/// This is the original implementation, kept as a fallback for compatibility.
-fn refresh_explorer_powershell() -> WincentResult<()> {
-    let start = std::time::Instant::now();
-    let script_path =
-        crate::script_storage::ScriptStorage::get_script_path(PSScript::RefreshExplorer)?;
-    let output = ScriptExecutor::execute_ps_script(PSScript::RefreshExplorer, None)?;
-    let duration = start.elapsed();
-    let _ = ScriptExecutor::parse_output_to_strings(
-        output,
-        PSScript::RefreshExplorer,
-        script_path,
-        None,
-        duration,
-    )?;
-
-    Ok(())
+/// Sends the Shell notification, then refreshes active Quick Access/Home views.
+pub(crate) fn refresh_quick_access(timeout: std::time::Duration) -> WincentResult<()> {
+    notify_shell_change();
+    refresh_shell_views(timeout)
 }
 
 /// Validates if a given path exists and matches the expected type (file or directory).
@@ -324,48 +304,7 @@ mod utils_test {
     #[test]
     #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer -- --ignored --nocapture"]
     fn test_refresh_explorer() -> WincentResult<()> {
-        refresh_explorer_window()
-    }
-
-    #[test]
-    #[ignore = "Performance benchmark; requires desktop session — run with: cargo test test_refresh_explorer_performance -- --ignored --nocapture"]
-    fn test_refresh_explorer_performance() -> WincentResult<()> {
-        use std::time::Instant;
-
-        println!("\n=== Refresh Explorer Performance Comparison ===\n");
-
-        // Test native COM version
-        let start = Instant::now();
-        refresh_explorer_native()?;
-        let native_duration = start.elapsed();
-        println!("Native COM version: {:?}", native_duration);
-
-        // Test PowerShell version
-        let start = Instant::now();
-        refresh_explorer_powershell()?;
-        let powershell_duration = start.elapsed();
-        println!("PowerShell version: {:?}", powershell_duration);
-
-        // Calculate speedup
-        let speedup = powershell_duration.as_secs_f64() / native_duration.as_secs_f64();
-        println!("\nSpeedup: {:.2}x faster", speedup);
-        println!("Time saved: {:?}", powershell_duration - native_duration);
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer_native_only -- --ignored --nocapture"]
-    fn test_refresh_explorer_native_only() -> WincentResult<()> {
-        // Test that native COM version works independently
-        refresh_explorer_native()
-    }
-
-    #[test]
-    #[ignore = "Requires desktop session and may need elevated privileges — run with: cargo test test_refresh_explorer_powershell_only -- --ignored --nocapture"]
-    fn test_refresh_explorer_powershell_only() -> WincentResult<()> {
-        // Test that PowerShell fallback still works
-        refresh_explorer_powershell()
+        refresh_quick_access(std::time::Duration::from_secs(10))
     }
 
     #[test]

@@ -5,11 +5,8 @@ use crate::utils::{get_windows_recent_folder, normalize_path_lightweight, paths_
 use crate::WincentResult;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
-const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 const SHELL_LINK_HEADER_SIZE: u32 = 0x4c;
 const LINK_CLSID: [u8; 16] = [
     0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
@@ -25,13 +22,6 @@ const HAS_ICON_LOCATION: u32 = 0x0000_0040;
 const IS_UNICODE: u32 = 0x0000_0080;
 const VOLUME_ID_AND_LOCAL_BASE_PATH: u32 = 0x0000_0001;
 const COMMON_NETWORK_RELATIVE_LINK_AND_PATH_SUFFIX: u32 = 0x0000_0002;
-
-/// Resolved shortcut target plus best-effort target type information.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LnkResolution {
-    pub(crate) path: String,
-    pub(crate) is_dir: Option<bool>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShellLinkSummary {
@@ -53,14 +43,6 @@ struct LinkInfoSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NetworkLinkSummary {
     net_name: Option<String>,
-}
-
-/// Deletes Recent-folder `.lnk` files whose resolved target equals `target`.
-pub(crate) fn delete_recent_links_for_target(
-    target: &str,
-    timeout: Duration,
-) -> WincentResult<Vec<PathBuf>> {
-    delete_recent_links_for_targets(&[target.to_owned()], timeout)
 }
 
 /// Deletes Recent-folder `.lnk` files whose resolved target matches any target.
@@ -170,26 +152,6 @@ pub(crate) fn resolve_lnk_target(
     Ok(summary.target_path.or(summary.relative_path))
 }
 
-pub(crate) fn resolve_lnk_with_type(
-    lnk_path: &Path,
-    timeout: Duration,
-) -> WincentResult<Option<LnkResolution>> {
-    let Some(summary) = read_shell_link_summary(lnk_path)? else {
-        return Ok(None);
-    };
-    let Some(path) = summary.target_path.or(summary.relative_path) else {
-        return Ok(None);
-    };
-    let is_dir = lnk_target_is_dir(
-        &path,
-        summary.file_attributes,
-        summary.target_is_network,
-        timeout,
-    );
-
-    Ok(Some(LnkResolution { path, is_dir }))
-}
-
 fn read_shell_link_summary(lnk_path: &Path) -> WincentResult<Option<ShellLinkSummary>> {
     let data = match fs::read(lnk_path) {
         Ok(data) => data,
@@ -198,64 +160,6 @@ fn read_shell_link_summary(lnk_path: &Path) -> WincentResult<Option<ShellLinkSum
     };
 
     Ok(parse_shell_link_summary(&data))
-}
-
-fn lnk_target_is_dir(
-    path: &str,
-    attributes: u32,
-    target_is_network: bool,
-    timeout: Duration,
-) -> Option<bool> {
-    if attributes != 0 {
-        return Some((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
-    }
-
-    // Some shortcuts do not carry useful file attributes. Metadata may fail for
-    // missing, unavailable network, or access-denied targets; restore flows
-    // intentionally treat that as unknown.
-    if should_timeout_protect_metadata(path, target_is_network) {
-        return metadata_is_dir_with_timeout(path.to_string(), timeout);
-    }
-
-    match fs::metadata(path) {
-        Ok(metadata) => Some(metadata.is_dir()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => None,
-    }
-}
-
-fn should_timeout_protect_metadata(path: &str, target_is_network: bool) -> bool {
-    target_is_network || looks_like_unc_path(path)
-}
-
-fn metadata_is_dir_with_timeout(path: String, timeout: Duration) -> Option<bool> {
-    metadata_is_dir_with_timeout_using(path, timeout, |path| {
-        fs::metadata(path).map(|metadata| metadata.is_dir())
-    })
-}
-
-fn metadata_is_dir_with_timeout_using<F>(
-    path: String,
-    timeout: Duration,
-    metadata_is_dir: F,
-) -> Option<bool>
-where
-    F: FnOnce(&str) -> std::io::Result<bool> + Send + 'static,
-{
-    if timeout.is_zero() {
-        return None;
-    }
-
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let result = metadata_is_dir(&path);
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(is_dir)) => Some(is_dir),
-        Ok(Err(_)) | Err(_) => None,
-    }
 }
 
 fn parse_shell_link_summary(data: &[u8]) -> Option<ShellLinkSummary> {
@@ -680,71 +584,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_shell_link_uses_header_file_attributes_for_target_type() -> WincentResult<()> {
-        let mut lnk = minimal_lnk();
-        write_u32(&mut lnk, 0x18, FILE_ATTRIBUTE_DIRECTORY);
-
-        let dir = tempdir().map_err(WincentError::Io)?;
-        let path = dir.path().join("folder.lnk");
-        fs::write(&path, lnk).map_err(WincentError::Io)?;
-
-        let resolution = resolve_lnk_with_type(&path, Duration::ZERO)?.unwrap();
-
-        assert_eq!(resolution.path, "relative-target");
-        assert_eq!(resolution.is_dir, Some(true));
-        Ok(())
-    }
-
-    #[test]
-    fn lnk_target_type_uses_attributes_without_metadata_probe() {
-        assert_eq!(
-            lnk_target_is_dir(
-                "\\\\server\\share\\folder",
-                FILE_ATTRIBUTE_DIRECTORY,
-                true,
-                Duration::ZERO,
-            ),
-            Some(true)
-        );
-        assert_eq!(
-            lnk_target_is_dir(
-                "\\\\server\\share\\file.txt",
-                FILE_ATTRIBUTE_ARCHIVE_FOR_TEST,
-                true,
-                Duration::ZERO,
-            ),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn network_metadata_timeout_returns_unknown_target_type() {
-        let result = metadata_is_dir_with_timeout_using(
-            "\\\\server\\share\\slow".to_string(),
-            Duration::from_millis(1),
-            |_| {
-                std::thread::sleep(Duration::from_millis(50));
-                Ok(true)
-            },
-        );
-
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn local_target_type_uses_synchronous_metadata() -> WincentResult<()> {
-        let dir = tempdir().map_err(WincentError::Io)?;
-        let folder = dir.path().join("folder");
-        fs::create_dir(&folder).map_err(WincentError::Io)?;
-
-        assert_eq!(
-            lnk_target_is_dir(&folder.to_string_lossy(), 0, false, Duration::ZERO),
-            Some(true)
-        );
-        Ok(())
-    }
-
-    #[test]
     fn parse_shell_link_reads_unicode_local_base_and_suffix() {
         let lnk = lnk_with_link_info(
             Some("C:\\Users\\Alice"),
@@ -794,15 +633,6 @@ mod tests {
     }
 
     const FILE_ATTRIBUTE_ARCHIVE_FOR_TEST: u32 = 0x0000_0020;
-
-    fn minimal_lnk() -> Vec<u8> {
-        let mut lnk = vec![0u8; SHELL_LINK_HEADER_SIZE as usize];
-        write_u32(&mut lnk, 0, SHELL_LINK_HEADER_SIZE);
-        lnk[4..20].copy_from_slice(&LINK_CLSID);
-        write_u32(&mut lnk, 0x14, HAS_RELATIVE_PATH | IS_UNICODE);
-        write_lnk_string(&mut lnk, "relative-target");
-        lnk
-    }
 
     fn lnk_with_link_info(
         local_base: Option<&str>,
@@ -859,14 +689,6 @@ mod tests {
         write_u32(data, start, size);
         write_u32(data, start + 8, net_name_offset);
         write_u32(data, start + 20, net_name_offset);
-    }
-
-    fn write_lnk_string(data: &mut Vec<u8>, value: &str) {
-        let words: Vec<u16> = value.encode_utf16().collect();
-        data.extend_from_slice(&(words.len() as u16).to_le_bytes());
-        for word in words {
-            data.extend_from_slice(&word.to_le_bytes());
-        }
     }
 
     fn write_utf16_z(data: &mut Vec<u8>, value: &str) {

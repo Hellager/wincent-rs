@@ -3,13 +3,9 @@
 ### Added
 - Kind-aware DestList parsing for Recent Files and Frequent Folders, including
   stream-backed visibility candidates and bounded Shell-query results
-- `QuickAccessManager::quick_access_status()` for reporting where the observed
+- `QuickAccessManager::get_item_status()` for reporting where the observed
   DestList rules place a path in a default Shell query, with
   `QuickAccessStatus` and `FrequentFolderSlot`
-- `QuickAccessManager::recent_file_position()` for the Recent Files position of
-  a path included in the rule-based result
-- `QuickAccessManager::frequent_folder_slot()` for the Frequent Folders position
-  and pinned state of a path included in the rule-based result
 
 ### Changed
 - `QuickAccessManager::remove_item`, `remove_item_with_options`, and the timed

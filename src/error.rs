@@ -931,12 +931,6 @@ impl std::fmt::Display for PowerShellError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum QuickAccessPostMutationStep {
-    /// Failed to delete Explorer's Recent Files backing data after adding a recent file.
-    DeleteRecentFilesBackingData,
-    /// Failed to delete matching shortcuts from the Windows Recent directory.
-    DeleteRecentLinks,
-    /// Failed to create matching shortcuts in the Windows Recent directory.
-    CreateRecentLinks,
     /// Failed to refresh open Explorer windows after a successful mutation.
     RefreshExplorer,
 }
@@ -1020,28 +1014,6 @@ pub enum WincentError {
         /// may still have failed and be reported by `source`.
         frequent_folders_cleared: bool,
         /// The underlying error that prevented the full clear from completing.
-        #[source]
-        source: Box<WincentError>,
-    },
-
-    /// A Quick Access mutation succeeded, but a post-mutation display update failed.
-    ///
-    /// This means the requested add or remove operation already completed. The
-    /// error describes a follow-up step, such as deleting Explorer's Recent Files
-    /// backing data or refreshing open Explorer windows. Callers should avoid
-    /// blindly retrying the original mutation when they receive this error.
-    #[error(
-        "Quick Access post-mutation step {step:?} failed for {qa_type:?} item {path}: {source}"
-    )]
-    #[non_exhaustive]
-    PostMutationFailure {
-        /// Path whose mutation succeeded before the post-mutation step failed.
-        path: String,
-        /// Quick Access category that was mutated.
-        qa_type: QuickAccess,
-        /// Post-mutation step that failed.
-        step: QuickAccessPostMutationStep,
-        /// The underlying error from the failed post-mutation step.
         #[source]
         source: Box<WincentError>,
     },
@@ -1130,20 +1102,6 @@ impl WincentError {
         Self::NotInQuickAccess {
             path: path.into(),
             qa_type,
-        }
-    }
-
-    pub(crate) fn post_mutation_failure(
-        path: impl Into<String>,
-        qa_type: QuickAccess,
-        step: QuickAccessPostMutationStep,
-        source: WincentError,
-    ) -> Self {
-        Self::PostMutationFailure {
-            path: path.into(),
-            qa_type,
-            step,
-            source: Box::new(source),
         }
     }
 

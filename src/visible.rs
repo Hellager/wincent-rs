@@ -355,8 +355,8 @@ impl VisibilityOptions {
 /// visible. Passing `QuickAccess::All` with `visible` set to `false` has the
 /// same Frequent Folders behavior.
 ///
-/// If `options.refresh_explorer_enabled()` is true, calls `refresh_explorer_window()`
-/// after writing the registry value. The write is not rolled back if refresh fails.
+/// If `options.refresh_explorer_enabled()` is true, notifies the Shell and
+/// refreshes active Quick Access/Home views after writing the registry value.
 ///
 /// # Errors
 ///
@@ -371,13 +371,9 @@ pub fn set_visible_with_options(
     visible: bool,
     options: VisibilityOptions,
 ) -> WincentResult<()> {
-    set_visible_with_options_inner(
-        qa_type,
-        visible,
-        options,
-        set_visible,
-        crate::utils::refresh_explorer_window,
-    )
+    set_visible_with_options_inner(qa_type, visible, options, set_visible, || {
+        crate::utils::refresh_quick_access(std::time::Duration::from_secs(10))
+    })
 }
 
 fn set_visible_with_options_inner(
@@ -427,9 +423,9 @@ pub fn set_frequent_folders_visible_with_options(
 /// Recent Files invisible. If that happens, set Start Recommended visible again
 /// before relying on `ShowRecent` to control Recent Files visibility.
 ///
-/// If `options.refresh_explorer_enabled()` is true, calls
-/// `refresh_explorer_window()` after writing the registry value. The write is
-/// not rolled back if refresh fails.
+/// If `options.refresh_explorer_enabled()` is true, notifies the Shell and
+/// refreshes active Quick Access/Home views after writing the registry value.
+/// The write is not rolled back if refresh fails.
 ///
 /// # Errors
 ///
@@ -447,7 +443,7 @@ pub fn set_start_recommended_section_visible_with_options(
         visible,
         options,
         set_start_recommended_section_visible,
-        crate::utils::refresh_explorer_window,
+        || crate::utils::refresh_quick_access(std::time::Duration::from_secs(10)),
     )
 }
 

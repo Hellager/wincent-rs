@@ -145,7 +145,7 @@ pub enum DestListKind {
 
 /// Pin state for a path in Explorer's Frequent Folders DestList.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrequentFolderPinStatus {
+pub(crate) enum FrequentFolderPinStatus {
     /// A matching Frequent Folders entry is pinned.
     Pinned,
     /// Matching Frequent Folders entries exist, but none are pinned.

@@ -69,13 +69,9 @@ fn main() -> WincentResult<()> {
         println!("匹配的快速访问项目：{item}");
     }
 
-    // 检查常用文件夹路径是已固定、未固定还是不存在。
-    let pin_status = manager.frequent_folder_pin_status("C:\\Projects")?;
-    println!("Projects 常用文件夹固定状态：{pin_status:?}");
-
     // 根据持久化的 DestList 数据预测默认 Shell 查询结果：
-    // 最近文件序号、常用文件夹序号与固定状态，或均未被规则选中。
-    let status = manager.quick_access_status("C:\\Projects\\report.docx")?;
+    // 最近文件零基位置、常用文件夹零基位置与固定状态，或均未被规则选中。
+    let status = manager.get_item_status("C:\\Projects\\report.docx")?;
     if let Some(position) = status.recent_file() {
         println!("最近文件序号：{position}");
     }
@@ -86,6 +82,9 @@ fn main() -> WincentResult<()> {
             slot.is_pinned()
         );
     }
+
+    // 先通知 Shell，再刷新匹配的 Quick Access/Home 视图。
+    manager.refresh()?;
 
     // 监控快照变化。监控期间需要保持 guard 存活。
     // 这会报告 Explorer 和本 crate 自身操作造成的变化。

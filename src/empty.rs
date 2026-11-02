@@ -198,11 +198,11 @@ pub(crate) fn empty_items_with_backend(
     };
 
     match refresh_policy_for_result(&result) {
-        Some(RefreshPolicy::PropagateFailure) => backend.refresh_explorer(timeout)?,
+        Some(RefreshPolicy::PropagateFailure) => backend.refresh(timeout)?,
         Some(RefreshPolicy::BestEffort) => {
             // Preserve the cleanup failure while still trying to show any
             // successfully cleared category in Explorer.
-            let _ = backend.refresh_explorer(timeout);
+            let _ = backend.refresh(timeout);
         }
         None => {}
     }
@@ -272,14 +272,6 @@ mod tests {
     }
 
     impl crate::backend::QuickAccessBackend for FakeEmptyBackend {
-        fn validate_path(
-            &self,
-            _path: &str,
-            _expected: crate::utils::PathType,
-        ) -> WincentResult<()> {
-            Ok(())
-        }
-
         fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>> {
             self.record(format!("get_items:{qa_type:?}:{}", timeout.as_secs()));
             Ok(self.items.clone())
@@ -301,45 +293,6 @@ mod tests {
             Ok(())
         }
 
-        fn delete_recent_links_for_target(
-            &self,
-            _path: &str,
-            _timeout: Duration,
-        ) -> WincentResult<()> {
-            Ok(())
-        }
-
-        fn list_recent_lnk_files(&self) -> WincentResult<Vec<PathBuf>> {
-            Ok(Vec::new())
-        }
-
-        fn delete_lnk_file(&self, _path: &std::path::Path) -> WincentResult<()> {
-            Ok(())
-        }
-
-        fn resolve_lnk_with_type(
-            &self,
-            _path: &std::path::Path,
-            _timeout: Duration,
-        ) -> WincentResult<Option<crate::recent_links::LnkResolution>> {
-            Ok(None)
-        }
-
-        fn delete_recent_files_backing_data(&self) -> WincentResult<()> {
-            Ok(())
-        }
-
-        fn delete_frequent_folders_backing_file(&self) -> WincentResult<()> {
-            Ok(())
-        }
-
-        fn wait_for_frequent_folders_rebuild(
-            &self,
-            _timeout: Duration,
-        ) -> WincentResult<Vec<crate::destlist::DestListEntry>> {
-            Ok(Vec::new())
-        }
-
         fn clear_recent_files(&self, _timeout: Duration) -> WincentResult<()> {
             self.record("clear_recent_files");
             if let Some(error) = &self.clear_recent_files_error {
@@ -356,8 +309,12 @@ mod tests {
             Ok(())
         }
 
-        fn refresh_explorer(&self, _timeout: Duration) -> WincentResult<()> {
-            self.record("refresh_explorer");
+        fn notify_shell_change(&self) {
+            self.record("notify_shell_change");
+        }
+
+        fn refresh_shell_views(&self, _timeout: Duration) -> WincentResult<()> {
+            self.record("refresh_shell_views");
             if let Some(error) = &self.refresh_explorer_error {
                 return Err(WincentError::SystemError(error.clone()));
             }
@@ -548,7 +505,8 @@ mod tests {
             vec![
                 "clear_recent_files".to_string(),
                 "clear_frequent_folders_jumplist".to_string(),
-                "refresh_explorer".to_string(),
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
             ]
         );
     }
@@ -568,7 +526,8 @@ mod tests {
             vec![
                 "clear_recent_files".to_string(),
                 "clear_frequent_folders_jumplist".to_string(),
-                "refresh_explorer".to_string(),
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
             ]
         );
     }
@@ -587,7 +546,8 @@ mod tests {
             vec![
                 "clear_recent_files".to_string(),
                 "clear_frequent_folders_jumplist".to_string(),
-                "refresh_explorer".to_string(),
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
             ]
         );
     }
@@ -607,7 +567,8 @@ mod tests {
             vec![
                 "clear_recent_files".to_string(),
                 "clear_frequent_folders_jumplist".to_string(),
-                "refresh_explorer".to_string(),
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
             ]
         );
     }
@@ -626,7 +587,8 @@ mod tests {
             backend.calls(),
             vec![
                 "clear_frequent_folders_jumplist".to_string(),
-                "refresh_explorer".to_string(),
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
             ]
         );
         Ok(())
@@ -649,7 +611,8 @@ mod tests {
             backend.calls(),
             vec![
                 "clear_recent_files".to_string(),
-                "refresh_explorer".to_string(),
+                "notify_shell_change".to_string(),
+                "refresh_shell_views".to_string(),
             ]
         );
     }

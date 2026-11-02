@@ -18,7 +18,6 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -35,13 +34,6 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{Folder, FolderItems, IShellDispatch, Shell};
 
-const RECENT_RAW: usize = 120;
-const RECENT_VISIBLE: usize = 20;
-const RECENT_UNDER_HIDE: usize = 12; // leaves 8 visible
-const FREQUENT_RAW: usize = 100;
-const FREQUENT_PINNED: usize = 46;
-const FREQUENT_VISIBLE_UNPINNED: usize = 4; // 46 + 4 = 50 visible
-const FREQUENT_UNDER_HIDE_PINNED: usize = 10; // leaves 40 visible
 const NATIVE_RECENT_ITEMS: usize = 20;
 const NATIVE_FREQUENT_ITEMS: usize = 2;
 
@@ -179,19 +171,15 @@ fn get_item_latency() {
     );
 
     let mut samples = Vec::new();
-    let (fixture_mode, scenarios) = match platform {
-        TestPlatform::Win10 => run_synthetic_v4(&manager, &root, iterations, warmup, &mut samples),
-        TestPlatform::Win11 => run_native_v6(&manager, &root, iterations, warmup, &mut samples),
-    }
-    .unwrap_or_else(|error| panic!("fixture or measurement failed: {error}"));
+    let (fixture_mode, scenarios) = run_native(&manager, &root, iterations, warmup, &mut samples)
+        .unwrap_or_else(|error| panic!("fixture or measurement failed: {error}"));
     let stats = summarize(&samples, &scenarios);
     print_summary(&stats);
     write_result_json(
         &out_path,
         platform,
         fixture_mode,
-        iterations,
-        warmup,
+        (iterations, warmup),
         &scenarios,
         &samples,
         &stats,
@@ -201,68 +189,7 @@ fn get_item_latency() {
         .expect("failed to write get_item_latency timings CSV");
 }
 
-fn run_synthetic_v4(
-    manager: &QuickAccessManager,
-    root: &Path,
-    iterations: usize,
-    warmup: usize,
-    samples: &mut Vec<Sample>,
-) -> Result<(&'static str, Vec<Scenario>), String> {
-    build_fixture(manager, root)?;
-    validate_fixture(manager)?;
-    start_explorer()?;
-    wait_for_shell(QuickAccess::RecentFiles, RECENT_VISIBLE)?;
-    wait_for_shell(
-        QuickAccess::FrequentFolders,
-        FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED,
-    )?;
-    check_frequent_distribution(manager, FREQUENT_PINNED)?;
-
-    let full_recent = Scenario {
-        id: "recent_full",
-        kind: QuickAccess::RecentFiles,
-        expected_shell: RECENT_VISIBLE,
-        expected_raw: RECENT_RAW,
-    };
-    let full_frequent = Scenario {
-        id: "frequent_full",
-        kind: QuickAccess::FrequentFolders,
-        expected_shell: FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED,
-        expected_raw: FREQUENT_RAW,
-    };
-    measure_scenario(&full_recent, iterations, warmup, samples)?;
-    measure_scenario(&full_frequent, iterations, warmup, samples)?;
-
-    reduce_fixture_for_under(manager, root)?;
-    start_explorer()?;
-    wait_for_shell(QuickAccess::RecentFiles, RECENT_VISIBLE - RECENT_UNDER_HIDE)?;
-    wait_for_shell(
-        QuickAccess::FrequentFolders,
-        FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED - FREQUENT_UNDER_HIDE_PINNED,
-    )?;
-    check_frequent_distribution(manager, FREQUENT_PINNED - FREQUENT_UNDER_HIDE_PINNED)?;
-
-    let under_recent = Scenario {
-        id: "recent_under",
-        kind: QuickAccess::RecentFiles,
-        expected_shell: RECENT_VISIBLE - RECENT_UNDER_HIDE,
-        expected_raw: RECENT_RAW,
-    };
-    let under_frequent = Scenario {
-        id: "frequent_under",
-        kind: QuickAccess::FrequentFolders,
-        expected_shell: FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED - FREQUENT_UNDER_HIDE_PINNED,
-        expected_raw: FREQUENT_RAW,
-    };
-    measure_scenario(&under_recent, iterations, warmup, samples)?;
-    measure_scenario(&under_frequent, iterations, warmup, samples)?;
-    Ok((
-        "synthetic_v4",
-        vec![full_recent, full_frequent, under_recent, under_frequent],
-    ))
-}
-
-fn run_native_v6(
+fn run_native(
     manager: &QuickAccessManager,
     root: &Path,
     iterations: usize,
@@ -281,7 +208,7 @@ fn run_native_v6(
         let path = frequent_target(root, index);
         fs::create_dir_all(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
         manager
-            .pin_frequent_folder(&path)
+            .add_item(&path)
             .map_err(|error| format!("pin native frequent {}: {error}", path.display()))?;
     }
 
@@ -301,7 +228,7 @@ fn run_native_v6(
     if scenarios.is_empty() {
         return Err("native Quick Access lists are both unavailable".to_string());
     }
-    Ok(("native_v6", scenarios))
+    Ok(("native", scenarios))
 }
 
 fn native_scenario(
@@ -341,376 +268,11 @@ fn frequent_target(root: &Path, index: usize) -> PathBuf {
 }
 
 fn raw_entries(
-    manager: &QuickAccessManager,
+    _manager: &QuickAccessManager,
     kind: QuickAccess,
 ) -> Result<Vec<DestListEntry>, String> {
-    match kind {
-        QuickAccess::RecentFiles => manager
-            .get_recent_files_metadata()
-            .map_err(|error| error.to_string()),
-        QuickAccess::FrequentFolders => manager
-            .get_frequent_folders_metadata()
-            .map_err(|error| error.to_string()),
-        QuickAccess::All => Err("All is not a single list".to_string()),
-        _ => Err("unsupported Quick Access category".to_string()),
-    }
-}
-
-fn write_empty_cfb(kind: QuickAccess) -> Result<(), String> {
-    let path = source_path(kind)?;
-    let mut header = vec![0u8; 0x20];
-    header[0..4].copy_from_slice(&4u32.to_le_bytes());
-    // Entry count, pinned count, score counter, last entry id and action count
-    // stay zero. A valid empty v4 header is enough for the direct writer.
-    let cursor = Cursor::new(Vec::new());
-    let mut compound = cfb::CompoundFile::create_with_version(cfb::Version::V3, cursor)
-        .map_err(|error| format!("create empty CFB: {error}"))?;
-    compound
-        .create_stream("/DestList")
-        .map_err(|error| format!("create DestList stream: {error}"))?
-        .write_all(&header)
-        .map_err(|error| format!("write DestList header: {error}"))?;
-    compound
-        .flush()
-        .map_err(|error| format!("flush empty CFB: {error}"))?;
-    let bytes = compound.into_inner().into_inner();
-    fs::write(&path, bytes).map_err(|error| format!("write {}: {error}", path.display()))
-}
-
-fn build_fixture(manager: &QuickAccessManager, root: &Path) -> Result<(), String> {
-    // Start from valid empty v4 files instead of rewriting the user's baseline
-    // CFB: the baseline is not guaranteed to satisfy the direct writer's
-    // contiguous-rank invariants.
-    stop_explorer()?;
-    write_empty_cfb(QuickAccess::RecentFiles)?;
-    write_empty_cfb(QuickAccess::FrequentFolders)?;
-
-    for index in 0..RECENT_RAW {
-        let path = recent_target(root, index);
-        fs::write(&path, b"wincent get_item latency fixture\n")
-            .map_err(|error| format!("create {}: {error}", path.display()))?;
-        add_entry_checked(manager, &path, QuickAccess::RecentFiles)?;
-    }
-    for index in 0..FREQUENT_RAW {
-        let path = frequent_target(root, index);
-        fs::create_dir_all(&path).map_err(|error| format!("create {}: {error}", path.display()))?;
-        add_entry_checked(manager, &path, QuickAccess::FrequentFolders)?;
-    }
-
-    // 100 hidden Recent Files; 20 remain visible and form the 20-item window.
-    for index in RECENT_VISIBLE..RECENT_RAW {
-        hide_entry(
-            manager,
-            &recent_target(root, index),
-            QuickAccess::RecentFiles,
-        )?;
-    }
-
-    // 46 pinned, 4 visible unpinned, 50 hidden unpinned.
-    for index in 0..FREQUENT_PINNED {
-        pin_entry(manager, &frequent_target(root, index))?;
-    }
-    for index in (FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED)..FREQUENT_RAW {
-        hide_entry(
-            manager,
-            &frequent_target(root, index),
-            QuickAccess::FrequentFolders,
-        )?;
-    }
-    patch_frequent_access_counts()?;
-    Ok(())
-}
-
-fn patch_frequent_access_counts() -> Result<(), String> {
-    let path = source_path(QuickAccess::FrequentFolders)?;
-    let parsed = parse_file(&path).map_err(|error| error.to_string())?;
-    let mut targets: Vec<(usize, usize, u32)> = Vec::new();
-    for entry in parsed.cfb_entries() {
-        let name = Path::new(entry.path())
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| format!("unexpected fixture path {}", entry.path()))?;
-        let index: usize = name
-            .strip_prefix("frequent-")
-            .ok_or_else(|| format!("unexpected fixture name {name}"))?
-            .parse()
-            .map_err(|error| format!("parse fixture index {name}: {error}"))?;
-        let count = if index < FREQUENT_PINNED {
-            0
-        } else if index < FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED {
-            3
-        } else if index < 70 {
-            1
-        } else if index < 90 {
-            5
-        } else {
-            3
-        };
-        targets.push((entry.entry_offset(), entry.entry_len(), count));
-    }
-
-    let original = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
-    let mut compound = cfb::CompoundFile::open(Cursor::new(original))
-        .map_err(|error| format!("open frequent CFB: {error}"))?;
-    {
-        let mut stream = compound
-            .open_stream("/DestList")
-            .map_err(|error| format!("open DestList: {error}"))?;
-        for (offset, length, count) in targets {
-            let mut entry = vec![0u8; length];
-            stream
-                .seek(SeekFrom::Start(offset as u64))
-                .and_then(|_| stream.read_exact(&mut entry))
-                .map_err(|error| format!("read DestList entry at {offset:#x}: {error}"))?;
-            let count_offset = 0x74;
-            entry[count_offset..count_offset + 4].copy_from_slice(&count.to_le_bytes());
-            let checksum = destlist_entry_crc64(&entry);
-            entry[0..8].copy_from_slice(&checksum.to_le_bytes());
-            stream
-                .seek(SeekFrom::Start(offset as u64))
-                .and_then(|_| stream.write_all(&entry))
-                .map_err(|error| format!("write DestList entry at {offset:#x}: {error}"))?;
-        }
-    }
-    compound
-        .flush()
-        .map_err(|error| format!("flush frequent CFB: {error}"))?;
-    let bytes = compound.into_inner().into_inner();
-    fs::write(&path, bytes).map_err(|error| format!("write {}: {error}", path.display()))?;
-
-    let parsed = parse_file(&path).map_err(|error| error.to_string())?;
-    if parsed
-        .cfb_entries()
-        .iter()
-        .any(|entry| !entry.checksum_valid())
-    {
-        return Err("patched frequent CFB has invalid checksums".to_string());
-    }
-    Ok(())
-}
-
-fn destlist_entry_crc64(entry: &[u8]) -> u64 {
-    const POLYNOMIAL: u64 = 0x92c6_4265_d321_39a4;
-    let mut crc = u64::MAX;
-    for (index, byte) in entry[..0x70].iter().copied().enumerate() {
-        crc ^= u64::from(if index < 8 { 0 } else { byte });
-        for _ in 0..8 {
-            crc = if crc & 1 == 0 {
-                crc >> 1
-            } else {
-                (crc >> 1) ^ POLYNOMIAL
-            };
-        }
-    }
-    crc
-}
-
-fn find_entry(
-    manager: &QuickAccessManager,
-    kind: QuickAccess,
-    path: &Path,
-) -> Result<Option<DestListEntry>, String> {
-    let wanted = path.to_string_lossy();
-    Ok(raw_entries(manager, kind)?
-        .into_iter()
-        .find(|entry| entry.path().eq_ignore_ascii_case(wanted.as_ref())))
-}
-
-fn add_entry_checked(
-    manager: &QuickAccessManager,
-    path: &Path,
-    kind: QuickAccess,
-) -> Result<(), String> {
-    match manager.add_item_direct(path, kind) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            // With Explorer stopped the CFB write can succeed while the
-            // post-mutation refresh reports a failure. Trust the raw entry.
-            if find_entry(manager, kind, path)?.is_some() {
-                Ok(())
-            } else {
-                Err(format!("add {}: {error}", path.display()))
-            }
-        }
-    }
-}
-
-fn hide_entry(manager: &QuickAccessManager, path: &Path, kind: QuickAccess) -> Result<(), String> {
-    let update = DestListItemUpdate::new().hide();
-    match manager.update_item_direct(path, kind, update) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let hidden = find_entry(manager, kind, path)?
-                .is_some_and(|entry| entry.reserved_78().unwrap_or_default() != 0);
-            if hidden {
-                Ok(())
-            } else {
-                Err(format!("hide {}: {error}", path.display()))
-            }
-        }
-    }
-}
-
-fn pin_entry(manager: &QuickAccessManager, path: &Path) -> Result<(), String> {
-    let update = DestListItemUpdate::new().pin();
-    match manager.update_item_direct(path, QuickAccess::FrequentFolders, update) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let pinned = find_entry(manager, QuickAccess::FrequentFolders, path)?
-                .is_some_and(|entry| entry.pin_status() >= 0);
-            if pinned {
-                Ok(())
-            } else {
-                Err(format!("pin {}: {error}", path.display()))
-            }
-        }
-    }
-}
-
-fn unpin_and_hide_entry(manager: &QuickAccessManager, path: &Path) -> Result<(), String> {
-    let update = DestListItemUpdate::new().unpin().hide();
-    match manager.update_item_direct(path, QuickAccess::FrequentFolders, update) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let hidden =
-                find_entry(manager, QuickAccess::FrequentFolders, path)?.is_some_and(|entry| {
-                    entry.pin_status() < 0 && entry.reserved_78().unwrap_or_default() != 0
-                });
-            if hidden {
-                Ok(())
-            } else {
-                Err(format!("unpin+hide {}: {error}", path.display()))
-            }
-        }
-    }
-}
-
-fn validate_fixture(manager: &QuickAccessManager) -> Result<(), String> {
-    let recent = raw_entries(manager, QuickAccess::RecentFiles)?;
-    if recent.len() != RECENT_RAW {
-        return Err(format!("recent raw count {} != {RECENT_RAW}", recent.len()));
-    }
-    let recent_hidden = recent
-        .iter()
-        .filter(|entry| entry.reserved_78().unwrap_or_default() != 0)
-        .count();
-    if recent_hidden != RECENT_RAW - RECENT_VISIBLE {
-        return Err(format!(
-            "recent hidden count {recent_hidden} != {}",
-            RECENT_RAW - RECENT_VISIBLE
-        ));
-    }
-
-    let frequent = raw_entries(manager, QuickAccess::FrequentFolders)?;
-    if frequent.len() != FREQUENT_RAW {
-        return Err(format!(
-            "frequent raw count {} != {FREQUENT_RAW}",
-            frequent.len()
-        ));
-    }
-    let pinned = frequent
-        .iter()
-        .filter(|entry| entry.pin_status() >= 0)
-        .count();
-    if pinned != FREQUENT_PINNED {
-        return Err(format!("pinned count {pinned} != {FREQUENT_PINNED}"));
-    }
-    let counts: BTreeMap<u32, usize> = frequent.iter().fold(BTreeMap::new(), |mut map, entry| {
-        *map.entry(entry.access_count()).or_default() += 1;
-        map
-    });
-    println!("fixture access_count distribution: {counts:?}");
-    for expected_count in [0, 1, 5] {
-        if !counts.contains_key(&expected_count) {
-            return Err(format!(
-                "fixture access_count distribution {counts:?} lacks {expected_count}"
-            ));
-        }
-    }
-    if frequent
-        .iter()
-        .any(|entry| entry.pin_status() >= 0 && entry.access_count() != 0)
-    {
-        return Err("pinned fixture entries must have access_count 0".to_string());
-    }
-
-    let recent_parsed = parse_file(recent_files_dest_path().map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    let recent_rule = recent_parsed.rule_entries().len();
-    if recent_rule != RECENT_VISIBLE {
-        return Err(format!(
-            "recent rule count {recent_rule} != {RECENT_VISIBLE}"
-        ));
-    }
-    let frequent_parsed =
-        parse_file(frequent_folders_dest_path().map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
-    let frequent_rule = frequent_parsed.rule_entries().len();
-    let expected_visible = FREQUENT_PINNED + FREQUENT_VISIBLE_UNPINNED;
-    if frequent_rule != expected_visible {
-        return Err(format!(
-            "frequent rule count {frequent_rule} != {expected_visible}"
-        ));
-    }
-    println!(
-        "fixture: recent raw={} rule={} hidden={}; frequent raw={} rule={} pinned={} counts={:?}",
-        recent.len(),
-        recent_rule,
-        recent_hidden,
-        frequent.len(),
-        frequent_rule,
-        pinned,
-        counts
-    );
-    Ok(())
-}
-
-fn check_frequent_distribution(
-    manager: &QuickAccessManager,
-    expected_pinned: usize,
-) -> Result<(), String> {
-    let frequent = raw_entries(manager, QuickAccess::FrequentFolders)?;
-    if frequent.len() != FREQUENT_RAW {
-        return Err(format!(
-            "frequent raw count {} != {FREQUENT_RAW}",
-            frequent.len()
-        ));
-    }
-    let pinned = frequent
-        .iter()
-        .filter(|entry| entry.pin_status() >= 0)
-        .count();
-    if pinned != expected_pinned {
-        return Err(format!("pinned count {pinned} != {expected_pinned}"));
-    }
-    let counts: BTreeMap<u32, usize> = frequent.iter().fold(BTreeMap::new(), |mut map, entry| {
-        *map.entry(entry.access_count()).or_default() += 1;
-        map
-    });
-    println!("post-restart access_count distribution: {counts:?}");
-    for expected_count in [0, 1, 5] {
-        if !counts.contains_key(&expected_count) {
-            return Err(format!(
-                "post-restart access_count distribution {counts:?} lacks {expected_count}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn reduce_fixture_for_under(manager: &QuickAccessManager, root: &Path) -> Result<(), String> {
-    stop_explorer()?;
-    for index in 0..RECENT_UNDER_HIDE {
-        hide_entry(
-            manager,
-            &recent_target(root, index),
-            QuickAccess::RecentFiles,
-        )?;
-    }
-    for index in 0..FREQUENT_UNDER_HIDE_PINNED {
-        unpin_and_hide_entry(manager, &frequent_target(root, index))?;
-    }
-    Ok(())
+    let parsed = parse_file(source_path(kind)?).map_err(|error| error.to_string())?;
+    Ok(wincent::destlist::entries(parsed.dest_list()))
 }
 
 fn stop_explorer() -> Result<(), String> {
@@ -737,27 +299,6 @@ fn start_explorer() -> Result<(), String> {
         .map_err(|error| format!("start explorer: {error}"))?;
     std::thread::sleep(Duration::from_millis(2500));
     Ok(())
-}
-
-fn wait_for_shell(kind: QuickAccess, expected: usize) -> Result<(), String> {
-    let mut last = 0;
-    let mut last_error = None;
-    for _ in 0..40 {
-        match shell_query(kind) {
-            Ok(items) => {
-                last = items.len();
-                if last == expected {
-                    println!("shell count for {kind:?}: {last}");
-                    return Ok(());
-                }
-            }
-            Err(error) => last_error = Some(error),
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    Err(format!(
-        "expected {expected} shell items for {kind:?}, last={last}, error={last_error:?}"
-    ))
 }
 
 fn measure_scenario(
@@ -987,12 +528,12 @@ fn write_result_json(
     path: &Path,
     platform: TestPlatform,
     fixture_mode: &str,
-    iterations: usize,
-    warmup: usize,
+    run_counts: (usize, usize),
     scenarios: &[Scenario],
     samples: &[Sample],
     stats: &BTreeMap<&'static str, BTreeMap<&'static str, Stats>>,
 ) -> std::io::Result<()> {
+    let (iterations, warmup) = run_counts;
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"test\": \"get_item_latency\",\n");
@@ -1018,16 +559,7 @@ fn write_result_json(
     json.push_str(&format!("  \"warmup\": {warmup},\n"));
     json.push_str(&format!(
         "  \"fixture\": {{\"requested_recent\": {}, \"requested_frequent\": {}}},\n",
-        if platform == TestPlatform::Win10 {
-            RECENT_RAW
-        } else {
-            NATIVE_RECENT_ITEMS
-        },
-        if platform == TestPlatform::Win10 {
-            FREQUENT_RAW
-        } else {
-            NATIVE_FREQUENT_ITEMS
-        }
+        NATIVE_RECENT_ITEMS, NATIVE_FREQUENT_ITEMS
     ));
     json.push_str("  \"scenarios\": {\n");
     let entries: Vec<String> = scenarios
