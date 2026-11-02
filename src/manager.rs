@@ -9,7 +9,7 @@ use crate::{
     quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
     status::QuickAccessStatus,
     utils::paths_equal,
-    QuickAccess, RetryPolicy, WincentResult,
+    QuickAccess, WincentResult,
 };
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,6 @@ fn path_to_shell_string(path: &Path) -> WincentResult<String> {
 #[must_use]
 pub struct QuickAccessManagerBuilder {
     timeout: Duration,
-    retry_policy: RetryPolicy,
     backend: Arc<dyn QuickAccessBackend>,
 }
 
@@ -50,7 +49,6 @@ impl fmt::Debug for QuickAccessManagerBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QuickAccessManagerBuilder")
             .field("timeout", &self.timeout)
-            .field("retry_policy", &self.retry_policy)
             .finish_non_exhaustive()
     }
 }
@@ -59,7 +57,6 @@ impl Default for QuickAccessManagerBuilder {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(10),
-            retry_policy: RetryPolicy::standard(),
             backend: Arc::new(SystemQuickAccessBackend),
         }
     }
@@ -70,8 +67,10 @@ impl QuickAccessManagerBuilder {
     ///
     /// This bounds how long wincent waits for supported Shell, COM, and
     /// PowerShell operations to report a result. It does not cancel a Shell COM
-    /// call that is already running inside Windows; after a timeout, that
-    /// underlying operation may still complete later and affect Explorer state.
+    /// call that is already running inside Windows. A timeout therefore means
+    /// the final mutation state is unknown: the underlying operation may still
+    /// complete later and affect Explorer state. Mutation operations are not
+    /// retried automatically.
     ///
     /// # Panics
     ///
@@ -86,8 +85,10 @@ impl QuickAccessManagerBuilder {
     ///
     /// This bounds how long wincent waits for supported Shell, COM, and
     /// PowerShell operations to report a result. It does not cancel a Shell COM
-    /// call that is already running inside Windows; after a timeout, that
-    /// underlying operation may still complete later and affect Explorer state.
+    /// call that is already running inside Windows. A timeout therefore means
+    /// the final mutation state is unknown: the underlying operation may still
+    /// complete later and affect Explorer state. Mutation operations are not
+    /// retried automatically.
     ///
     /// Unlike [`QuickAccessManagerBuilder::timeout`], this returns
     /// [`WincentError::InvalidArgument`] instead of panicking when `duration` is
@@ -106,13 +107,6 @@ impl QuickAccessManagerBuilder {
         Ok(self)
     }
 
-    /// Sets the retry policy for transient PowerShell fallback failures raised
-    /// by mutation paths.
-    pub fn retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
-        self.retry_policy = retry_policy;
-        self
-    }
-
     #[cfg(test)]
     pub(crate) fn with_backend_for_tests(mut self, backend: Arc<dyn QuickAccessBackend>) -> Self {
         self.backend = backend;
@@ -121,38 +115,21 @@ impl QuickAccessManagerBuilder {
 
     /// Builds a configured [`QuickAccessManager`].
     pub fn build(self) -> QuickAccessManager {
-        self.try_build()
-            .expect("invalid retry policy in QuickAccessManagerBuilder")
-    }
-
-    /// Tries to build a configured [`QuickAccessManager`].
-    ///
-    /// Unlike [`QuickAccessManagerBuilder::build`], this returns
-    /// [`WincentError::InvalidArgument`] instead of panicking when the retry
-    /// policy is invalid.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WincentError::InvalidArgument`] when the configured retry
-    /// policy fails validation.
-    pub fn try_build(self) -> WincentResult<QuickAccessManager> {
-        self.retry_policy.validate()?;
-        Ok(QuickAccessManager {
+        QuickAccessManager {
             timeout: self.timeout,
-            retry_policy: self.retry_policy,
             backend: self.backend,
-        })
+        }
     }
 }
 
 /// Windows Quick Access manager.
 ///
-/// This type is a thin synchronous facade over the `query`, `handle`, `empty`,
-/// and `batch` modules.
+/// This type is a thin synchronous facade over Quick Access query, mutation,
+/// clearing, monitoring, locking, refresh, and visibility operations.
 ///
 /// Prefer this facade over lower-level modules. It keeps path conversion,
-/// timeout handling, batch conversion, visibility helpers, and DestList helpers
-/// behind one stable API surface.
+/// timeout handling, visibility helpers, and DestList helpers behind one stable
+/// API surface.
 ///
 /// # Examples
 ///
@@ -172,7 +149,6 @@ impl QuickAccessManagerBuilder {
 #[derive(Clone)]
 pub struct QuickAccessManager {
     timeout: Duration,
-    retry_policy: RetryPolicy,
     backend: Arc<dyn QuickAccessBackend>,
 }
 
@@ -202,17 +178,11 @@ impl QuickAccessManager {
         Self::builder().build()
     }
 
-    /// Returns the configured shell operation timeout.
+    /// Returns the configured caller-side wait timeout for supported Shell,
+    /// COM, and PowerShell operations.
     #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
-    }
-
-    /// Returns the configured retry policy for transient PowerShell fallback
-    /// failures raised by mutation paths.
-    #[must_use]
-    pub fn retry_policy(&self) -> &RetryPolicy {
-        &self.retry_policy
     }
 
     #[cfg(test)]
@@ -220,11 +190,7 @@ impl QuickAccessManager {
         timeout: Duration,
         backend: Arc<dyn QuickAccessBackend>,
     ) -> Self {
-        Self {
-            timeout,
-            retry_policy: RetryPolicy::standard(),
-            backend,
-        }
+        Self { timeout, backend }
     }
 
     /// Retrieves Quick Access items as strings.
@@ -343,8 +309,9 @@ impl QuickAccessManager {
     /// entries.
     ///
     /// Explorer persists its own changes asynchronously, so a path that was
-    /// just added through the Shell can be absent from the rule-based result for
-    /// a short time. A missing backing file is treated as an empty list.
+    /// just added can be absent, or a path that was just removed can remain, in
+    /// the rule-based result for a short time. A missing backing file is treated
+    /// as an empty list.
     ///
     /// # Errors
     ///
@@ -496,6 +463,18 @@ impl QuickAccessManager {
     /// return [`WincentError::AlreadyExists`]. Explorer updates its UI
     /// asynchronously, so the visible result may lag behind a successful call.
     ///
+    /// `Ok(())` means that the selected Shell mutation returned successfully. It
+    /// does not guarantee that Explorer has already persisted the change, that a
+    /// new rule-based query observes it, or that an open Explorer window has
+    /// redrawn. Use [`QuickAccessManager::get_item_status`] when persisted-state
+    /// confirmation is required and [`QuickAccessManager::refresh`] when an open
+    /// Explorer view should be notified and refreshed.
+    ///
+    /// A timeout is an indeterminate outcome rather than a confirmed failure.
+    /// The underlying Shell operation can still complete after this method
+    /// returns [`WincentError::Timeout`], so callers should inspect state before
+    /// deciding whether another mutation is appropriate.
+    ///
     /// # Errors
     ///
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
@@ -543,6 +522,18 @@ impl QuickAccessManager {
     ///   can retain an entry with cleared usage or physically remove a zero-use
     ///   entry.
     ///
+    /// `Ok(())` means that the selected Shell mutation returned successfully.
+    /// Frequent-folder removal also verifies the live namespace while handling
+    /// Shell verbs that can behave like toggles. Neither result guarantees that
+    /// Explorer has already persisted the final DestList state or redrawn an
+    /// open window.
+    ///
+    /// A timeout is an indeterminate outcome rather than a confirmed failure.
+    /// The underlying Shell operation can still complete after this method
+    /// returns [`WincentError::Timeout`]. Mutations are never retried
+    /// automatically; callers should inspect state before issuing another add or
+    /// remove operation.
+    ///
     /// # Errors
     ///
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
@@ -572,23 +563,19 @@ impl QuickAccessManager {
         match path_type {
             crate::utils::PathType::File => {
                 self.ensure_present(&path, qa_type)?;
-                self.execute_with_retry(|| self.backend.remove_recent_file(&path, self.timeout))
+                self.backend.remove_recent_file(&path, self.timeout)
             }
             crate::utils::PathType::Directory => {
                 self.ensure_present(&path, qa_type)?;
                 let pin_status = self.backend.frequent_folder_pin_status(&path)?;
                 match pin_status {
                     crate::destlist::FrequentFolderPinStatus::Pinned => {
-                        self.execute_with_retry(|| {
-                            self.backend
-                                .remove_pinned_frequent_folder(&path, self.timeout)
-                        })?;
+                        self.backend
+                            .remove_pinned_frequent_folder(&path, self.timeout)?;
                     }
                     crate::destlist::FrequentFolderPinStatus::Unpinned => {
-                        self.execute_with_retry(|| {
-                            self.backend
-                                .remove_unpinned_frequent_folder(&path, self.timeout)
-                        })?;
+                        self.backend
+                            .remove_unpinned_frequent_folder(&path, self.timeout)?;
                     }
                     crate::destlist::FrequentFolderPinStatus::NotFound => {
                         return Err(WincentError::not_in_quick_access(&path, qa_type));
@@ -630,6 +617,9 @@ impl QuickAccessManager {
 
     /// Notifies the Shell about Quick Access changes and refreshes matching
     /// Quick Access or Home Explorer windows.
+    ///
+    /// This refreshes presentation state only. It does not wait for an earlier
+    /// mutation to be persisted and does not verify the result of that mutation.
     ///
     /// # Errors
     ///
@@ -990,33 +980,6 @@ impl QuickAccessManager {
 
         Ok(())
     }
-
-    fn execute_with_retry<T, F>(&self, mut action: F) -> WincentResult<T>
-    where
-        F: FnMut() -> WincentResult<T>,
-    {
-        debug_assert!(self.retry_policy.validate().is_ok());
-
-        for retry_attempt in 0.. {
-            match action() {
-                Ok(value) => return Ok(value),
-                Err(error) if self.should_retry(&error, retry_attempt) => {
-                    std::thread::sleep(self.retry_policy.calculate_delay(retry_attempt));
-                }
-                Err(error) => return Err(error),
-            }
-        }
-
-        unreachable!("retry loop always returns")
-    }
-
-    fn should_retry(&self, error: &WincentError, retry_attempt: u32) -> bool {
-        if retry_attempt >= self.retry_policy.max_attempts() {
-            return false;
-        }
-
-        matches!(error, WincentError::PowerShellExecution(err) if err.is_transient())
-    }
 }
 
 #[cfg(test)]
@@ -1033,6 +996,7 @@ mod tests {
         refresh_timeouts: Mutex<Vec<Duration>>,
         validate_path_error: Mutex<Option<WincentError>>,
         add_frequent_folder_error: Mutex<Option<WincentError>>,
+        remove_recent_file_error: Mutex<Option<WincentError>>,
         frequent_pin_status: Mutex<Option<crate::destlist::FrequentFolderPinStatus>>,
         refresh_error: Mutex<Option<WincentError>>,
     }
@@ -1047,6 +1011,7 @@ mod tests {
                 refresh_timeouts: Mutex::new(Vec::new()),
                 validate_path_error: Mutex::new(None),
                 add_frequent_folder_error: Mutex::new(None),
+                remove_recent_file_error: Mutex::new(None),
                 frequent_pin_status: Mutex::new(None),
                 refresh_error: Mutex::new(None),
             }
@@ -1074,6 +1039,10 @@ mod tests {
 
         fn fail_add_frequent_folder_with(&self, error: WincentError) {
             *self.add_frequent_folder_error.lock().unwrap() = Some(error);
+        }
+
+        fn fail_remove_recent_file_with(&self, error: WincentError) {
+            *self.remove_recent_file_error.lock().unwrap() = Some(error);
         }
 
         fn set_frequent_pin_status(&self, status: crate::destlist::FrequentFolderPinStatus) {
@@ -1120,6 +1089,9 @@ mod tests {
 
         fn remove_recent_file(&self, path: &str, _timeout: Duration) -> WincentResult<()> {
             self.record(format!("remove_recent_file:{path}"));
+            if let Some(error) = self.remove_recent_file_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -1202,50 +1174,6 @@ mod tests {
             .timeout(Duration::from_secs(30))
             .build();
         assert_eq!(manager.timeout(), Duration::from_secs(30));
-    }
-
-    #[test]
-    fn builder_default_retry_policy_is_standard() {
-        let manager = QuickAccessManager::builder().build();
-        assert_eq!(
-            manager.retry_policy().max_attempts(),
-            RetryPolicy::standard().max_attempts()
-        );
-    }
-
-    #[test]
-    fn builder_custom_retry_policy_is_exposed() {
-        let policy = RetryPolicy::no_retry();
-        let manager = QuickAccessManager::builder()
-            .retry_policy(policy.clone())
-            .build();
-
-        assert_eq!(manager.retry_policy().max_attempts(), policy.max_attempts());
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid retry policy in QuickAccessManagerBuilder")]
-    fn builder_build_panics_for_invalid_retry_policy() {
-        let _ = QuickAccessManager::builder()
-            .retry_policy(
-                RetryPolicy::new()
-                    .with_max_attempts(1)
-                    .with_initial_delay(Duration::ZERO),
-            )
-            .build();
-    }
-
-    #[test]
-    fn builder_try_build_returns_error_for_invalid_retry_policy() {
-        let result = QuickAccessManager::builder()
-            .retry_policy(
-                RetryPolicy::new()
-                    .with_max_attempts(1)
-                    .with_initial_delay(Duration::ZERO),
-            )
-            .try_build();
-
-        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
     }
 
     #[test]
@@ -1378,96 +1306,6 @@ mod tests {
             vec![Duration::from_secs(9)]
         );
         Ok(())
-    }
-
-    fn transient_powershell_error() -> WincentError {
-        use crate::error::{PowerShellError, PowerShellErrorKind, PowerShellOperation};
-
-        WincentError::PowerShellExecution(Box::new(
-            PowerShellError::builder(PowerShellOperation::RemoveRecentFile)
-                .kind(PowerShellErrorKind::Timeout)
-                .exit_code(None)
-                .stderr("timeout")
-                .script_path("test.ps1")
-                .build(),
-        ))
-    }
-
-    fn non_transient_powershell_error() -> WincentError {
-        use crate::error::{PowerShellError, PowerShellErrorKind, PowerShellOperation};
-
-        WincentError::PowerShellExecution(Box::new(
-            PowerShellError::builder(PowerShellOperation::RemoveRecentFile)
-                .kind(PowerShellErrorKind::ProcessFailed)
-                .exit_code(Some(1))
-                .stderr("permanent failure")
-                .script_path("test.ps1")
-                .build(),
-        ))
-    }
-
-    #[test]
-    fn retry_policy_retries_transient_powershell_errors() -> WincentResult<()> {
-        let manager = QuickAccessManager::builder()
-            .retry_policy(
-                RetryPolicy::new()
-                    .with_max_attempts(2)
-                    .with_initial_delay(Duration::from_millis(1))
-                    .with_jitter(false),
-            )
-            .build();
-        let attempts = Mutex::new(0u32);
-
-        let result = manager.execute_with_retry(|| {
-            let mut attempts = attempts.lock().unwrap();
-            *attempts += 1;
-            if *attempts < 3 {
-                Err(transient_powershell_error())
-            } else {
-                Ok("ok")
-            }
-        })?;
-
-        assert_eq!(result, "ok");
-        assert_eq!(*attempts.lock().unwrap(), 3);
-        Ok(())
-    }
-
-    #[test]
-    fn retry_policy_no_retry_returns_transient_error_immediately() {
-        let manager = QuickAccessManager::builder()
-            .retry_policy(RetryPolicy::no_retry())
-            .build();
-        let attempts = Mutex::new(0u32);
-
-        let result: WincentResult<()> = manager.execute_with_retry(|| {
-            *attempts.lock().unwrap() += 1;
-            Err(transient_powershell_error())
-        });
-
-        assert!(matches!(result, Err(WincentError::PowerShellExecution(_))));
-        assert_eq!(*attempts.lock().unwrap(), 1);
-    }
-
-    #[test]
-    fn retry_policy_does_not_retry_non_transient_powershell_errors() {
-        let manager = QuickAccessManager::builder()
-            .retry_policy(
-                RetryPolicy::new()
-                    .with_max_attempts(2)
-                    .with_initial_delay(Duration::from_millis(1))
-                    .with_jitter(false),
-            )
-            .build();
-        let attempts = Mutex::new(0u32);
-
-        let result: WincentResult<()> = manager.execute_with_retry(|| {
-            *attempts.lock().unwrap() += 1;
-            Err(non_transient_powershell_error())
-        });
-
-        assert!(matches!(result, Err(WincentError::PowerShellExecution(_))));
-        assert_eq!(*attempts.lock().unwrap(), 1);
     }
 
     #[test]
@@ -1624,6 +1462,24 @@ mod tests {
             vec!["remove_recent_file:C:\\report.docx".to_string()]
         );
         Ok(())
+    }
+
+    #[test]
+    fn remove_recent_file_propagates_error_without_retrying() {
+        let backend = Arc::new(FakeBackend::with_items(vec!["C:\\report.docx".to_string()]));
+        backend.fail_remove_recent_file_with(WincentError::Timeout(
+            "mutation outcome is unknown".to_string(),
+        ));
+        let manager =
+            QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
+
+        let result = manager.remove_item("C:\\report.docx");
+
+        assert!(matches!(result, Err(WincentError::Timeout(_))));
+        assert_eq!(
+            backend.calls(),
+            vec!["remove_recent_file:C:\\report.docx".to_string()]
+        );
     }
 
     #[test]

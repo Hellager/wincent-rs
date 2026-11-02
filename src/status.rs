@@ -12,7 +12,7 @@
 //! Recent Files rules: a valid v4 checksum table, no negative or `NaN` score,
 //! `reserved_78 == 0`, a loadable numeric Shell Link stream, no earlier
 //! duplicate path, and a rank inside
-//! [`DEFAULT_RECENT_FILES_RESULT_LIMIT`](crate::destlist::DEFAULT_RECENT_FILES_RESULT_LIMIT).
+//! [`DEFAULT_RECENT_FILES_RESULT_LIMIT`].
 //!
 //! It has a Frequent Folders slot when it is pinned, or when it is an unpinned
 //! entry that meets the observed access-count threshold

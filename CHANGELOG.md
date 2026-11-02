@@ -8,9 +8,9 @@
   `QuickAccessStatus` and `FrequentFolderSlot`
 
 ### Changed
-- `QuickAccessManager::remove_item`, `remove_item_with_options`, and the timed
-  variant now accept only a path and automatically select Recent Files,
-  unpinned Frequent Folders, or pinned Frequent Folders removal.
+- `QuickAccessManager::remove_item` accepts only a path and automatically
+  selects Recent Files, unpinned Frequent Folders, or pinned Frequent Folders
+  removal.
 - Visible unpinned Frequent Folders now use the native `removefromhome` Shell
   verb; pinned folders use `unpinfromhome`, while Recent files continue to use
   `remove`. All three paths now match Explorer's native UI removal behavior.
@@ -23,6 +23,14 @@
   non-empty streams shorter than the 32-byte header are rejected as malformed
 - DestList parsing now supports only persisted versions 4 and 6; persisted
   versions below 4 return `DestListUnsupportedVersion`
+- Add/remove mutations execute once without automatic retry. Their documentation
+  now distinguishes successful Shell invocation, persisted DestList state, and
+  the currently rendered Explorer UI. Mutation timeouts are explicitly
+  documented as indeterminate outcomes.
+
+### Removed
+- Public `RetryPolicy` configuration, `QuickAccessManagerBuilder::retry_policy`,
+  `QuickAccessManagerBuilder::try_build`, and the example CLI `retry` command
 
 ## [0.2.6] - 2026-07-09
 

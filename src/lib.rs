@@ -57,7 +57,12 @@
 //!
 //! ## Best Practices
 //!
-//! - Explorer refreshes successful add operations asynchronously
+//! - Treat successful add/remove calls as successful Shell mutations, not as a
+//!   guarantee that persisted queries and open Explorer views are synchronized
+//! - Treat mutation timeouts as indeterminate outcomes; inspect state before
+//!   issuing another mutation
+//! - Call [`manager::QuickAccessManager::refresh`] explicitly when an open
+//!   Explorer Quick Access or Home view should be notified and refreshed
 //!
 
 mod backend;
@@ -72,7 +77,6 @@ pub mod monitor;
 mod query;
 mod quick_access_lock;
 mod recent_links;
-mod retry;
 mod script_executor;
 mod script_storage;
 mod script_strategy;
@@ -114,7 +118,7 @@ pub mod prelude {
 
     pub use crate::utils::{get_windows_version, WindowsVersion};
 
-    pub use crate::{QuickAccess, RetryPolicy, WincentResult};
+    pub use crate::{QuickAccess, WincentResult};
 
     pub use crate::destlist::{
         entries, filetime_to_system_time, frequent_folders_dest_path,
@@ -137,7 +141,6 @@ pub use crate::quick_access_lock::{
     QuickAccessUnlockReport,
 };
 pub use crate::recent_links::find_windows_recent_links_for_target;
-pub use crate::retry::RetryPolicy;
 
 /// Quick Access categories supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

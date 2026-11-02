@@ -101,7 +101,6 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "refresh" => cmd_refresh(&manager, &args[1..]),
         "lock" => cmd_lock(&manager, &args[1..]),
         "empty" => cmd_empty(&manager, &args[1..]),
-        "retry" => cmd_retry(&args[1..]),
         "classify" => cmd_classify(&args[1..]),
         "invalid-path" => cmd_invalid_path(&args[1..]),
         "visible" => cmd_visible(&manager, &args[1..]),
@@ -180,7 +179,6 @@ Core:
     Locked targets block Explorer from adding or removing matching Quick Access items.
   empty <recent|frequent|all>
 Utility APIs:
-  retry <default|none|fast|standard|aggressive|custom> [--attempt N] [custom options]
   classify <stderr text>
   invalid-path <reason> [path]
 
@@ -474,79 +472,6 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
 
     manager.empty_items(qa_type)?;
     println!("cleared {}", category_name(qa_type));
-    Ok(())
-}
-
-fn cmd_retry(args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "retry <policy> [--attempt N]")?;
-    let mut attempt = 0;
-    let mut policy = match args[0].as_str() {
-        "default" | "standard" => RetryPolicy::standard(),
-        "none" | "no-retry" => RetryPolicy::no_retry(),
-        "fast" => RetryPolicy::fast(),
-        "aggressive" => RetryPolicy::aggressive(),
-        "custom" => RetryPolicy::new(),
-        other => {
-            return Err(WincentError::InvalidArgument(format!(
-                "unknown retry policy: {other}"
-            )))
-        }
-    };
-
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--attempt" => {
-                index += 1;
-                attempt = parse_u32(args.get(index), "attempt")?;
-            }
-            "--max-attempts" => {
-                index += 1;
-                policy = policy.with_max_attempts(parse_u32(args.get(index), "max-attempts")?);
-            }
-            "--initial-ms" => {
-                index += 1;
-                policy = policy.with_initial_delay(Duration::from_millis(parse_u64(
-                    required_arg(args.get(index), "initial-ms")?,
-                    "initial-ms",
-                )?));
-            }
-            "--max-ms" => {
-                index += 1;
-                policy = policy.with_max_delay(Duration::from_millis(parse_u64(
-                    required_arg(args.get(index), "max-ms")?,
-                    "max-ms",
-                )?));
-            }
-            "--factor" => {
-                index += 1;
-                let factor = required_arg(args.get(index), "factor")?
-                    .parse::<f64>()
-                    .map_err(|_| WincentError::InvalidArgument("invalid factor".to_string()))?;
-                policy = policy.with_backoff_factor(factor);
-            }
-            "--jitter" => {
-                index += 1;
-                policy = policy.with_jitter(parse_bool(required_arg(args.get(index), "jitter")?)?);
-            }
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown retry option: {other}"
-                )))
-            }
-        }
-        index += 1;
-    }
-
-    println!("max_attempts: {}", policy.max_attempts());
-    println!("initial_delay_ms: {}", policy.initial_delay().as_millis());
-    println!("max_delay_ms: {}", policy.max_delay().as_millis());
-    println!("backoff_factor: {}", policy.backoff_factor());
-    println!("jitter: {}", policy.jitter());
-    println!(
-        "delay_at_{attempt}_ms: {}",
-        policy.calculate_delay(attempt).as_millis()
-    );
     Ok(())
 }
 
@@ -1185,12 +1110,6 @@ fn parse_bool(value: &str) -> WincentResult<bool> {
             "invalid bool value: {other}"
         ))),
     }
-}
-
-fn parse_u32(value: Option<&String>, name: &str) -> WincentResult<u32> {
-    required_arg(value, name)?
-        .parse::<u32>()
-        .map_err(|_| WincentError::InvalidArgument(format!("invalid {name}")))
 }
 
 fn parse_u64(value: &str, name: &str) -> WincentResult<u64> {

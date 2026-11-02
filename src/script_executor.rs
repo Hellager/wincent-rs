@@ -290,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_zero_exit_produces_transient_retryable_error() {
+    fn test_non_zero_exit_can_be_classified_as_transient() {
         let output = Output {
             status: std::process::ExitStatus::from_raw(1),
             stdout: Vec::new(),

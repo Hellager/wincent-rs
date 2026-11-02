@@ -10,21 +10,19 @@ Read this in other languages: [English](README.md) | [中文](README.cn.md)
 
 ## Overview
 
-Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Explorer behavior. Add mutations use `SHAddToRecentDocs` or native Shell COM; PowerShell remains only for selected removal and Explorer-refresh compatibility paths.
+Wincent is a Rust library for managing Windows Quick Access functionality. Queries parse Explorer's DestList files directly and apply rules recovered from observed Explorer behavior. Add mutations use `SHAddToRecentDocs` or native Shell COM; PowerShell remains only for selected removal compatibility paths.
 
 ## Features
 
 - Query recent files and frequent folders directly from DestList backing data
 - Add and remove items with duplicate detection, including pinned and unpinned frequent folders
-- Clear categories with optional explicit pinned-folder cleanup
-- Restore default Quick Access state with conservative `.lnk` cleanup and opt-in deep cleanup
+- Clear Recent Files, Frequent Folders, or both categories
 - Check item existence by exact path or keyword
-- Query whether a frequent folder is pinned, unpinned, or absent
-- Batch add/remove with per-item error collection
+- Query persisted Recent Files positions and Frequent Folders positions/pin state
 - Caller-side timeout protection for native Shell mutations, refreshes, and remaining compatibility paths
 - Visibility control for Quick Access sections
 - Recent files visibility control in Windows Recommended items
-- DestList metadata access
+- DestList parsing and diagnostics
 
 ## Installation
 
@@ -44,7 +42,8 @@ fn main() -> WincentResult<()> {
     let manager = QuickAccessManager::new();
 
     // --- Add ---
-    // Add a file to Recent Files. Returns Err(AlreadyExists) if already present.
+    // Add a file to Recent Files. Ok means the Shell mutation returned successfully;
+    // Explorer may persist and display the change later.
     manager.add_item("C:\\Projects\\report.docx")?;
 
     // Pin a folder to Frequent Folders.
@@ -100,7 +99,7 @@ fn main() -> WincentResult<()> {
     )?;
 
     // --- Remove ---
-    // Remove a file. Returns Err(NotInQuickAccess) if not present.
+    // Remove a file. The same eventual-consistency rules apply as for add_item.
     manager.remove_item("C:\\Projects\\report.docx")?;
 
     Ok(())
@@ -113,10 +112,10 @@ fn main() -> WincentResult<()> {
 - **Rust**: 1.85.0 or later.
 - **Query semantics**: Query APIs return the Explorer UI-visible result calculated from persisted DestList data. The recovered rules cover ordering, metadata filtering, deduplication, hidden-item Folder Options, and result limits without invoking a live Shell query.
 - **UI consistency**: An already-open Explorer view may temporarily differ from the persisted UI-visible result while its UI cache refreshes. Explorer may also rebuild state asynchronously across Windows versions.
-- **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out COM operation may still complete and affect Explorer state.
+- **Mutation success**: `Ok(())` from `add_item` or `remove_item` means the selected Shell mutation returned successfully. It does not guarantee that DestList persistence, a later query, and an already-open Explorer view are immediately synchronized.
+- **Timeouts**: Timeout limits how long the caller waits, not how long the underlying Shell or COM call runs. A timed-out operation has an unknown final state and may still complete later. Mutations are not retried automatically; inspect state before issuing another mutation.
 - **Automatic removal routing**: `remove_item(path)` detects files and directories. Recent files use the native `remove` Shell verb, unpinned Frequent Folders use `removefromhome`, and pinned Frequent Folders use `unpinfromhome`.
 - **Empty behavior**: `empty_items(...)` always refreshes Explorer after a successful clear. Clearing Frequent Folders removes user-created entries, including user pins; Windows may rebuild its system-default pins.
-- **Restore cleanup**: default restore cleanup deletes only `.lnk` files whose target type is resolved as the requested file or folder category. Use `RestoreDefaultsOptions::deep_lnk_cleanup()` or CLI `restore --deep` to also delete unresolved or unknown-type `.lnk` files.
 - **Start menu Recommended visibility**: the Start Recommended APIs target the Windows 11 Start menu. They write the current user's `Explorer\Advanced\Start_TrackDocs` value and are not blocked on Windows 10, where the setting may have no visible Start menu effect. On some Windows 11 builds, hiding Start Recommended can also make Explorer Recent Files invisible; if `ShowRecent` alone does not restore Recent Files visibility, show Start Recommended first and then control Recent Files with `ShowRecent`.
 
 ## Contributing

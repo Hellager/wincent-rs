@@ -890,7 +890,12 @@ impl PowerShellError {
         None
     }
 
-    /// Categorizes error as transient (retryable) or permanent
+    /// Reports whether the process failure has characteristics commonly
+    /// associated with a transient condition.
+    ///
+    /// This classification does not mean that a Quick Access mutation is safe
+    /// to retry. A timed-out Shell or PowerShell operation may already have
+    /// changed state or may still complete later.
     #[must_use]
     pub fn is_transient(&self) -> bool {
         // Timeout, network issues, temporary locks are transient
@@ -995,7 +1000,11 @@ pub enum WincentError {
     #[error("Script strategy not found: {0}")]
     ScriptStrategyNotFound(String),
 
-    /// An operation exceeded its caller-provided timeout.
+    /// An operation exceeded its caller-provided wait timeout.
+    ///
+    /// For Shell and COM mutations this is an indeterminate outcome, not proof
+    /// that the operation failed. The underlying operation may still complete
+    /// after the caller receives this error.
     #[error("Operation timed out: {0}")]
     Timeout(String),
 

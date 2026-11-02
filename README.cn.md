@@ -10,21 +10,19 @@
 
 ## 概述
 
-Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库。查询操作直接解析 Explorer 的 DestList 文件，并应用从 Shell 查询行为逆向得到的规则；修改操作优先使用原生 Windows API，仅在兼容的 Shell 操作和 Explorer 刷新场景中使用有针对性的 PowerShell 兜底。
+Wincent 是一个用于管理 Windows 快速访问功能的 Rust 库。查询操作直接解析 Explorer 的 DestList 文件，并应用从 Shell 查询行为逆向得到的规则；修改操作优先使用原生 Windows API，仅在部分删除兼容路径中使用有针对性的 PowerShell 兜底。
 
 ## 功能特性
 
 - 直接从 DestList 后端数据查询最近文件和常用文件夹
 - 添加和删除项目，自动检测重复项，包括已固定和未固定的常用文件夹
-- 清空分类（可选同时移除已固定文件夹）
-- 以保守 `.lnk` 清理恢复默认快速访问状态，并提供可选深度清理
+- 清空最近文件、常用文件夹或两个分类
 - 精确路径或关键词检查项目是否存在
-- 查询常用文件夹是已固定、未固定还是不存在
-- 批量添加/删除，逐项收集错误
+- 查询持久化的最近文件位置与常用文件夹位置/固定状态
 - Shell 修改、刷新和 PowerShell 兜底操作具备调用方等待超时保护
 - 快速访问分区可见性控制
 - Windows 推荐的项目中最近使用文件可见性控制
-- DestList 元数据访问
+- DestList 解析与诊断
 
 ## 安装
 
@@ -44,7 +42,8 @@ fn main() -> WincentResult<()> {
     let manager = QuickAccessManager::new();
 
     // --- 添加 ---
-    // 添加文件到最近文件。若已存在则返回 Err(AlreadyExists)。
+    // 添加文件到最近文件。Ok 表示 Shell 修改调用成功返回；
+    // Explorer 可能稍后才完成持久化和界面更新。
     manager.add_item("C:\\Projects\\report.docx")?;
 
     // 固定文件夹到常用文件夹。
@@ -103,7 +102,7 @@ fn main() -> WincentResult<()> {
     )?;
 
     // --- 删除 ---
-    // 移除文件。若不存在则返回 Err(NotInQuickAccess)。
+    // 移除文件。它与 add_item 具有相同的最终一致性边界。
     manager.remove_item("C:\\Projects\\report.docx")?;
 
     Ok(())
@@ -116,10 +115,10 @@ fn main() -> WincentResult<()> {
 - **Rust**：1.85.0 或更高版本。
 - **查询语义**：查询 API 返回根据持久化 DestList 数据计算出的 rule-based 结果。相关规则来自对 Shell 查询行为的逆向，匹配已观察到的过滤、排序、去重和结果数量限制，无需调用实时 Shell 查询。
 - **UI 一致性**：已打开的 Explorer 视图可能在 UI 缓存刷新前与持久化的 rule-based 结果短暂不同。Explorer 也可能在不同 Windows 版本上异步重建状态。
-- **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。已经超时的 COM 操作仍可能稍后完成并影响 Explorer 状态。
-- **自动删除分流**：`remove_item(path)` 自动识别文件和目录。Recent file 使用原生 `remove` Shell verb，未固定 Frequent Folder 使用 `IApplicationDestinations::RemoveDestination`，已固定 Frequent Folder 使用 `unpinfromhome`。
-- **固定文件夹清理超时**：在 `empty` 操作中显式移除可见固定文件夹时，可用 `EmptyOptions::with_pinned_folders_timeout()` 覆盖 snapshot/unpin 超时。未设置时使用 manager timeout。
-- **恢复清理**：默认恢复清理只删除目标类型可解析为对应文件或文件夹分类的 `.lnk` 文件。使用 `RestoreDefaultsOptions::deep_lnk_cleanup()` 或 CLI `restore --deep` 时，也会删除无法解析或目标类型未知的 `.lnk` 文件。
+- **修改成功语义**：`add_item` 或 `remove_item` 返回 `Ok(())`，表示选定的 Shell 修改调用成功返回；不保证 DestList 持久化、后续查询与已打开的 Explorer 视图已经立即同步。
+- **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。超时后的最终状态未知，底层操作仍可能稍后完成。库不会自动重试修改操作；再次修改前应先检查状态。
+- **自动删除分流**：`remove_item(path)` 自动识别文件和目录。Recent file 使用原生 `remove` Shell verb，未固定 Frequent Folder 使用 `removefromhome`，已固定 Frequent Folder 使用 `unpinfromhome`。
+- **清空行为**：`empty_items(...)` 成功清空后会刷新 Explorer。清空 Frequent Folders 会移除用户创建的项目（包括用户固定项）；Windows 可能重建系统默认固定项。
 - **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复最近文件可见性，请先显示开始菜单推荐项目，再用 `ShowRecent` 控制最近文件可见性。
 
 ## 贡献指南

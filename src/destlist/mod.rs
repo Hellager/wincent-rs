@@ -4,7 +4,7 @@
 //! score, FILETIME) that is not available through the COM/Shell API used by the
 //! rest of this crate.
 //!
-//! Offsets exposed by [`DestListEntry`](parser::DestListEntry) are logical
+//! Offsets exposed by [`DestListEntry`] are logical
 //! DestList stream offsets, not physical file offsets. CFB stream allocation
 //! may be non-contiguous, and an embedded Shell Link payload is not guaranteed
 //! to be byte-identical to the standalone `.lnk` in the Recent directory.
@@ -47,7 +47,7 @@
 //! [`visible_entries`] returns metadata-level candidates and does not validate
 //! stream availability or apply a caller-specific result limit. Parsed files
 //! expose [`AutomaticDestinations::rule_entries`] for the complete custom
-//! CAutoList rule result driven by the built-in [`DestListRuleSet`] defaults,
+//! CAutoList rule result driven by the built-in version- and list-specific rules,
 //! [`AutomaticDestinations::shell_entries`] for a bounded, Shell-query-shaped
 //! result, and [`AutomaticDestinations::cfb_entries`] for the raw parsed
 //! DestList entries.
