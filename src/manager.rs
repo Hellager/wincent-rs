@@ -6,7 +6,7 @@ use crate::{
     empty,
     error::WincentError,
     monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions},
-    quick_access_lock::{QuickAccessLock, QuickAccessLockTarget},
+    quick_access_lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
     status::QuickAccessStatus,
     utils::paths_equal,
     QuickAccess, WincentResult,
@@ -479,7 +479,8 @@ impl QuickAccessManager {
     ///
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
     /// is neither a file nor directory; [`WincentError::AlreadyExists`] when the
-    /// item is already present; or the underlying operation error.
+    /// item is already present; [`WincentError::QuickAccessLocked`] when a
+    /// cooperating lock denies the mutation; or the underlying operation error.
     ///
     /// # Examples
     ///
@@ -499,6 +500,16 @@ impl QuickAccessManager {
             crate::utils::PathType::File => QuickAccess::RecentFiles,
             crate::utils::PathType::Directory => QuickAccess::FrequentFolders,
         };
+        let _admission = self
+            .backend
+            .uses_system_mutation_gate()
+            .then(|| {
+                MutationPermit::acquire(match path_type {
+                    crate::utils::PathType::File => QuickAccessLockTarget::All,
+                    crate::utils::PathType::Directory => QuickAccessLockTarget::FrequentFolders,
+                })
+            })
+            .transpose()?;
         self.ensure_not_present(&path, qa_type)?;
 
         match path_type {
@@ -539,7 +550,8 @@ impl QuickAccessManager {
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
     /// is neither a file nor directory;
     /// [`WincentError::NotInQuickAccess`] if the preflight query does not find
-    /// the item, or an underlying Shell/COM error.
+    /// the item; [`WincentError::QuickAccessLocked`] when a cooperating lock
+    /// denies the mutation; or an underlying Shell/COM error.
     ///
     /// # Examples
     ///
@@ -559,6 +571,16 @@ impl QuickAccessManager {
             crate::utils::PathType::File => QuickAccess::RecentFiles,
             crate::utils::PathType::Directory => QuickAccess::FrequentFolders,
         };
+        let _admission = self
+            .backend
+            .uses_system_mutation_gate()
+            .then(|| {
+                MutationPermit::acquire_one(match path_type {
+                    crate::utils::PathType::File => QuickAccessLockTarget::RecentFiles,
+                    crate::utils::PathType::Directory => QuickAccessLockTarget::FrequentFolders,
+                })
+            })
+            .transpose()?;
 
         match path_type {
             crate::utils::PathType::File => {
@@ -588,9 +610,10 @@ impl QuickAccessManager {
 
     /// Locks Explorer's Recent Files and Frequent Folders automatic destination files.
     ///
-    /// The returned guard holds OS file handles until it is dropped or explicitly
-    /// unlocked. While held, Explorer cannot add or remove items in the locked
-    /// Quick Access categories because the backing files are not writable.
+    /// The returned guard rejects mutations from cooperating wincent instances
+    /// and holds OS file handles that inhibit writes to Explorer's backing files.
+    /// Other Shell clients may still report success or time out, and Recent
+    /// shortcuts may still be created.
     ///
     /// Use [`QuickAccessLock::unlock`] with
     /// [`crate::QuickAccessUnlockOptions::cleanup_new_recent_links`] to delete
@@ -601,16 +624,18 @@ impl QuickAccessManager {
 
     /// Locks Explorer's Recent Files automatic destination file.
     ///
-    /// While held, Explorer cannot add or remove Recent Files entries because
-    /// the Recent Files backing file is not writable.
+    /// While held, cooperating wincent mutations of Recent Files are rejected.
+    /// New opens for writing the backing file are inhibited. Explorer may still
+    /// create Recent shortcuts or report a Shell operation as successful.
     pub fn lock_recent_files(&self) -> WincentResult<QuickAccessLock> {
         QuickAccessLock::lock_target(QuickAccessLockTarget::RecentFiles)
     }
 
     /// Locks Explorer's Frequent Folders automatic destination file.
     ///
-    /// While held, Explorer cannot add or remove Frequent Folders entries
-    /// because the Frequent Folders backing file is not writable.
+    /// While held, cooperating wincent mutations of Frequent Folders are
+    /// rejected. New opens for writing the backing file are inhibited; Shell
+    /// operations outside wincent may still time out or report success.
     pub fn lock_frequent_folders(&self) -> WincentResult<QuickAccessLock> {
         QuickAccessLock::lock_target(QuickAccessLockTarget::FrequentFolders)
     }
@@ -646,7 +671,9 @@ impl QuickAccessManager {
     /// Returns Shell, registry, or I/O errors from the requested cleanup
     /// operations. If one category is cleared and a later cleanup step
     /// fails, returns [`WincentError::PartialEmpty`] so callers can distinguish
-    /// partial progress from a complete failure.
+    /// partial progress from a complete failure. Returns
+    /// [`WincentError::QuickAccessLocked`] before clearing either category
+    /// when a cooperating lock denies the request.
     ///
     /// # Examples
     ///
@@ -660,6 +687,16 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn empty_items(&self, qa_type: QuickAccess) -> WincentResult<()> {
+        let target = match qa_type {
+            QuickAccess::RecentFiles => QuickAccessLockTarget::RecentFiles,
+            QuickAccess::FrequentFolders => QuickAccessLockTarget::FrequentFolders,
+            QuickAccess::All => QuickAccessLockTarget::All,
+        };
+        let _admission = self
+            .backend
+            .uses_system_mutation_gate()
+            .then(|| MutationPermit::acquire(target))
+            .transpose()?;
         empty::empty_items_with_backend(qa_type, self.timeout, self.backend.as_ref())
     }
 

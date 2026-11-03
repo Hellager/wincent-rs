@@ -100,6 +100,14 @@ pub enum WincentError {
     #[error("Operation timed out: {0}")]
     Timeout(String),
 
+    /// A cooperating Quick Access lock denies mutation of this category.
+    #[error("Quick Access category is locked: {qa_type:?}")]
+    #[non_exhaustive]
+    QuickAccessLocked {
+        /// Category whose mutation was refused.
+        qa_type: crate::quick_access_lock::QuickAccessLockTarget,
+    },
+
     /// A clear operation completed some categories before a later category failed.
     #[error(
         "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"

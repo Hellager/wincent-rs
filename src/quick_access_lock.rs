@@ -1,8 +1,9 @@
-//! Locks Explorer Quick Access backing files and optionally cleans new shortcuts.
+//! Locks Explorer Quick Access backing files and gates cooperating wincent mutations.
 //!
-//! While a target is locked, Explorer cannot write the corresponding automatic
-//! destination file, so adding or removing items in that Quick Access category
-//! is blocked or fails until the [`QuickAccessLock`] is dropped or unlocked.
+//! While a target is locked, its backing file is not writable through new
+//! handles, and cooperating wincent instances reject mutations.
+//! Explorer operations may still report success, time out, or create Recent
+//! shortcuts while the lock is held.
 //! Windows may still create Recent-folder `.lnk` shortcuts during the lock;
 //! [`QuickAccessUnlockOptions::cleanup_new_recent_links`] can delete those on
 //! unlock.
@@ -16,32 +17,35 @@ use std::path::{Path, PathBuf};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_EXISTING,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, FILE_SHARE_READ, OPEN_ALWAYS,
+    OPEN_EXISTING,
 };
 
 pub(crate) const RECENT_FILES_AUTOMATIC_DESTINATION: &str =
     "5f7b5f1e01b83767.automaticDestinations-ms";
 pub(crate) const FREQUENT_FOLDERS_AUTOMATIC_DESTINATION: &str =
     "f01b4d95cf55d32a.automaticDestinations-ms";
+const RECENT_GATE: &str = ".wincent-recent-files.lock";
+const FREQUENT_GATE: &str = ".wincent-frequent-folders.lock";
 
 /// Quick Access backing file set to lock.
 ///
-/// Locking a target prevents Explorer from adding or removing items in the
-/// corresponding Quick Access category while the lock is held.
+/// Locking a target rejects cooperating wincent mutations and inhibits writes
+/// to the corresponding Explorer backing file while the lock is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuickAccessLockTarget {
     /// Lock the Recent Files automatic destination file.
     ///
-    /// Recent Files additions and removals are blocked while this lock is held.
+    /// Recent Files mutations through wincent are rejected while this lock is held.
     RecentFiles,
     /// Lock the Frequent Folders automatic destination file.
     ///
-    /// Frequent Folders additions and removals are blocked while this lock is held.
+    /// Frequent Folders mutations through wincent are rejected while this lock is held.
     FrequentFolders,
     /// Lock both Recent Files and Frequent Folders automatic destination files.
     ///
-    /// Additions and removals in both categories are blocked while this lock is held.
+    /// Mutations through wincent are rejected for both categories while held.
     All,
 }
 
@@ -146,12 +150,13 @@ impl QuickAccessUnlockReport {
     }
 }
 
-/// Guard that holds locks on Explorer Quick Access backing files.
+/// Guard that holds category admission gates and locks backing files.
 ///
 /// While this guard is alive, Explorer cannot update the locked automatic
-/// destination files. Add or remove operations for the locked target are
-/// expected to fail or be ignored by Explorer until the guard is dropped or
-/// [`QuickAccessLock::unlock`] is called.
+/// destination files. Mutations made through cooperating wincent instances
+/// return [`WincentError::QuickAccessLocked`] for a locked category. Other
+/// Explorer/Shell clients may still report success or time out even when a
+/// backing-file write is denied.
 ///
 /// This guard owns process-wide Windows file handles and may be moved to another
 /// thread. It does not provide shared concurrent access; transfer ownership when
@@ -168,6 +173,91 @@ pub struct QuickAccessLock {
     initial_lnk_paths: Vec<PathBuf>,
     /// Held only for their Drop behavior; keeping these handles open is the lock.
     locks: Vec<LockedFile>,
+    _gates: Vec<MutationPermit>,
+}
+
+/// An admission handle retained by a Shell worker after caller timeout.
+pub(crate) struct MutationPermit {
+    handle: HANDLE,
+}
+
+impl MutationPermit {
+    pub(crate) fn acquire(target: QuickAccessLockTarget) -> WincentResult<Vec<Self>> {
+        let recent_folder = PathBuf::from(get_windows_recent_folder()?);
+        Self::acquire_in_folder(target, &recent_folder, false)
+    }
+
+    pub(crate) fn acquire_one(target: QuickAccessLockTarget) -> WincentResult<Self> {
+        Self::acquire(target)?.pop().ok_or_else(|| {
+            WincentError::InvalidArgument("Quick Access lock target has no category".into())
+        })
+    }
+
+    pub(crate) fn acquire_in_folder(
+        target: QuickAccessLockTarget,
+        recent_folder: &Path,
+        exclusive: bool,
+    ) -> WincentResult<Vec<Self>> {
+        let mut gates = Vec::new();
+        for (category, file) in [
+            (QuickAccessLockTarget::RecentFiles, RECENT_GATE),
+            (QuickAccessLockTarget::FrequentFolders, FREQUENT_GATE),
+        ] {
+            if target != category && target != QuickAccessLockTarget::All {
+                continue;
+            }
+            let path = recent_folder.join(file);
+            let mut wide_path = os_str_to_wide_null(path.as_os_str());
+            // SAFETY: The path is null-terminated and lives through CreateFileW.
+            // A successful handle is owned and closed by MutationPermit.
+            let handle = unsafe {
+                CreateFileW(
+                    PCWSTR::from_raw(wide_path.as_mut_ptr()),
+                    GENERIC_READ.0,
+                    if exclusive {
+                        FILE_SHARE_NONE
+                    } else {
+                        FILE_SHARE_READ
+                    },
+                    None,
+                    OPEN_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL,
+                    None,
+                )
+            }
+            .map_err(|error| {
+                if error.code() == windows::Win32::Foundation::ERROR_SHARING_VIOLATION.into() {
+                    if exclusive {
+                        WincentError::SystemError(format!(
+                            "Quick Access category {category:?} is already locked or has an active mutation"
+                        ))
+                    } else {
+                        WincentError::QuickAccessLocked { qa_type: category }
+                    }
+                } else {
+                    WincentError::SystemError(format!(
+                        "Failed to open Quick Access admission file '{}': {error}",
+                        path.display()
+                    ))
+                }
+            })?;
+            gates.push(Self { handle });
+        }
+        Ok(gates)
+    }
+}
+
+// SAFETY: MutationPermit uniquely owns an OS file handle and closes it once in Drop.
+// Windows file handles can be closed on a different thread.
+unsafe impl Send for MutationPermit {}
+
+impl Drop for MutationPermit {
+    fn drop(&mut self) {
+        // SAFETY: This owned handle is closed exactly once.
+        unsafe {
+            let _ = CloseHandle(self.handle);
+        }
+    }
 }
 
 impl QuickAccessLock {
@@ -184,6 +274,7 @@ impl QuickAccessLock {
         target: QuickAccessLockTarget,
         recent_folder: PathBuf,
     ) -> WincentResult<Self> {
+        let gates = MutationPermit::acquire_in_folder(target, &recent_folder, true)?;
         let automatic_destinations = recent_folder.join("AutomaticDestinations");
         let recent_files_path = automatic_destinations.join(RECENT_FILES_AUTOMATIC_DESTINATION);
         let frequent_folders_path =
@@ -209,6 +300,7 @@ impl QuickAccessLock {
             recent_folder,
             initial_lnk_paths,
             locks,
+            _gates: gates,
         })
     }
 
@@ -335,6 +427,7 @@ fn paths_equal_path(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use windows::Win32::Storage::FileSystem::FILE_SHARE_NONE;
 
     fn create_recent_fixture() -> WincentResult<(tempfile::TempDir, PathBuf, PathBuf, PathBuf)> {
@@ -454,6 +547,7 @@ mod tests {
             recent_folder: recent_file.join("not-a-directory"),
             initial_lnk_paths: Vec::new(),
             locks: vec![LockedFile::open(&recent_file)?],
+            _gates: Vec::new(),
         };
         assert!(!can_open_exclusively(&recent_file));
 
@@ -497,6 +591,112 @@ mod tests {
             QuickAccessLockTarget::FrequentFolders,
             QuickAccessLockTarget::All
         );
+    }
+
+    #[test]
+    fn mutation_admission_is_category_scoped_and_lock_rejects_it() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
+        let recent_gate = MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::RecentFiles,
+            &recent_folder,
+            true,
+        )?;
+
+        let recent_result = MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::RecentFiles,
+            &recent_folder,
+            false,
+        );
+        assert!(matches!(
+            recent_result,
+            Err(WincentError::QuickAccessLocked {
+                qa_type: QuickAccessLockTarget::RecentFiles
+            })
+        ));
+
+        let frequent_permit = MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::FrequentFolders,
+            &recent_folder,
+            false,
+        )?;
+        drop(frequent_permit);
+        drop(recent_gate);
+
+        assert!(MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::RecentFiles,
+            &recent_folder,
+            false
+        )
+        .is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn all_gate_acquisition_is_rolled_back_when_second_category_is_locked() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
+        let frequent_gate = MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::FrequentFolders,
+            &recent_folder,
+            true,
+        )?;
+
+        assert!(MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::All,
+            &recent_folder,
+            true
+        )
+        .is_err());
+
+        drop(frequent_gate);
+        assert!(MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::All,
+            &recent_folder,
+            true
+        )
+        .is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn cross_process_admission_probe() {
+        let Ok(folder) = std::env::var("WINCENT_TEST_LOCK_FOLDER") else {
+            return;
+        };
+        let result = MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::RecentFiles,
+            Path::new(&folder),
+            false,
+        );
+        assert!(matches!(
+            result,
+            Err(WincentError::QuickAccessLocked {
+                qa_type: QuickAccessLockTarget::RecentFiles
+            })
+        ));
+    }
+
+    #[test]
+    fn separate_process_observes_locked_category() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )?;
+        let output = Command::new(std::env::current_exe().map_err(WincentError::Io)?)
+            .args([
+                "--exact",
+                "quick_access_lock::tests::cross_process_admission_probe",
+            ])
+            .env("WINCENT_TEST_LOCK_FOLDER", recent_folder)
+            .output()
+            .map_err(WincentError::Io)?;
+        assert!(
+            output.status.success(),
+            "child process failed: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        drop(lock);
+        Ok(())
     }
 
     #[test]

@@ -9,12 +9,17 @@ use crate::{
         remove_from_recent_files_with_timeout, remove_pinned_frequent_folder_with_timeout,
         remove_unpinned_frequent_folder_with_timeout,
     },
+    quick_access_lock::{MutationPermit, QuickAccessLockTarget},
     utils::PathType,
     QuickAccess, WincentResult,
 };
 use std::time::Duration;
 
 pub(crate) trait QuickAccessBackend: Send + Sync {
+    fn uses_system_mutation_gate(&self) -> bool {
+        false
+    }
+
     fn path_type(&self, path: &str) -> WincentResult<PathType> {
         crate::utils::detect_path_type(path)
     }
@@ -92,6 +97,10 @@ fn ui_item_paths(
 pub(crate) struct SystemQuickAccessBackend;
 
 impl QuickAccessBackend for SystemQuickAccessBackend {
+    fn uses_system_mutation_gate(&self) -> bool {
+        true
+    }
+
     /// Reads Quick Access items directly from Explorer's on-disk DestList and
     /// applies the recovered Quick Access UI visibility rules.
     fn get_items(&self, qa_type: QuickAccess, _timeout: Duration) -> WincentResult<Vec<String>> {
@@ -99,15 +108,18 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
     }
 
     fn add_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        add_file_to_recent_native(path, timeout)
+        let permits = MutationPermit::acquire(QuickAccessLockTarget::All)?;
+        add_file_to_recent_native(path, timeout, permits)
     }
 
     fn add_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        add_to_frequent_folders_with_timeout(path, timeout)
+        let permit = MutationPermit::acquire_one(QuickAccessLockTarget::FrequentFolders)?;
+        add_to_frequent_folders_with_timeout(path, timeout, permit)
     }
 
     fn remove_recent_file(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        remove_from_recent_files_with_timeout(path, timeout)
+        let permit = MutationPermit::acquire_one(QuickAccessLockTarget::RecentFiles)?;
+        remove_from_recent_files_with_timeout(path, timeout, permit)
     }
 
     fn frequent_folder_pin_status(
@@ -118,18 +130,22 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
     }
 
     fn remove_pinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        remove_pinned_frequent_folder_with_timeout(path, timeout)
+        let permit = MutationPermit::acquire_one(QuickAccessLockTarget::FrequentFolders)?;
+        remove_pinned_frequent_folder_with_timeout(path, timeout, permit)
     }
 
     fn remove_unpinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()> {
-        remove_unpinned_frequent_folder_with_timeout(path, timeout)
+        let permit = MutationPermit::acquire_one(QuickAccessLockTarget::FrequentFolders)?;
+        remove_unpinned_frequent_folder_with_timeout(path, timeout, permit)
     }
 
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()> {
-        empty::empty_recent_files_with_api(timeout)
+        let permit = MutationPermit::acquire_one(QuickAccessLockTarget::RecentFiles)?;
+        empty::empty_recent_files_with_api(timeout, permit)
     }
 
     fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()> {
+        let _permit = MutationPermit::acquire_one(QuickAccessLockTarget::FrequentFolders)?;
         empty::clear_frequent_folders_with_destlist_reset(timeout)
     }
 

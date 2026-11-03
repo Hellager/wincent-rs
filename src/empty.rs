@@ -15,6 +15,7 @@ use crate::{
     backend::QuickAccessBackend,
     destlist::{frequent_folders_dest_path, parse_file},
     error::WincentError,
+    quick_access_lock::MutationPermit,
     recent_links,
     utils::paths_equal,
     QuickAccess, WincentResult,
@@ -32,8 +33,11 @@ const SHARD_PATHW: u32 = 0x0000_0003;
 ///
 /// `timeout` limits how long the caller waits; the underlying Shell operation
 /// may still complete after the timeout elapses.
-pub(crate) fn empty_recent_files_with_api(timeout: Duration) -> WincentResult<()> {
-    crate::com_thread::run_on_sta_thread(
+pub(crate) fn empty_recent_files_with_api(
+    timeout: Duration,
+    permit: MutationPermit,
+) -> WincentResult<()> {
+    crate::com_thread::run_on_sta_thread_with_permit(
         || {
             // SAFETY: SHARD_PATHW with a null data pointer is a documented
             // Windows API pattern for clearing the recent documents list.
@@ -41,6 +45,7 @@ pub(crate) fn empty_recent_files_with_api(timeout: Duration) -> WincentResult<()
             Ok(())
         },
         timeout,
+        permit,
     )
 }
 
@@ -552,7 +557,16 @@ mod tests {
 
     #[test]
     fn empty_recent_files_zero_timeout_is_rejected() {
-        let result = empty_recent_files_with_api(Duration::ZERO);
+        let recent_folder = tempfile::tempdir().expect("temp Recent directory");
+        let permit = MutationPermit::acquire_in_folder(
+            crate::quick_access_lock::QuickAccessLockTarget::RecentFiles,
+            recent_folder.path(),
+            false,
+        )
+        .expect("test admission")
+        .pop()
+        .expect("Recent Files admission");
+        let result = empty_recent_files_with_api(Duration::ZERO, permit);
         assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
     }
 }

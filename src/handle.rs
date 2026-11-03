@@ -20,6 +20,7 @@ use crate::{
     destlist::FrequentFolderPinStatus,
     error::WincentError,
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
+    quick_access_lock::MutationPermit,
     utils::{paths_equal, validate_path, PathType},
     QuickAccess, WincentResult,
 };
@@ -261,12 +262,16 @@ where
 ///
 /// - [`pin_frequent_folder()`] - Validating native wrapper used by public add APIs
 /// - [`invoke_verb_on_self_current_sta()`] - The underlying verb invocation mechanism
-fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
+fn pin_frequent_folder_native(
+    path: &str,
+    timeout: std::time::Duration,
+    permit: MutationPermit,
+) -> WincentResult<()> {
     // Check and invoke in one STA worker to narrow the TOCTOU window.
     // "pintohome" can act as a toggle. The check prevents toggling an
     // existing folder off.
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
+    crate::com_thread::run_on_sta_thread_with_permit(
         move || {
             run_pin_frequent_folder_checked(
                 &path,
@@ -278,6 +283,7 @@ fn pin_frequent_folder_native(path: &str, timeout: std::time::Duration) -> Wince
             )
         },
         timeout,
+        permit,
     )
 }
 
@@ -367,12 +373,17 @@ fn add_file_to_recent_native_current_sta(path: &str) -> WincentResult<()> {
 ///   duplicate. Shell persistence is session-sensitive and asynchronous.
 /// - `timeout` limits only how long the caller waits. The Shell operation can
 ///   still complete after the timeout is reported.
-pub(crate) fn add_file_to_recent_native(path: &str, timeout: Duration) -> WincentResult<()> {
+pub(crate) fn add_file_to_recent_native(
+    path: &str,
+    timeout: Duration,
+    permits: Vec<MutationPermit>,
+) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
+    crate::com_thread::run_on_sta_thread_with_permits(
         move || add_file_to_recent_native_current_sta(&path),
         timeout,
+        permits,
     )
 }
 
@@ -435,9 +446,13 @@ pub(crate) fn add_file_to_recent_native(path: &str, timeout: Duration) -> Wincen
 /// # See Also
 ///
 /// - [`crate::manager::QuickAccessManager::remove_item`] - Public removal API
-fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
+fn remove_recent_file_native(
+    path: &str,
+    timeout: std::time::Duration,
+    permit: MutationPermit,
+) -> WincentResult<()> {
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
+    crate::com_thread::run_on_sta_thread_with_permit(
         move || {
             let recent_namespace = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
             let folder = shell_folder(recent_namespace)?;
@@ -494,6 +509,7 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
             ))
         },
         timeout,
+        permit,
     )
 }
 
@@ -522,9 +538,13 @@ fn remove_recent_file_native(path: &str, timeout: std::time::Duration) -> Wincen
 ///
 /// - [`crate::manager::QuickAccessManager::add_item`] - Public mutation API
 /// - [`pin_frequent_folder_native()`] - Native COM implementation
-pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> WincentResult<()> {
+pub(crate) fn pin_frequent_folder(
+    path: &str,
+    timeout: std::time::Duration,
+    permit: MutationPermit,
+) -> WincentResult<()> {
     validate_path(path, PathType::Directory)?;
-    pin_frequent_folder_native(path, timeout)
+    pin_frequent_folder_native(path, timeout, permit)
 }
 
 /****************************************************** Handle Quick Access ******************************************************/
@@ -543,6 +563,7 @@ pub(crate) fn pin_frequent_folder(path: &str, timeout: std::time::Duration) -> W
 pub(crate) fn remove_from_recent_files_with_timeout(
     path: &str,
     timeout: std::time::Duration,
+    permit: MutationPermit,
 ) -> WincentResult<()> {
     if timeout.is_zero() {
         return Err(WincentError::InvalidArgument(
@@ -550,7 +571,7 @@ pub(crate) fn remove_from_recent_files_with_timeout(
         ));
     }
     validate_path(path, PathType::File)?;
-    remove_recent_file_native(path, timeout)
+    remove_recent_file_native(path, timeout, permit)
 }
 
 /// Pins a folder to Windows Quick Access with a custom COM STA thread timeout.
@@ -568,13 +589,14 @@ pub(crate) fn remove_from_recent_files_with_timeout(
 pub(crate) fn add_to_frequent_folders_with_timeout(
     path: &str,
     timeout: std::time::Duration,
+    permit: MutationPermit,
 ) -> WincentResult<()> {
     if timeout.is_zero() {
         return Err(WincentError::InvalidArgument(
             "timeout must be greater than zero".to_string(),
         ));
     }
-    pin_frequent_folder(path, timeout)
+    pin_frequent_folder(path, timeout, permit)
 }
 
 /// Hides a visible unpinned Frequent Folders entry with the native
@@ -582,6 +604,7 @@ pub(crate) fn add_to_frequent_folders_with_timeout(
 pub(crate) fn remove_unpinned_frequent_folder_with_timeout(
     path: &str,
     timeout: std::time::Duration,
+    permit: MutationPermit,
 ) -> WincentResult<()> {
     if timeout.is_zero() {
         return Err(WincentError::InvalidArgument(
@@ -590,9 +613,10 @@ pub(crate) fn remove_unpinned_frequent_folder_with_timeout(
     }
     validate_path(path, PathType::Directory)?;
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
+    crate::com_thread::run_on_sta_thread_with_permit(
         move || remove_unpinned_frequent_folder_current_sta(&path),
         timeout,
+        permit,
     )
 }
 
@@ -601,6 +625,7 @@ pub(crate) fn remove_unpinned_frequent_folder_with_timeout(
 pub(crate) fn remove_pinned_frequent_folder_with_timeout(
     path: &str,
     timeout: std::time::Duration,
+    permit: MutationPermit,
 ) -> WincentResult<()> {
     if timeout.is_zero() {
         return Err(WincentError::InvalidArgument(
@@ -609,9 +634,10 @@ pub(crate) fn remove_pinned_frequent_folder_with_timeout(
     }
     validate_path(path, PathType::Directory)?;
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread(
+    crate::com_thread::run_on_sta_thread_with_permit(
         move || remove_pinned_frequent_folder_current_sta(&path),
         timeout,
+        permit,
     )
 }
 
@@ -702,13 +728,33 @@ mod tests {
     fn timeout_aware_operations_reject_zero_timeout() {
         let recent = "C:\\Windows\\notepad.exe";
         let folder = "C:\\Windows";
+        let recent_folder = tempfile::tempdir().expect("temp Recent directory");
+        let permit = |target| {
+            MutationPermit::acquire_in_folder(target, recent_folder.path(), false)
+                .expect("test admission")
+                .pop()
+                .expect("category admission")
+        };
+        use crate::quick_access_lock::QuickAccessLockTarget::{FrequentFolders, RecentFiles};
 
         for result in [
-            remove_from_recent_files_with_timeout(recent, Duration::ZERO),
-            add_to_frequent_folders_with_timeout(folder, Duration::ZERO),
-            remove_unpinned_frequent_folder_with_timeout(folder, Duration::ZERO),
-            remove_pinned_frequent_folder_with_timeout(folder, Duration::ZERO),
-            add_file_to_recent_native(recent, Duration::ZERO),
+            remove_from_recent_files_with_timeout(recent, Duration::ZERO, permit(RecentFiles)),
+            add_to_frequent_folders_with_timeout(folder, Duration::ZERO, permit(FrequentFolders)),
+            remove_unpinned_frequent_folder_with_timeout(
+                folder,
+                Duration::ZERO,
+                permit(FrequentFolders),
+            ),
+            remove_pinned_frequent_folder_with_timeout(
+                folder,
+                Duration::ZERO,
+                permit(FrequentFolders),
+            ),
+            add_file_to_recent_native(
+                recent,
+                Duration::ZERO,
+                vec![permit(RecentFiles), permit(FrequentFolders)],
+            ),
         ] {
             assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
         }

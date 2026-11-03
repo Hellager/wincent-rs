@@ -1,4 +1,5 @@
 use crate::com::{classify_coinit_result, ComInitStatus};
+use crate::quick_access_lock::MutationPermit;
 use crate::{error::WincentError, WincentResult};
 use std::panic::AssertUnwindSafe;
 use std::sync::{
@@ -154,9 +155,41 @@ where
     recv_sta_result(rx, timeout)
 }
 
+/// Keeps the admission handle on the worker even after the caller times out.
+pub(crate) fn run_on_sta_thread_with_permit<F, T>(
+    f: F,
+    timeout: Duration,
+    permit: MutationPermit,
+) -> WincentResult<T>
+where
+    F: FnOnce() -> WincentResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    run_on_sta_thread_with_permits(f, timeout, vec![permit])
+}
+
+pub(crate) fn run_on_sta_thread_with_permits<F, T>(
+    f: F,
+    timeout: Duration,
+    permits: Vec<MutationPermit>,
+) -> WincentResult<T>
+where
+    F: FnOnce() -> WincentResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    run_on_sta_thread(
+        move || {
+            let _permits = permits;
+            f()
+        },
+        timeout,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quick_access_lock::QuickAccessLockTarget;
     use serial_test::serial;
     use std::sync::{mpsc, Arc, Condvar, Mutex};
     use std::time::{Duration, Instant};
@@ -207,6 +240,53 @@ mod tests {
             }
             other => panic!("Expected Timeout for recv timeout, got: {:?}", other),
         }
+    }
+
+    #[test]
+    #[serial(com_thread_active_workers)]
+    fn mutation_permit_stays_held_after_caller_timeout() {
+        wait_for_idle_workers();
+        let temp_dir = tempfile::tempdir().expect("temp Recent directory");
+        let permit = MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::RecentFiles,
+            temp_dir.path(),
+            false,
+        )
+        .expect("test admission")
+        .pop()
+        .expect("Recent Files admission");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = mpsc::channel();
+
+        let result = run_on_sta_thread_with_permit(
+            move || {
+                started_tx.send(()).expect("signal worker start");
+                finish_rx.recv().expect("release worker");
+                Ok(())
+            },
+            Duration::from_millis(20),
+            permit,
+        );
+        assert!(matches!(result, Err(WincentError::Timeout(_))));
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker started");
+
+        assert!(MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::RecentFiles,
+            temp_dir.path(),
+            true
+        )
+        .is_err());
+
+        finish_tx.send(()).expect("release worker");
+        assert!(wait_for_active_worker_count(0, Duration::from_secs(2)));
+        assert!(MutationPermit::acquire_in_folder(
+            QuickAccessLockTarget::RecentFiles,
+            temp_dir.path(),
+            true
+        )
+        .is_ok());
     }
 
     #[test]
