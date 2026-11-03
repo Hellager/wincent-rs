@@ -225,6 +225,7 @@ pub(crate) fn refresh_shell_views(timeout: std::time::Duration) -> WincentResult
 }
 
 /// Sends the Shell notification, then refreshes active Quick Access/Home views.
+#[cfg(test)]
 pub(crate) fn refresh_quick_access(timeout: std::time::Duration) -> WincentResult<()> {
     notify_shell_change();
     refresh_shell_views(timeout)

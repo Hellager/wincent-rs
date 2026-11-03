@@ -120,6 +120,7 @@ fn main() -> WincentResult<()> {
 - **自动删除分流**：`remove_item(path)` 自动识别文件和目录。Recent file 使用原生 `remove` Shell verb，未固定 Frequent Folder 使用 `removefromhome`，已固定 Frequent Folder 使用 `unpinfromhome`。
 - **清空行为**：`empty_items(...)` 成功清空后会刷新 Explorer。清空 Frequent Folders 会移除用户创建的项目（包括用户固定项）；Windows 可能重建系统默认固定项。
 - **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复最近文件可见性，请先显示开始菜单推荐项目，再用 `ShowRecent` 控制最近文件可见性。
+- **可见性写入**：`set_visible(category, bool)` 和 `set_start_recommended_section_visible(bool)` 只写入当前用户的注册表设置；成功不保证界面立即变化。相应的查询读取配置值，而非当前界面状态。`QuickAccess::All` 依次写入两个值，第二次写入失败时可能已经修改了第一个值。
 
 ## 贡献指南
 

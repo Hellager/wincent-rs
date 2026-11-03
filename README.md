@@ -117,6 +117,7 @@ fn main() -> WincentResult<()> {
 - **Automatic removal routing**: `remove_item(path)` detects files and directories. Recent files use the native `remove` Shell verb, unpinned Frequent Folders use `removefromhome`, and pinned Frequent Folders use `unpinfromhome`.
 - **Empty behavior**: `empty_items(...)` always refreshes Explorer after a successful clear. Clearing Frequent Folders removes user-created entries, including user pins; Windows may rebuild its system-default pins.
 - **Start menu Recommended visibility**: the Start Recommended APIs target the Windows 11 Start menu. They write the current user's `Explorer\Advanced\Start_TrackDocs` value and are not blocked on Windows 10, where the setting may have no visible Start menu effect. On some Windows 11 builds, hiding Start Recommended can also make Explorer Recent Files invisible; if `ShowRecent` alone does not restore Recent Files visibility, show Start Recommended first and then control Recent Files with `ShowRecent`.
+- **Visibility writes**: `set_visible(category, bool)` and `set_start_recommended_section_visible(bool)` only write current-user registry settings. Success does not guarantee an immediate UI change. `is_visible` and `is_start_recommended_section_visible` read configured values, not the rendered UI. `QuickAccess::All` writes two values in sequence and can partially succeed if the second write fails.
 
 ## Contributing
 

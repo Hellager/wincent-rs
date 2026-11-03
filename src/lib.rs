@@ -90,7 +90,7 @@ pub mod status;
 #[allow(unused)]
 /// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
-    pub use crate::error::{QuickAccessPostMutationStep, WincentError};
+    pub use crate::error::WincentError;
     pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
     pub use crate::monitor::{
         QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions,
@@ -102,13 +102,8 @@ pub mod prelude {
     pub use crate::status::{FrequentFolderSlot, QuickAccessStatus};
 
     pub use crate::visible::{
-        hide_start_recommended_section, hide_start_recommended_section_with_options,
-        is_frequent_folders_visible, is_recent_files_visible, is_start_recommended_section_visible,
-        is_visible, set_frequent_folders_visible, set_frequent_folders_visible_with_options,
-        set_recent_files_visible, set_recent_files_visible_with_options,
-        set_start_recommended_section_visible, set_start_recommended_section_visible_with_options,
-        set_visible, set_visible_with_options, show_start_recommended_section,
-        show_start_recommended_section_with_options, VisibilityOptions,
+        is_start_recommended_section_visible, is_visible, set_start_recommended_section_visible,
+        set_visible,
     };
 
     pub use crate::utils::{get_windows_version, WindowsVersion};
@@ -129,7 +124,6 @@ pub mod prelude {
 
 use crate::error::WincentError;
 
-pub use crate::error::QuickAccessPostMutationStep;
 pub use crate::monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions};
 pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,

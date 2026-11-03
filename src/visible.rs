@@ -32,7 +32,6 @@
 //! again; restore Start Recommended first, then use `ShowRecent` for Recent
 //! Files visibility.
 
-use crate::error::{QuickAccessPostMutationStep, WincentError};
 use crate::{QuickAccess, WincentResult};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
@@ -151,6 +150,7 @@ fn write_start_recommended_visibility(reg_key: &RegKey, visible: bool) -> Wincen
 ///
 /// Missing registry values are treated as visible, matching Explorer's default
 /// behavior for a new user profile.
+/// This reads configured registry values, not the current rendered UI state.
 ///
 /// # Errors
 ///
@@ -192,7 +192,10 @@ pub fn is_visible(qa_type: QuickAccess) -> WincentResult<bool> {
 /// same Frequent Folders behavior.
 ///
 /// This updates registry values for the current user. It does not clear Quick
-/// Access history or invoke Explorer's Folder Options UI.
+/// Access history, invoke Explorer's Folder Options UI, or refresh Explorer.
+/// Success means the requested values were written, not that the UI has
+/// already changed. `QuickAccess::All` writes two values in sequence; if the
+/// second write fails, the first may already have changed.
 ///
 /// # Errors
 ///
@@ -209,55 +212,14 @@ pub fn set_visible(qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
     write_visibility_value(&reg_key, SHOW_FREQUENT_VALUE, visible)
 }
 
-/// Checks whether Recent Files are visible in Windows Quick Access.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if Explorer visibility settings cannot be read.
-pub fn is_recent_files_visible() -> WincentResult<bool> {
-    is_visible(QuickAccess::RecentFiles)
-}
-
-/// Checks whether Frequent Folders are visible in Windows Quick Access.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if Explorer visibility settings cannot be read.
-pub fn is_frequent_folders_visible() -> WincentResult<bool> {
-    is_visible(QuickAccess::FrequentFolders)
-}
-
-/// Sets whether Recent Files are visible in Windows Quick Access.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if Explorer visibility settings cannot be
-/// created or updated.
-pub fn set_recent_files_visible(visible: bool) -> WincentResult<()> {
-    set_visible(QuickAccess::RecentFiles, visible)
-}
-
-/// Sets whether Frequent Folders are visible in Windows Quick Access.
-///
-/// When hiding Frequent Folders through this registry-backed API, Explorer hides
-/// unpinned frequent folders, while pinned folders remain visible.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if Explorer visibility settings cannot be
-/// created or updated.
-pub fn set_frequent_folders_visible(visible: bool) -> WincentResult<()> {
-    set_visible(QuickAccess::FrequentFolders, visible)
-}
-
-/// Checks whether recently used files appear in Windows Recommended items.
+/// Checks the setting for recently used files in Windows Recommended items.
 ///
 /// This reads the current-user value
 /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_TrackDocs`.
 /// This value controls whether recently used files appear in Windows
 /// Recommended items. Missing values are treated as visible. MDM settings,
 /// policy values, Windows edition, or Explorer version can override the
-/// effective UI state.
+/// effective UI state; this does not inspect the rendered Start menu.
 ///
 /// # Errors
 ///
@@ -285,7 +247,9 @@ pub fn is_start_recommended_section_visible() -> WincentResult<bool> {
 /// then control Recent Files with `ShowRecent`.
 ///
 /// Explorer may require a refresh, restart, sign-out, or supported Windows 11
-/// edition/build before the UI reflects the change.
+/// edition/build before the UI reflects the change. This operation does not
+/// refresh Explorer or the Start menu. Success means the registry write
+/// completed, not that the UI has already changed.
 ///
 /// # Errors
 ///
@@ -296,224 +260,9 @@ pub fn set_start_recommended_section_visible(visible: bool) -> WincentResult<()>
     write_start_recommended_visibility(&reg_key, visible)
 }
 
-/// Shows recently used files in Windows Recommended items.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
-/// be created or updated.
-pub fn show_start_recommended_section() -> WincentResult<()> {
-    set_start_recommended_section_visible(true)
-}
-
-/// Hides recently used files in Windows Recommended items.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
-/// be created or updated.
-pub fn hide_start_recommended_section() -> WincentResult<()> {
-    set_start_recommended_section_visible(false)
-}
-
-/// Options for visibility write operations.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct VisibilityOptions {
-    refresh_explorer: bool,
-}
-
-impl VisibilityOptions {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[must_use]
-    pub fn refresh_explorer_enabled(&self) -> bool {
-        self.refresh_explorer
-    }
-
-    #[must_use]
-    pub fn refresh_explorer(self) -> Self {
-        Self {
-            refresh_explorer: true,
-        }
-    }
-
-    #[must_use]
-    pub fn with_refresh_explorer(self, enabled: bool) -> Self {
-        Self {
-            refresh_explorer: enabled,
-        }
-    }
-}
-
-/// Sets whether a Quick Access section is visible, with optional Explorer refresh.
-///
-/// When hiding `QuickAccess::FrequentFolders` through this registry-backed API,
-/// Explorer hides unpinned frequent folders, while pinned folders remain
-/// visible. Passing `QuickAccess::All` with `visible` set to `false` has the
-/// same Frequent Folders behavior.
-///
-/// If `options.refresh_explorer_enabled()` is true, notifies the Shell and
-/// refreshes active Quick Access/Home views after writing the registry value.
-///
-/// # Errors
-///
-/// Returns the registry writer error when the requested value could not be written.
-/// Returns [`WincentError::VisibilityPostMutationFailure`] when the write completed
-/// but the optional Explorer refresh failed. That error guarantees the visibility
-/// mutation completed, so callers should not blindly retry it. Callers may use
-/// [`is_visible`] to confirm the current value, but a failed read does not change
-/// the side-effect guarantee represented by the post-mutation error.
-pub fn set_visible_with_options(
-    qa_type: QuickAccess,
-    visible: bool,
-    options: VisibilityOptions,
-) -> WincentResult<()> {
-    set_visible_with_options_inner(qa_type, visible, options, set_visible, || {
-        crate::utils::refresh_quick_access(std::time::Duration::from_secs(10))
-    })
-}
-
-fn set_visible_with_options_inner(
-    qa_type: QuickAccess,
-    visible: bool,
-    options: VisibilityOptions,
-    write: impl FnOnce(QuickAccess, bool) -> WincentResult<()>,
-    refresh: impl FnOnce() -> WincentResult<()>,
-) -> WincentResult<()> {
-    write(qa_type, visible)?;
-    if options.refresh_explorer_enabled() {
-        refresh().map_err(|error| {
-            WincentError::visibility_post_mutation_failure(
-                qa_type,
-                visible,
-                QuickAccessPostMutationStep::RefreshExplorer,
-                error,
-            )
-        })?;
-    }
-    Ok(())
-}
-
-/// Sets whether Recent Files are visible, with optional Explorer refresh.
-pub fn set_recent_files_visible_with_options(
-    visible: bool,
-    options: VisibilityOptions,
-) -> WincentResult<()> {
-    set_visible_with_options(QuickAccess::RecentFiles, visible, options)
-}
-
-/// Sets whether Frequent Folders are visible, with optional Explorer refresh.
-///
-/// When hiding Frequent Folders through this registry-backed API, Explorer hides
-/// unpinned frequent folders, while pinned folders remain visible.
-pub fn set_frequent_folders_visible_with_options(
-    visible: bool,
-    options: VisibilityOptions,
-) -> WincentResult<()> {
-    set_visible_with_options(QuickAccess::FrequentFolders, visible, options)
-}
-
-/// Sets whether recently used files appear in Windows Recommended items, with
-/// optional Explorer refresh.
-///
-/// On some Windows 11 builds, hiding Start Recommended can also make Explorer
-/// Recent Files invisible. If that happens, set Start Recommended visible again
-/// before relying on `ShowRecent` to control Recent Files visibility.
-///
-/// If `options.refresh_explorer_enabled()` is true, notifies the Shell and
-/// refreshes active Quick Access/Home views after writing the registry value.
-/// The write is not rolled back if refresh fails.
-///
-/// # Errors
-///
-/// Returns the registry writer error when the requested value could not be written.
-/// Returns [`WincentError::VisibilityPostMutationFailure`] when the write completed
-/// but the optional Explorer refresh failed. That error guarantees the visibility
-/// mutation completed, so callers should not blindly retry it. Callers may use
-/// [`is_start_recommended_section_visible`] to confirm the current value, but a
-/// failed read does not change the side-effect guarantee represented by the error.
-pub fn set_start_recommended_section_visible_with_options(
-    visible: bool,
-    options: VisibilityOptions,
-) -> WincentResult<()> {
-    set_start_recommended_section_visible_with_options_inner(
-        visible,
-        options,
-        set_start_recommended_section_visible,
-        || crate::utils::refresh_quick_access(std::time::Duration::from_secs(10)),
-    )
-}
-
-fn set_start_recommended_section_visible_with_options_inner(
-    visible: bool,
-    options: VisibilityOptions,
-    write: impl FnOnce(bool) -> WincentResult<()>,
-    refresh: impl FnOnce() -> WincentResult<()>,
-) -> WincentResult<()> {
-    write(visible)?;
-    if options.refresh_explorer_enabled() {
-        refresh().map_err(|error| {
-            WincentError::visibility_post_mutation_failure(
-                QuickAccess::RecentFiles,
-                visible,
-                QuickAccessPostMutationStep::RefreshExplorer,
-                error,
-            )
-        })?;
-    }
-    Ok(())
-}
-
-/// Shows recently used files in Windows Recommended items, with optional Explorer refresh.
-pub fn show_start_recommended_section_with_options(
-    options: VisibilityOptions,
-) -> WincentResult<()> {
-    set_start_recommended_section_visible_with_options(true, options)
-}
-
-/// Hides recently used files in Windows Recommended items, with optional Explorer refresh.
-pub fn hide_start_recommended_section_with_options(
-    options: VisibilityOptions,
-) -> WincentResult<()> {
-    set_start_recommended_section_visible_with_options(false, options)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::error::Error;
-
-    fn assert_visibility_post_mutation_failure(
-        error: WincentError,
-        expected_qa_type: QuickAccess,
-        expected_visible: bool,
-    ) {
-        let source = error
-            .source()
-            .expect("visibility post-mutation error must preserve its source");
-        assert_eq!(source.to_string(), "System error: refresh sentinel");
-
-        match error {
-            WincentError::VisibilityPostMutationFailure {
-                qa_type,
-                visible,
-                step,
-                source,
-            } => {
-                assert_eq!(qa_type, expected_qa_type);
-                assert_eq!(visible, expected_visible);
-                assert_eq!(step, QuickAccessPostMutationStep::RefreshExplorer);
-                assert!(matches!(
-                    *source,
-                    WincentError::SystemError(ref message) if message == "refresh sentinel"
-                ));
-            }
-            other => panic!("expected visibility post-mutation error, got {other:?}"),
-        }
-    }
 
     #[test]
     fn registry_value_names_match_quick_access_sections() {
@@ -569,13 +318,13 @@ mod tests {
     #[test]
     #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test recent_files_visibility_round_trip -- --ignored --nocapture"]
     fn recent_files_visibility_round_trip() -> WincentResult<()> {
-        let initial = is_recent_files_visible()?;
+        let initial = is_visible(QuickAccess::RecentFiles)?;
 
-        set_recent_files_visible(!initial)?;
-        assert_eq!(is_recent_files_visible()?, !initial);
+        set_visible(QuickAccess::RecentFiles, !initial)?;
+        assert_eq!(is_visible(QuickAccess::RecentFiles)?, !initial);
 
-        set_recent_files_visible(initial)?;
-        assert_eq!(is_recent_files_visible()?, initial);
+        set_visible(QuickAccess::RecentFiles, initial)?;
+        assert_eq!(is_visible(QuickAccess::RecentFiles)?, initial);
 
         Ok(())
     }
@@ -583,251 +332,14 @@ mod tests {
     #[test]
     #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test frequent_folders_visibility_round_trip -- --ignored --nocapture"]
     fn frequent_folders_visibility_round_trip() -> WincentResult<()> {
-        let initial = is_frequent_folders_visible()?;
+        let initial = is_visible(QuickAccess::FrequentFolders)?;
 
-        set_frequent_folders_visible(!initial)?;
-        assert_eq!(is_frequent_folders_visible()?, !initial);
+        set_visible(QuickAccess::FrequentFolders, !initial)?;
+        assert_eq!(is_visible(QuickAccess::FrequentFolders)?, !initial);
 
-        set_frequent_folders_visible(initial)?;
-        assert_eq!(is_frequent_folders_visible()?, initial);
+        set_visible(QuickAccess::FrequentFolders, initial)?;
+        assert_eq!(is_visible(QuickAccess::FrequentFolders)?, initial);
 
         Ok(())
-    }
-
-    #[test]
-    fn visibility_options_default_does_not_refresh() {
-        assert!(!VisibilityOptions::new().refresh_explorer_enabled());
-    }
-
-    #[test]
-    fn visibility_options_builder_enables_refresh() {
-        assert!(VisibilityOptions::new()
-            .refresh_explorer()
-            .refresh_explorer_enabled());
-    }
-
-    #[test]
-    fn visibility_options_with_refresh_explorer_true_enables() {
-        assert!(VisibilityOptions::new()
-            .with_refresh_explorer(true)
-            .refresh_explorer_enabled());
-    }
-
-    #[test]
-    fn visibility_options_with_refresh_explorer_false_disables() {
-        assert!(!VisibilityOptions::new()
-            .refresh_explorer()
-            .with_refresh_explorer(false)
-            .refresh_explorer_enabled());
-    }
-
-    #[test]
-    fn set_visible_inner_no_refresh_does_not_call_refresh() {
-        use std::cell::Cell;
-
-        let write_called = Cell::new(false);
-        let refresh_called = Cell::new(false);
-
-        let result = set_visible_with_options_inner(
-            QuickAccess::RecentFiles,
-            true,
-            VisibilityOptions::new(),
-            |qa_type, visible| {
-                assert_eq!(qa_type, QuickAccess::RecentFiles);
-                assert!(visible);
-                write_called.set(true);
-                Ok(())
-            },
-            || {
-                refresh_called.set(true);
-                Ok(())
-            },
-        );
-
-        assert!(result.is_ok());
-        assert!(write_called.get(), "registry writer must be called");
-        assert!(
-            !refresh_called.get(),
-            "refresh must not be called when option is disabled"
-        );
-    }
-
-    #[test]
-    fn set_visible_inner_with_refresh_calls_refresh() {
-        use std::cell::Cell;
-
-        let write_called = Cell::new(false);
-        let refresh_called = Cell::new(false);
-
-        let result = set_visible_with_options_inner(
-            QuickAccess::RecentFiles,
-            true,
-            VisibilityOptions::new().refresh_explorer(),
-            |qa_type, visible| {
-                assert_eq!(qa_type, QuickAccess::RecentFiles);
-                assert!(visible);
-                write_called.set(true);
-                Ok(())
-            },
-            || {
-                refresh_called.set(true);
-                Ok(())
-            },
-        );
-
-        assert!(result.is_ok());
-        assert!(write_called.get(), "registry writer must be called");
-        assert!(
-            refresh_called.get(),
-            "refresh must be called when option is enabled"
-        );
-    }
-
-    #[test]
-    fn set_visible_inner_refresh_error_is_post_mutation_failure() {
-        let expected = WincentError::SystemError("refresh sentinel".into());
-        let result = set_visible_with_options_inner(
-            QuickAccess::RecentFiles,
-            true,
-            VisibilityOptions::new().refresh_explorer(),
-            |_, _| Ok(()),
-            || Err(expected),
-        );
-
-        assert_visibility_post_mutation_failure(
-            result.expect_err("refresh failure must be reported"),
-            QuickAccess::RecentFiles,
-            true,
-        );
-    }
-
-    #[test]
-    fn set_visible_inner_write_error_skips_refresh() {
-        use crate::error::WincentError;
-        use std::cell::Cell;
-
-        let refresh_called = Cell::new(false);
-        let expected = WincentError::SystemError("write sentinel".into());
-        let result = set_visible_with_options_inner(
-            QuickAccess::RecentFiles,
-            true,
-            VisibilityOptions::new().refresh_explorer(),
-            |_, _| Err(expected),
-            || {
-                refresh_called.set(true);
-                Ok(())
-            },
-        );
-
-        match result {
-            Err(WincentError::SystemError(message)) => assert_eq!(message, "write sentinel"),
-            other => panic!("expected writer sentinel error, got {other:?}"),
-        }
-        assert!(
-            !refresh_called.get(),
-            "refresh must not be called when registry writer fails"
-        );
-    }
-
-    #[test]
-    fn set_start_recommended_inner_no_refresh_does_not_call_refresh() {
-        use std::cell::Cell;
-
-        let write_called = Cell::new(false);
-        let refresh_called = Cell::new(false);
-
-        let result = set_start_recommended_section_visible_with_options_inner(
-            true,
-            VisibilityOptions::new(),
-            |visible| {
-                assert!(visible);
-                write_called.set(true);
-                Ok(())
-            },
-            || {
-                refresh_called.set(true);
-                Ok(())
-            },
-        );
-
-        assert!(result.is_ok());
-        assert!(write_called.get(), "registry writer must be called");
-        assert!(
-            !refresh_called.get(),
-            "refresh must not be called when option is disabled"
-        );
-    }
-
-    #[test]
-    fn set_start_recommended_inner_with_refresh_calls_refresh() {
-        use std::cell::Cell;
-
-        let write_called = Cell::new(false);
-        let refresh_called = Cell::new(false);
-
-        let result = set_start_recommended_section_visible_with_options_inner(
-            false,
-            VisibilityOptions::new().refresh_explorer(),
-            |visible| {
-                assert!(!visible);
-                write_called.set(true);
-                Ok(())
-            },
-            || {
-                refresh_called.set(true);
-                Ok(())
-            },
-        );
-
-        assert!(result.is_ok());
-        assert!(write_called.get(), "registry writer must be called");
-        assert!(
-            refresh_called.get(),
-            "refresh must be called when option is enabled"
-        );
-    }
-
-    #[test]
-    fn set_start_recommended_inner_refresh_error_is_post_mutation_failure() {
-        let expected = WincentError::SystemError("refresh sentinel".into());
-        let result = set_start_recommended_section_visible_with_options_inner(
-            false,
-            VisibilityOptions::new().refresh_explorer(),
-            |_| Ok(()),
-            || Err(expected),
-        );
-
-        assert_visibility_post_mutation_failure(
-            result.expect_err("refresh failure must be reported"),
-            QuickAccess::RecentFiles,
-            false,
-        );
-    }
-
-    #[test]
-    fn set_start_recommended_inner_write_error_skips_refresh() {
-        use crate::error::WincentError;
-        use std::cell::Cell;
-
-        let refresh_called = Cell::new(false);
-        let expected = WincentError::SystemError("write sentinel".into());
-        let result = set_start_recommended_section_visible_with_options_inner(
-            true,
-            VisibilityOptions::new().refresh_explorer(),
-            |_| Err(expected),
-            || {
-                refresh_called.set(true);
-                Ok(())
-            },
-        );
-
-        match result {
-            Err(WincentError::SystemError(message)) => assert_eq!(message, "write sentinel"),
-            other => panic!("expected writer sentinel error, got {other:?}"),
-        }
-        assert!(
-            !refresh_called.get(),
-            "refresh must not be called when registry writer fails"
-        );
     }
 }

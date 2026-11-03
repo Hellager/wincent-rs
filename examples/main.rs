@@ -182,16 +182,11 @@ Utility APIs:
 
 Visibility APIs:
   visible get <recent|frequent|all>
-  visible set <recent|frequent|all> <true|false> [--refresh-explorer]
-  visible show <recent|frequent|all> [--refresh-explorer]
-  visible hide <recent|frequent|all> [--refresh-explorer]
-  visible get-recent | get-frequent
-  visible set-recent <true|false> [--refresh-explorer] | set-frequent <true|false> [--refresh-explorer]
+  visible set <recent|frequent|all> <true|false>
   visible get-start-recommended
-  visible set-start-recommended <true|false> [--refresh-explorer]
-  visible show-start-recommended [--refresh-explorer]
-  visible hide-start-recommended [--refresh-explorer]
+  visible set-start-recommended <true|false>
   Start Recommended commands control recent files in Windows Recommended items.
+  Successful writes do not guarantee the UI changes immediately.
 
 DestList APIs:
   dest path <recent|frequent>
@@ -494,100 +489,28 @@ fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
     require_len(args, 1, "visible <command>")?;
     match args[0].as_str() {
         "get" => {
-            require_len(&args[1..], 1, "visible get <recent|frequent|all>")?;
+            require_exact_len(&args[1..], 1, "visible get <recent|frequent|all>")?;
             let qa_type = parse_category(&args[1], true)?;
             println!("{}", manager.is_visible(qa_type)?);
         }
         "set" => {
-            require_len(
+            require_exact_len(
                 &args[1..],
                 2,
-                "visible set <recent|frequent|all> <true|false> [--refresh-explorer]",
+                "visible set <recent|frequent|all> <true|false>",
             )?;
             let qa_type = parse_category(&args[1], true)?;
-            manager.set_visible_with_options(
-                qa_type,
-                parse_bool(&args[2])?,
-                parse_visibility_options(&args[3..])?,
-            )?;
+            manager.set_visible(qa_type, parse_bool(&args[2])?)?;
             println!("updated visibility");
         }
-        "show" => {
-            require_len(
-                &args[1..],
-                1,
-                "visible show <recent|frequent|all> [--refresh-explorer]",
-            )?;
-            manager.show_section_with_options(
-                parse_category(&args[1], true)?,
-                parse_visibility_options(&args[2..])?,
-            )?;
-            println!("shown");
-        }
-        "hide" => {
-            require_len(
-                &args[1..],
-                1,
-                "visible hide <recent|frequent|all> [--refresh-explorer]",
-            )?;
-            manager.hide_section_with_options(
-                parse_category(&args[1], true)?,
-                parse_visibility_options(&args[2..])?,
-            )?;
-            println!("hidden");
-        }
-        "get-recent" => println!("{}", wincent::visible::is_recent_files_visible()?),
-        "get-frequent" => println!("{}", wincent::visible::is_frequent_folders_visible()?),
-        "set-recent" => {
-            require_len(
-                &args[1..],
-                1,
-                "visible set-recent <true|false> [--refresh-explorer]",
-            )?;
-            manager.set_recent_files_visible_with_options(
-                parse_bool(&args[1])?,
-                parse_visibility_options(&args[2..])?,
-            )?;
-            println!("updated recent visibility");
-        }
-        "set-frequent" => {
-            require_len(
-                &args[1..],
-                1,
-                "visible set-frequent <true|false> [--refresh-explorer]",
-            )?;
-            manager.set_frequent_folders_visible_with_options(
-                parse_bool(&args[1])?,
-                parse_visibility_options(&args[2..])?,
-            )?;
-            println!("updated frequent visibility");
-        }
         "get-start-recommended" => {
+            require_exact_len(&args[1..], 0, "visible get-start-recommended")?;
             println!("{}", manager.is_start_recommended_section_visible()?);
         }
         "set-start-recommended" => {
-            require_len(
-                &args[1..],
-                1,
-                "visible set-start-recommended <true|false> [--refresh-explorer]",
-            )?;
-            manager.set_start_recommended_section_visible_with_options(
-                parse_bool(&args[1])?,
-                parse_visibility_options(&args[2..])?,
-            )?;
+            require_exact_len(&args[1..], 1, "visible set-start-recommended <true|false>")?;
+            manager.set_start_recommended_section_visible(parse_bool(&args[1])?)?;
             println!("updated recommended recent files visibility");
-        }
-        "show-start-recommended" => {
-            manager.show_start_recommended_section_with_options(parse_visibility_options(
-                &args[1..],
-            )?)?;
-            println!("shown recommended recent files");
-        }
-        "hide-start-recommended" => {
-            manager.hide_start_recommended_section_with_options(parse_visibility_options(
-                &args[1..],
-            )?)?;
-            println!("hidden recommended recent files");
         }
         other => {
             return Err(WincentError::InvalidArgument(format!(
@@ -873,21 +796,6 @@ fn category_name(qa_type: QuickAccess) -> &'static str {
     }
 }
 
-fn parse_visibility_options(args: &[String]) -> WincentResult<VisibilityOptions> {
-    let mut options = VisibilityOptions::new();
-    for arg in args {
-        match arg.as_str() {
-            "--refresh-explorer" => options = options.refresh_explorer(),
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown visible option: {other}"
-                )))
-            }
-        }
-    }
-    Ok(options)
-}
-
 fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
     let cfb = parsed.cfb_info();
     let dest = parsed.dest_list();
@@ -1072,6 +980,14 @@ fn require_len(args: &[String], min: usize, usage: &str) -> WincentResult<()> {
     }
 }
 
+fn require_exact_len(args: &[String], expected: usize, usage: &str) -> WincentResult<()> {
+    if args.len() != expected {
+        Err(WincentError::InvalidArgument(format!("usage: {usage}")))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1114,15 +1030,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_start_recommended_visibility_options_accepts_refresh() {
-        let visible = parse_bool("false").unwrap();
-        let options = parse_visibility_options(&["--refresh-explorer".to_string()]).unwrap();
-
-        assert!(!visible);
-        assert!(options.refresh_explorer_enabled());
-    }
-
-    #[test]
     fn parse_limit_rejects_unknown_options() {
         let error = parse_limit(&["--limti".to_string(), "3".to_string()], 20).unwrap_err();
 
@@ -1140,15 +1047,31 @@ mod tests {
 
     #[test]
     fn visible_set_start_recommended_requires_bool_argument() {
-        let error = require_len(
+        let error = require_exact_len(
             &[] as &[String],
             1,
-            "visible set-start-recommended <true|false> [--refresh-explorer]",
+            "visible set-start-recommended <true|false>",
         )
         .unwrap_err();
 
         assert!(
-            matches!(error, WincentError::InvalidArgument(message) if message == "usage: visible set-start-recommended <true|false> [--refresh-explorer]")
+            matches!(error, WincentError::InvalidArgument(message) if message == "usage: visible set-start-recommended <true|false>")
         );
+    }
+
+    #[test]
+    fn visible_set_rejects_removed_refresh_option_before_writing() {
+        let error = require_exact_len(
+            &[
+                "recent".to_string(),
+                "true".to_string(),
+                "--refresh-explorer".to_string(),
+            ],
+            2,
+            "visible set <recent|frequent|all> <true|false>",
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, WincentError::InvalidArgument(_)));
     }
 }

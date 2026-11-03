@@ -688,6 +688,13 @@ impl QuickAccessManager {
 
     /// Sets whether a Quick Access section is visible in Explorer.
     ///
+    /// Success means the current-user registry value was written, not that an
+    /// open Explorer view has already reflected the change. This does not
+    /// refresh Explorer.
+    ///
+    /// `QuickAccess::All` writes two values in sequence. If the second write
+    /// fails, the first value may already have changed.
+    ///
     /// When hiding `QuickAccess::FrequentFolders` through this registry-backed
     /// API, Explorer hides unpinned frequent folders, while pinned folders
     /// remain visible. Passing `QuickAccess::All` with `visible` set to `false`
@@ -713,143 +720,6 @@ impl QuickAccessManager {
         visible::set_visible(qa_type, visible)
     }
 
-    /// Shows a Quick Access section in Explorer.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # fn main() -> wincent::WincentResult<()> {
-    /// use wincent::prelude::*;
-    ///
-    /// QuickAccessManager::new().show_section(QuickAccess::FrequentFolders)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn show_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
-        self.set_visible(qa_type, true)
-    }
-
-    /// Hides a Quick Access section in Explorer.
-    ///
-    /// Hiding `QuickAccess::FrequentFolders` through this registry-backed API
-    /// hides unpinned frequent folders, while pinned folders remain visible.
-    /// Passing `QuickAccess::All` has the same Frequent Folders behavior.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # fn main() -> wincent::WincentResult<()> {
-    /// use wincent::prelude::*;
-    ///
-    /// QuickAccessManager::new().hide_section(QuickAccess::RecentFiles)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn hide_section(&self, qa_type: QuickAccess) -> WincentResult<()> {
-        self.set_visible(qa_type, false)
-    }
-
-    /// Sets whether a Quick Access section is visible in Explorer, with optional
-    /// Explorer refresh.
-    ///
-    /// When hiding `QuickAccess::FrequentFolders` through this registry-backed
-    /// API, Explorer hides unpinned frequent folders, while pinned folders
-    /// remain visible. Passing `QuickAccess::All` with `visible` set to `false`
-    /// has the same Frequent Folders behavior.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current user's Explorer settings
-    /// cannot be created or updated.
-    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
-    /// completed but the requested Explorer refresh failed; do not blindly
-    /// retry the visibility mutation.
-    pub fn set_visible_with_options(
-        &self,
-        qa_type: QuickAccess,
-        visible: bool,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        visible::set_visible_with_options(qa_type, visible, options)
-    }
-
-    /// Shows a Quick Access section in Explorer, with optional Explorer refresh.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
-    /// registry write completed but the requested Explorer refresh failed.
-    pub fn show_section_with_options(
-        &self,
-        qa_type: QuickAccess,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        self.set_visible_with_options(qa_type, true, options)
-    }
-
-    /// Hides a Quick Access section in Explorer, with optional Explorer refresh.
-    ///
-    /// Hiding `QuickAccess::FrequentFolders` through this registry-backed API
-    /// hides unpinned frequent folders, while pinned folders remain visible.
-    /// Passing `QuickAccess::All` has the same Frequent Folders behavior.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
-    /// registry write completed but the requested Explorer refresh failed.
-    pub fn hide_section_with_options(
-        &self,
-        qa_type: QuickAccess,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        self.set_visible_with_options(qa_type, false, options)
-    }
-
-    /// Sets whether Recent Files are visible, with optional Explorer refresh.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
-    /// registry write completed but the requested Explorer refresh failed.
-    pub fn set_recent_files_visible_with_options(
-        &self,
-        visible: bool,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        visible::set_recent_files_visible_with_options(visible, options)
-    }
-
-    /// Sets whether Frequent Folders are visible, with optional Explorer refresh.
-    ///
-    /// When hiding Frequent Folders through this registry-backed API, Explorer
-    /// hides unpinned frequent folders, while pinned folders remain visible.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when Explorer visibility settings cannot be
-    /// updated. [`WincentError::VisibilityPostMutationFailure`] means the
-    /// registry write completed but the requested Explorer refresh failed.
-    pub fn set_frequent_folders_visible_with_options(
-        &self,
-        visible: bool,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        visible::set_frequent_folders_visible_with_options(visible, options)
-    }
-
     /// Checks whether recently used files appear in Windows Recommended items.
     ///
     /// This reads the current-user `Start_TrackDocs` Explorer Advanced value
@@ -872,6 +742,10 @@ impl QuickAccessManager {
     /// This controls whether recently used files appear in Windows Recommended
     /// items.
     ///
+    /// Success means the registry value was written, not that the Start menu
+    /// has already reflected the change. This does not refresh Explorer or
+    /// the Start menu.
+    ///
     /// On some Windows 11 builds, setting this to `false` can also make
     /// Explorer Recent Files invisible. In that state, make Start Recommended
     /// visible again before relying on `ShowRecent` to control Recent Files
@@ -883,81 +757,6 @@ impl QuickAccessManager {
     /// cannot be created or updated.
     pub fn set_start_recommended_section_visible(&self, visible: bool) -> WincentResult<()> {
         visible::set_start_recommended_section_visible(visible)
-    }
-
-    /// Shows recently used files in Windows Recommended items.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated.
-    pub fn show_start_recommended_section(&self) -> WincentResult<()> {
-        self.set_start_recommended_section_visible(true)
-    }
-
-    /// Hides recently used files in Windows Recommended items.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated.
-    pub fn hide_start_recommended_section(&self) -> WincentResult<()> {
-        self.set_start_recommended_section_visible(false)
-    }
-
-    /// Sets whether recently used files appear in Windows Recommended items,
-    /// with optional Explorer refresh.
-    ///
-    /// On some Windows 11 builds, hiding Start Recommended can also make
-    /// Explorer Recent Files invisible. If that happens, set Start Recommended
-    /// visible again before relying on `ShowRecent` to control Recent Files
-    /// visibility.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated.
-    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
-    /// completed but the requested Explorer refresh failed; do not blindly
-    /// retry the visibility mutation.
-    pub fn set_start_recommended_section_visible_with_options(
-        &self,
-        visible: bool,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        visible::set_start_recommended_section_visible_with_options(visible, options)
-    }
-
-    /// Shows recently used files in Windows Recommended items, with optional
-    /// Explorer refresh.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated.
-    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
-    /// completed but the requested Explorer refresh failed.
-    pub fn show_start_recommended_section_with_options(
-        &self,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        self.set_start_recommended_section_visible_with_options(true, options)
-    }
-
-    /// Hides recently used files in Windows Recommended items, with optional
-    /// Explorer refresh.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated.
-    /// [`WincentError::VisibilityPostMutationFailure`] means the registry write
-    /// completed but the requested Explorer refresh failed.
-    pub fn hide_start_recommended_section_with_options(
-        &self,
-        options: visible::VisibilityOptions,
-    ) -> WincentResult<()> {
-        self.set_start_recommended_section_visible_with_options(false, options)
     }
 
     fn ensure_not_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
