@@ -5,7 +5,6 @@ use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     empty,
     error::WincentError,
-    monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions},
     quick_access_lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
     status::QuickAccessStatus,
     utils::paths_equal,
@@ -125,7 +124,7 @@ impl QuickAccessManagerBuilder {
 /// Windows Quick Access manager.
 ///
 /// This type is a thin synchronous facade over Quick Access query, mutation,
-/// clearing, monitoring, locking, refresh, and visibility operations.
+/// clearing, locking, refresh, and visibility operations.
 ///
 /// Prefer this facade over lower-level modules. It keeps path conversion,
 /// timeout handling, visibility helpers, and DestList helpers behind one stable
@@ -413,47 +412,6 @@ impl QuickAccessManager {
             .get_items(qa_type)?
             .iter()
             .any(|item| item.to_lowercase().contains(&keyword)))
-    }
-
-    /// Monitors Quick Access for snapshot changes.
-    ///
-    /// This starts a background polling thread. The callback is invoked when
-    /// the monitored snapshot changes, including changes caused by this crate's
-    /// own add, remove, empty, and restore operations. Keep the returned
-    /// [`QuickAccessMonitor`] alive for as long as monitoring should continue.
-    ///
-    /// # Errors
-    ///
-    /// Returns query errors from [`QuickAccessManager::get_items`] when the
-    /// initial snapshot cannot be read.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use wincent::prelude::*;
-    ///
-    /// # fn main() -> WincentResult<()> {
-    /// let manager = QuickAccessManager::new();
-    /// let _monitor = manager.watch_quick_access(
-    ///     QuickAccessMonitorOptions::new().with_qa_type(QuickAccess::All),
-    ///     |event| {
-    ///         if let Ok(event) = event {
-    ///             println!("{} Quick Access items", event.current_items().len());
-    ///         }
-    ///     },
-    /// )?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn watch_quick_access<F>(
-        &self,
-        options: QuickAccessMonitorOptions,
-        callback: F,
-    ) -> WincentResult<QuickAccessMonitor>
-    where
-        F: FnMut(WincentResult<QuickAccessChangeEvent>) + Send + 'static,
-    {
-        QuickAccessMonitor::start(self.clone(), options, callback)
     }
 
     /// Adds an existing file or directory to Quick Access.

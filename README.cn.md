@@ -85,22 +85,6 @@ fn main() -> WincentResult<()> {
     // 先通知 Shell，再刷新匹配的 Quick Access/Home 视图。
     manager.refresh()?;
 
-    // 监控快照变化。监控期间需要保持 guard 存活。
-    // 这会报告 Explorer 和本 crate 自身操作造成的变化。
-    let _monitor = manager.watch_quick_access(
-        QuickAccessMonitorOptions::new().with_qa_type(QuickAccess::All),
-        |event| {
-            if let Ok(event) = event {
-                println!(
-                    "快速访问已变化：+{} -{} reorder={}",
-                    event.added_items().len(),
-                    event.removed_items().len(),
-                    event.is_reorder()
-                );
-            }
-        },
-    )?;
-
     // --- 删除 ---
     // 移除文件。它与 add_item 具有相同的最终一致性边界。
     manager.remove_item("C:\\Projects\\report.docx")?;

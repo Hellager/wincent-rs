@@ -73,7 +73,6 @@ pub mod error;
 mod explorer_window;
 mod handle;
 pub mod manager;
-pub mod monitor;
 mod query;
 mod quick_access_lock;
 mod recent_links;
@@ -92,9 +91,6 @@ pub mod status;
 pub mod prelude {
     pub use crate::error::WincentError;
     pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
-    pub use crate::monitor::{
-        QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions,
-    };
     pub use crate::quick_access_lock::{
         QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
         QuickAccessUnlockReport,
@@ -124,7 +120,6 @@ pub mod prelude {
 
 use crate::error::WincentError;
 
-pub use crate::monitor::{QuickAccessChangeEvent, QuickAccessMonitor, QuickAccessMonitorOptions};
 pub use crate::quick_access_lock::{
     QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
     QuickAccessUnlockReport,

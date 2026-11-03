@@ -31,6 +31,10 @@
   a fallback implementation.
 
 ### Removed
+- `QuickAccessManager::watch_quick_access`, the `monitor` module and its
+  `QuickAccessMonitorOptions`, `QuickAccessMonitor`, and
+  `QuickAccessChangeEvent` types, plus the example CLI `watch` command.
+  Applications can poll `get_items` using their own scheduling and shutdown policy.
 - Visibility `show`/`hide` and category-specific aliases, `VisibilityOptions`,
   `*_with_options` methods, and the visibility-only post-mutation error.
   Use `set_visible(category, bool)` or

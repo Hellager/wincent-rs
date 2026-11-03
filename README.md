@@ -82,22 +82,6 @@ fn main() -> WincentResult<()> {
     // Notify the Shell first, then refresh matching Quick Access/Home views.
     manager.refresh()?;
 
-    // Watch snapshot changes. Keep the guard alive while monitoring.
-    // This reports changes from Explorer and from this crate's own operations.
-    let _monitor = manager.watch_quick_access(
-        QuickAccessMonitorOptions::new().with_qa_type(QuickAccess::All),
-        |event| {
-            if let Ok(event) = event {
-                println!(
-                    "Quick Access changed: +{} -{} reorder={}",
-                    event.added_items().len(),
-                    event.removed_items().len(),
-                    event.is_reorder()
-                );
-            }
-        },
-    )?;
-
     // --- Remove ---
     // Remove a file. The same eventual-consistency rules apply as for add_item.
     manager.remove_item("C:\\Projects\\report.docx")?;
