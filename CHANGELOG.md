@@ -1,11 +1,13 @@
 ## Unreleased
 
+## [0.3.0-alpha.1] - 2026-11-06
+
 ### Added
 - Kind-aware DestList parsing for Recent Files and Frequent Folders, including
   stream-backed visibility candidates and bounded Shell-query results
-- `QuickAccessManager::get_item_status()` for reporting where the observed
-  DestList rules place a path in a default Shell query, with
-  `QuickAccessStatus` and `FrequentFolderSlot`
+- `QuickAccessManager::get_item_status()` for checking a path's Quick Access
+  status, including Frequent Folder pin state, with `QuickAccessStatus` and
+  `FrequentFolderSlot`
 
 ### Changed
 - `QuickAccessManager::remove_item` accepts only a path and automatically
@@ -14,9 +16,13 @@
 - Visible unpinned Frequent Folders now use the native `removefromhome` Shell
   verb; pinned folders use `unpinfromhome`, while Recent files continue to use
   `remove`. All three paths now match Explorer's native UI removal behavior.
-- `QuickAccessLock` can now be moved to another thread for unlocking or dropping
-- Visibility setters now only write the current-user registry values. Success
-  does not guarantee an immediate change in Explorer or the Start menu.
+- `QuickAccessManager::lock(qa_type)` and `unlock()` now own one lock per manager
+  and its clones. Unlock returns paths of new Recent `.lnk` files and attempts
+  to remove them; independent managers still rely on backing-file lock conflicts.
+- Visibility queries and setters use `VisibilityTarget`, including
+  `StartRecommended`. `VisibilityTarget::All` affects only Explorer Recent Files
+  and Frequent Folders. Setters write current-user registry values without
+  guaranteeing an immediate UI change.
 - DestList v4 Frequent Folders now require `access_count >= 3` for unpinned
   visibility candidates, matching Windows 10 1809 and 22H2 observations
 - Zero-length DestList streams are represented as an uninitialized empty state;
@@ -37,8 +43,12 @@
   Applications can poll `get_items` using their own scheduling and shutdown policy.
 - Visibility `show`/`hide` and category-specific aliases, `VisibilityOptions`,
   `*_with_options` methods, and the visibility-only post-mutation error.
-  Use `set_visible(category, bool)` or
-  `set_start_recommended_section_visible(bool)` instead.
+  Use `set_visible(VisibilityTarget, bool)` instead.
+- The separate Start Recommended visibility methods; use
+  `is_visible(VisibilityTarget::StartRecommended)` and
+  `set_visible(VisibilityTarget::StartRecommended, visible)` instead.
+- Category-specific manager lock methods and public `QuickAccessLock` and
+  unlock report types; use the manager's `lock(qa_type)` and `unlock()` methods.
 - Public `RetryPolicy` configuration, `QuickAccessManagerBuilder::retry_policy`,
   `QuickAccessManagerBuilder::try_build`, and the example CLI `retry` command
 - PowerShell script generation, caching, execution, and public error types
