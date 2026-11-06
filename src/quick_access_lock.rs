@@ -14,6 +14,8 @@ use crate::utils::{get_windows_recent_folder, os_str_to_wide_null, paths_equal};
 use crate::WincentResult;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
 use windows::Win32::Storage::FileSystem::{
@@ -174,6 +176,27 @@ pub struct QuickAccessLock {
     /// Held only for their Drop behavior; keeping these handles open is the lock.
     locks: Vec<LockedFile>,
     _gates: Vec<MutationPermit>,
+    _manager_claim: Option<ManagerLockClaim>,
+}
+
+pub(crate) struct ManagerLockClaim {
+    held: Arc<AtomicBool>,
+}
+
+impl ManagerLockClaim {
+    pub(crate) fn acquire(held: &Arc<AtomicBool>) -> WincentResult<Self> {
+        held.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| WincentError::ManagerAlreadyLocked)?;
+        Ok(Self {
+            held: Arc::clone(held),
+        })
+    }
+}
+
+impl Drop for ManagerLockClaim {
+    fn drop(&mut self) {
+        self.held.store(false, Ordering::Release);
+    }
 }
 
 /// An admission handle retained by a Shell worker after caller timeout.
@@ -261,10 +284,6 @@ impl Drop for MutationPermit {
 }
 
 impl QuickAccessLock {
-    pub(crate) fn lock() -> WincentResult<Self> {
-        Self::lock_target(QuickAccessLockTarget::All)
-    }
-
     pub(crate) fn lock_target(target: QuickAccessLockTarget) -> WincentResult<Self> {
         let recent_folder = PathBuf::from(get_windows_recent_folder()?);
         Self::lock_target_in_recent_folder(target, recent_folder)
@@ -301,7 +320,12 @@ impl QuickAccessLock {
             initial_lnk_paths,
             locks,
             _gates: gates,
+            _manager_claim: None,
         })
+    }
+
+    pub(crate) fn attach_manager_claim(&mut self, claim: ManagerLockClaim) {
+        self._manager_claim = Some(claim);
     }
 
     #[must_use]
@@ -509,6 +533,98 @@ mod tests {
     }
 
     #[test]
+    fn manager_unlock_reports_links_and_releases_lock() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )?;
+        let new_link = recent_folder.join("new.lnk");
+        fs::write(&new_link, b"new").map_err(WincentError::Io)?;
+
+        let report = crate::manager::QuickAccessManager::new().unlock(lock)?;
+
+        assert_eq!(report.new_lnk_paths(), std::slice::from_ref(&new_link));
+        assert!(new_link.exists());
+        assert!(can_open_exclusively(&recent_file));
+        Ok(())
+    }
+
+    #[test]
+    fn manager_claim_releases_on_unlock_or_drop() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
+        let held = Arc::new(AtomicBool::new(false));
+
+        for unlock in [true, false] {
+            let claim = ManagerLockClaim::acquire(&held)?;
+            let mut lock = QuickAccessLock::lock_target_in_recent_folder(
+                QuickAccessLockTarget::RecentFiles,
+                recent_folder.clone(),
+            )?;
+            lock.attach_manager_claim(claim);
+            assert!(matches!(
+                ManagerLockClaim::acquire(&held),
+                Err(WincentError::ManagerAlreadyLocked)
+            ));
+
+            if unlock {
+                crate::manager::QuickAccessManager::new().unlock(lock)?;
+            } else {
+                drop(lock);
+            }
+            assert!(!held.load(Ordering::Acquire));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_lock_releases_manager_claim() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, _, frequent_file) = create_recent_fixture()?;
+        fs::remove_file(frequent_file).map_err(WincentError::Io)?;
+        let held = Arc::new(AtomicBool::new(false));
+
+        let result = (|| {
+            let _claim = ManagerLockClaim::acquire(&held)?;
+            QuickAccessLock::lock_target_in_recent_folder(QuickAccessLockTarget::All, recent_folder)
+        })();
+        assert!(result.is_err());
+        assert!(!held.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    fn separate_lock_attempts_conflict_only_for_overlapping_targets() -> WincentResult<()> {
+        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
+        let recent = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )?;
+        assert!(QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )
+        .is_err());
+        assert!(QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::All,
+            recent_folder.clone(),
+        )
+        .is_err());
+
+        let frequent = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::FrequentFolders,
+            recent_folder.clone(),
+        )?;
+        drop(recent);
+        drop(frequent);
+        let all = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::All,
+            recent_folder,
+        )?;
+        drop(all);
+        Ok(())
+    }
+
+    #[test]
     fn lock_can_be_dropped_on_another_thread() -> WincentResult<()> {
         let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
         let lock = QuickAccessLock::lock_target_in_recent_folder(
@@ -548,6 +664,7 @@ mod tests {
             initial_lnk_paths: Vec::new(),
             locks: vec![LockedFile::open(&recent_file)?],
             _gates: Vec::new(),
+            _manager_claim: None,
         };
         assert!(!can_open_exclusively(&recent_file));
 

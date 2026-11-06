@@ -5,13 +5,17 @@ use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     empty,
     error::WincentError,
-    quick_access_lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
+    quick_access_lock::{
+        ManagerLockClaim, MutationPermit, QuickAccessLock, QuickAccessLockTarget,
+        QuickAccessUnlockReport,
+    },
     status::QuickAccessStatus,
     utils::paths_equal,
     QuickAccess, WincentResult,
 };
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -117,6 +121,7 @@ impl QuickAccessManagerBuilder {
         QuickAccessManager {
             timeout: self.timeout,
             backend: self.backend,
+            lock_held: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -149,6 +154,7 @@ impl QuickAccessManagerBuilder {
 pub struct QuickAccessManager {
     timeout: Duration,
     backend: Arc<dyn QuickAccessBackend>,
+    lock_held: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for QuickAccessManager {
@@ -189,7 +195,11 @@ impl QuickAccessManager {
         timeout: Duration,
         backend: Arc<dyn QuickAccessBackend>,
     ) -> Self {
-        Self { timeout, backend }
+        Self {
+            timeout,
+            backend,
+            lock_held: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// Retrieves Quick Access items as strings.
@@ -566,36 +576,54 @@ impl QuickAccessManager {
         }
     }
 
-    /// Locks Explorer's Recent Files and Frequent Folders automatic destination files.
+    /// Locks the selected Quick Access backing files.
     ///
-    /// The returned guard rejects mutations from cooperating wincent instances
-    /// and holds OS file handles that inhibit writes to Explorer's backing files.
-    /// Other Shell clients may still report success or time out, and Recent
-    /// shortcuts may still be created.
+    /// `QuickAccess::All` locks both categories. The returned guard rejects
+    /// cooperating mutations and inhibits writes to the selected backing files
+    /// until it is unlocked or dropped.
+    /// A manager and its clones can hold only one lock at a time.
+    /// Independent managers may lock different categories concurrently; an
+    /// overlapping lock attempt fails at the system file gate.
     ///
-    /// Use [`QuickAccessLock::unlock`] with
-    /// [`crate::QuickAccessUnlockOptions::cleanup_new_recent_links`] to delete
-    /// `.lnk` files that appeared in the Windows Recent folder while locked.
-    pub fn lock_quick_access(&self) -> WincentResult<QuickAccessLock> {
-        QuickAccessLock::lock()
+    /// # Errors
+    ///
+    /// Returns [`WincentError::ManagerAlreadyLocked`] if this manager already
+    /// holds a lock, or an error if a backing file cannot be locked.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use wincent::prelude::*;
+    ///
+    /// # fn main() -> WincentResult<()> {
+    /// let manager = QuickAccessManager::new();
+    /// let lock = manager.lock(QuickAccess::RecentFiles)?;
+    /// let _report = manager.unlock(lock)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn lock(&self, qa_type: QuickAccess) -> WincentResult<QuickAccessLock> {
+        let claim = ManagerLockClaim::acquire(&self.lock_held)?;
+        let target = match qa_type {
+            QuickAccess::RecentFiles => QuickAccessLockTarget::RecentFiles,
+            QuickAccess::FrequentFolders => QuickAccessLockTarget::FrequentFolders,
+            QuickAccess::All => QuickAccessLockTarget::All,
+        };
+        let mut lock = QuickAccessLock::lock_target(target)?;
+        lock.attach_manager_claim(claim);
+        Ok(lock)
     }
 
-    /// Locks Explorer's Recent Files automatic destination file.
+    /// Releases a Quick Access lock and reports Recent shortcut changes.
     ///
-    /// While held, cooperating wincent mutations of Recent Files are rejected.
-    /// New opens for writing the backing file are inhibited. Explorer may still
-    /// create Recent shortcuts or report a Shell operation as successful.
-    pub fn lock_recent_files(&self) -> WincentResult<QuickAccessLock> {
-        QuickAccessLock::lock_target(QuickAccessLockTarget::RecentFiles)
-    }
-
-    /// Locks Explorer's Frequent Folders automatic destination file.
+    /// The lock is consumed and its backing-file handles are released even if
+    /// collecting the report fails.
     ///
-    /// While held, cooperating wincent mutations of Frequent Folders are
-    /// rejected. New opens for writing the backing file are inhibited; Shell
-    /// operations outside wincent may still time out or report success.
-    pub fn lock_frequent_folders(&self) -> WincentResult<QuickAccessLock> {
-        QuickAccessLock::lock_target(QuickAccessLockTarget::FrequentFolders)
+    /// # Errors
+    ///
+    /// Returns an error if the Recent shortcuts cannot be read.
+    pub fn unlock(&self, lock: QuickAccessLock) -> WincentResult<QuickAccessUnlockReport> {
+        lock.unlock(Default::default())
     }
 
     /// Notifies the Shell about Quick Access changes and refreshes matching
@@ -779,7 +807,28 @@ impl QuickAccessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
     use std::sync::Mutex;
+
+    #[test]
+    fn manager_and_clones_share_one_lock_slot() -> WincentResult<()> {
+        let manager = QuickAccessManager::new();
+        let clone = manager.clone();
+        let claim = ManagerLockClaim::acquire(&manager.lock_held)?;
+
+        assert!(matches!(
+            manager.lock(QuickAccess::RecentFiles),
+            Err(WincentError::ManagerAlreadyLocked)
+        ));
+        assert!(matches!(
+            clone.lock(QuickAccess::FrequentFolders),
+            Err(WincentError::ManagerAlreadyLocked)
+        ));
+
+        drop(claim);
+        assert!(!clone.lock_held.load(Ordering::Acquire));
+        Ok(())
+    }
 
     #[derive(Default)]
     struct FakeBackend {

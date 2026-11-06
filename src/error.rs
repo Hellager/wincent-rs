@@ -108,6 +108,10 @@ pub enum WincentError {
         qa_type: crate::quick_access_lock::QuickAccessLockTarget,
     },
 
+    /// This manager already has an outstanding Quick Access lock.
+    #[error("Quick Access manager already holds a lock")]
+    ManagerAlreadyLocked,
+
     /// A clear operation completed some categories before a later category failed.
     #[error(
         "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"
