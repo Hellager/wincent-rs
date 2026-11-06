@@ -131,9 +131,8 @@ impl QuickAccessManagerBuilder {
 /// This type is a thin synchronous facade over Quick Access query, mutation,
 /// clearing, locking, refresh, and visibility operations.
 ///
-/// Prefer this facade over lower-level modules. It keeps path conversion,
-/// timeout handling, visibility helpers, and DestList helpers behind one stable
-/// API surface.
+/// Prefer this facade over lower-level modules for a consistent API to query
+/// and manage Quick Access.
 ///
 /// # Examples
 ///
@@ -202,22 +201,14 @@ impl QuickAccessManager {
         }
     }
 
-    /// Retrieves Quick Access items as strings.
+    /// Returns the selected Quick Access items as path strings.
     ///
-    /// This reads Explorer's on-disk DestList directly and applies the
-    /// `CAutoList` rules plus Explorer's Folder Options hidden-item setting.
-    /// Queries do not invoke Shell COM.
-    ///
-    /// The returned values match the UI-visible result from persisted backing
-    /// data. Hidden filtering uses the attributes serialized when each item
-    /// was added, not the target's current filesystem attributes. An already-
-    /// open Explorer view may temporarily differ while its UI cache refreshes.
-    /// Returned paths may also point to items that no longer exist on disk.
+    /// The returned items match those shown in Explorer's Quick Access once
+    /// its view is up to date.
     ///
     /// # Errors
     ///
-    /// Returns I/O, path-resolution, unsupported-version, or DestList parse
-    /// errors when the persisted backing data cannot be read and evaluated.
+    /// Returns an error if the items cannot be retrieved.
     ///
     /// # Examples
     ///
@@ -302,32 +293,14 @@ impl QuickAccessManager {
         Ok(items.iter().any(|item| paths_equal(item, &path)))
     }
 
-    /// Returns where a path appears in a default Quick Access Shell query.
-    ///
-    /// Both lists are read from Explorer's `.automaticDestinations-ms` backing
-    /// files and evaluated with the same rules as the DestList API. The result
-    /// mirrors the observed default Shell query without running Shell/COM code
-    /// or modifying state. It does not inspect the currently rendered Explorer
-    /// window, which may remain stale until refreshed.
-    ///
-    /// A path omitted by both rule-based results returns the default
-    /// [`QuickAccessStatus`], for which
-    /// [`QuickAccessStatus::is_visible`] is `false`. This does not distinguish
-    /// "absent from the backing file" from "present but filtered out"; use
-    /// [`crate::destlist::entries`] on a parsed backing file to inspect the raw
-    /// entries.
-    ///
-    /// Explorer persists its own changes asynchronously, so a path that was
-    /// just added can be absent, or a path that was just removed can remain, in
-    /// the rule-based result for a short time. A missing backing file is treated
-    /// as an empty list.
+    /// Returns a path's Quick Access status, primarily to check whether a
+    /// frequent folder is pinned. A path not shown in Quick Access returns
+    /// the default [`QuickAccessStatus`].
     ///
     /// # Errors
     ///
-    /// Returns [`WincentError::InvalidPath`] when `path` is empty. Returns I/O or
-    /// DestList parse errors when an existing backing file cannot be read or
-    /// parsed, and [`WincentError::DestListUnsupportedVersion`] when Explorer
-    /// uses an unsupported DestList version.
+    /// Returns [`WincentError::InvalidPath`] when `path` is empty, or an error
+    /// if its status cannot be retrieved.
     ///
     /// # Examples
     ///
@@ -427,21 +400,13 @@ impl QuickAccessManager {
     /// Adds an existing file or directory to Quick Access.
     ///
     /// Files are added to Recent Files and directories are pinned to Frequent
-    /// Folders. Other path types and missing paths are rejected. Existing items
-    /// return [`WincentError::AlreadyExists`]. Explorer updates its UI
-    /// asynchronously, so the visible result may lag behind a successful call.
+    /// Folders.
     ///
-    /// `Ok(())` means that the selected Shell mutation returned successfully. It
-    /// does not guarantee that Explorer has already persisted the change, that a
-    /// new rule-based query observes it, or that an open Explorer window has
-    /// redrawn. Use [`QuickAccessManager::get_item_status`] when persisted-state
-    /// confirmation is required and [`QuickAccessManager::refresh`] when an open
-    /// Explorer view should be notified and refreshed.
+    /// `Ok(())` means the operation completed, not that Explorer has immediately
+    /// applied the change. Use [`QuickAccessManager::refresh`] to update the view,
+    /// then inspect it to confirm the result.
     ///
-    /// A timeout is an indeterminate outcome rather than a confirmed failure.
-    /// The underlying Shell operation can still complete after this method
-    /// returns [`WincentError::Timeout`], so callers should inspect state before
-    /// deciding whether another mutation is appropriate.
+    /// A timeout does not confirm failure; check the result before retrying.
     ///
     /// # Errors
     ///
@@ -490,28 +455,11 @@ impl QuickAccessManager {
 
     /// Removes an existing file or directory from Quick Access.
     ///
-    /// The operation is selected automatically:
+    /// `Ok(())` means the operation completed, not that Explorer has immediately
+    /// applied the change. Use [`QuickAccessManager::refresh`] to update the view,
+    /// then inspect it to confirm the result.
     ///
-    /// - files use the Recent Files `remove` Shell verb, which blocks the entry
-    ///   from the UI but can retain its DestList entry and numeric stream;
-    /// - visible unpinned directories use the native `removefromhome` Shell
-    ///   verb, which blocks the entry from the UI while retaining its DestList
-    ///   entry and numeric stream;
-    /// - pinned directories use the native `unpinfromhome` Shell verb. Windows
-    ///   can retain an entry with cleared usage or physically remove a zero-use
-    ///   entry.
-    ///
-    /// `Ok(())` means that the selected Shell mutation returned successfully.
-    /// Frequent-folder removal also verifies the live namespace while handling
-    /// Shell verbs that can behave like toggles. Neither result guarantees that
-    /// Explorer has already persisted the final DestList state or redrawn an
-    /// open window.
-    ///
-    /// A timeout is an indeterminate outcome rather than a confirmed failure.
-    /// The underlying Shell operation can still complete after this method
-    /// returns [`WincentError::Timeout`]. Mutations are never retried
-    /// automatically; callers should inspect state before issuing another add or
-    /// remove operation.
+    /// A timeout does not confirm failure; check the result before retrying.
     ///
     /// # Errors
     ///
@@ -643,10 +591,10 @@ impl QuickAccessManager {
 
     /// Clears Quick Access items.
     ///
-    /// `QuickAccess::RecentFiles` removes all Recent Files history and its
-    /// corresponding shortcuts. `QuickAccess::FrequentFolders` removes all
-    /// recorded Frequent Folders and their corresponding shortcuts.
-    /// `QuickAccess::All` clears both categories.
+    /// - `QuickAccess::RecentFiles` removes Recent Files history and its shortcuts.
+    /// - `QuickAccess::FrequentFolders` removes recorded Frequent Folders and
+    ///   their shortcuts.
+    /// - `QuickAccess::All` clears both categories.
     ///
     /// User-created Frequent Folders entries, including user-pinned folders,
     /// are not preserved. Windows may recreate system-default pinned folders.
@@ -711,17 +659,18 @@ impl QuickAccessManager {
 
     /// Sets whether a Quick Access section is visible in Explorer.
     ///
+    /// - `QuickAccess::RecentFiles` controls Recent Files visibility.
+    /// - `QuickAccess::FrequentFolders` controls unpinned Frequent Folders
+    ///   visibility; pinned folders remain visible when set to `false`.
+    /// - `QuickAccess::All` applies `visible` to both categories, with the same
+    ///   pinned-folder behavior when set to `false`.
+    ///
     /// Success means the current-user registry value was written, not that an
     /// open Explorer view has already reflected the change. This does not
     /// refresh Explorer.
     ///
     /// `QuickAccess::All` writes two values in sequence. If the second write
     /// fails, the first value may already have changed.
-    ///
-    /// When hiding `QuickAccess::FrequentFolders` through this registry-backed
-    /// API, Explorer hides unpinned frequent folders, while pinned folders
-    /// remain visible. Passing `QuickAccess::All` with `visible` set to `false`
-    /// has the same Frequent Folders behavior.
     ///
     /// # Errors
     ///
