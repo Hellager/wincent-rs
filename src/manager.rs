@@ -5,18 +5,14 @@ use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     empty,
     error::WincentError,
-    quick_access_lock::{
-        ManagerLockClaim, MutationPermit, QuickAccessLock, QuickAccessLockTarget,
-        QuickAccessUnlockReport,
-    },
+    quick_access_lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
     status::QuickAccessStatus,
     utils::paths_equal,
     QuickAccess, WincentResult,
 };
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 fn path_to_shell_string(path: &Path) -> WincentResult<String> {
@@ -121,7 +117,7 @@ impl QuickAccessManagerBuilder {
         QuickAccessManager {
             timeout: self.timeout,
             backend: self.backend,
-            lock_held: Arc::new(AtomicBool::new(false)),
+            lock_state: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -153,7 +149,7 @@ impl QuickAccessManagerBuilder {
 pub struct QuickAccessManager {
     timeout: Duration,
     backend: Arc<dyn QuickAccessBackend>,
-    lock_held: Arc<AtomicBool>,
+    lock_state: Arc<Mutex<Option<QuickAccessLock>>>,
 }
 
 impl fmt::Debug for QuickAccessManager {
@@ -197,7 +193,7 @@ impl QuickAccessManager {
         Self {
             timeout,
             backend,
-            lock_held: Arc::new(AtomicBool::new(false)),
+            lock_state: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -526,9 +522,9 @@ impl QuickAccessManager {
 
     /// Locks the selected Quick Access backing files.
     ///
-    /// `QuickAccess::All` locks both categories. The returned guard rejects
-    /// cooperating mutations and inhibits writes to the selected backing files
-    /// until it is unlocked or dropped.
+    /// `QuickAccess::All` locks both categories. The lock rejects cooperating
+    /// mutations and inhibits writes to the selected backing files until
+    /// [`QuickAccessManager::unlock`] or the last manager clone is dropped.
     /// A manager and its clones can hold only one lock at a time.
     /// Independent managers may lock different categories concurrently; an
     /// overlapping lock attempt fails at the system file gate.
@@ -545,33 +541,44 @@ impl QuickAccessManager {
     ///
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
-    /// let lock = manager.lock(QuickAccess::RecentFiles)?;
-    /// let _report = manager.unlock(lock)?;
+    /// manager.lock(QuickAccess::RecentFiles)?;
+    /// let new_links = manager.unlock()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn lock(&self, qa_type: QuickAccess) -> WincentResult<QuickAccessLock> {
-        let claim = ManagerLockClaim::acquire(&self.lock_held)?;
+    pub fn lock(&self, qa_type: QuickAccess) -> WincentResult<()> {
+        let mut state = self
+            .lock_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.is_some() {
+            return Err(WincentError::ManagerAlreadyLocked);
+        }
         let target = match qa_type {
             QuickAccess::RecentFiles => QuickAccessLockTarget::RecentFiles,
             QuickAccess::FrequentFolders => QuickAccessLockTarget::FrequentFolders,
             QuickAccess::All => QuickAccessLockTarget::All,
         };
-        let mut lock = QuickAccessLock::lock_target(target)?;
-        lock.attach_manager_claim(claim);
-        Ok(lock)
+        *state = Some(QuickAccessLock::lock_target(target)?);
+        Ok(())
     }
 
-    /// Releases a Quick Access lock and reports Recent shortcut changes.
+    /// Releases the lock and returns paths of Recent `.lnk` files added while locked.
     ///
-    /// The lock is consumed and its backing-file handles are released even if
-    /// collecting the report fails.
+    /// These paths are for reference and do not represent every blocked item.
+    /// The lock is released even if this method returns an error.
     ///
     /// # Errors
     ///
-    /// Returns an error if the Recent shortcuts cannot be read.
-    pub fn unlock(&self, lock: QuickAccessLock) -> WincentResult<QuickAccessUnlockReport> {
-        lock.unlock(Default::default())
+    /// Returns [`WincentError::ManagerNotLocked`] if no lock is held, or an
+    /// error if the Recent shortcuts cannot be processed.
+    pub fn unlock(&self) -> WincentResult<Vec<String>> {
+        let mut state = self
+            .lock_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let lock = state.take().ok_or(WincentError::ManagerNotLocked)?;
+        lock.unlock()
     }
 
     /// Notifies the Shell about Quick Access changes and refreshes matching
@@ -756,14 +763,36 @@ impl QuickAccessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
+    use std::fs;
     use std::sync::Mutex;
 
+    fn lock_fixture() -> WincentResult<(tempfile::TempDir, PathBuf)> {
+        let dir = tempfile::tempdir().map_err(WincentError::Io)?;
+        let destinations = dir.path().join("AutomaticDestinations");
+        fs::create_dir(&destinations).map_err(WincentError::Io)?;
+        for file in [
+            crate::quick_access_lock::RECENT_FILES_AUTOMATIC_DESTINATION,
+            crate::quick_access_lock::FREQUENT_FOLDERS_AUTOMATIC_DESTINATION,
+        ] {
+            fs::write(destinations.join(file), b"lock").map_err(WincentError::Io)?;
+        }
+        let path = dir.path().to_path_buf();
+        Ok((dir, path))
+    }
+
     #[test]
-    fn manager_and_clones_share_one_lock_slot() -> WincentResult<()> {
+    fn manager_and_clones_share_lock_and_unlock() -> WincentResult<()> {
+        let (_dir, recent_folder) = lock_fixture()?;
         let manager = QuickAccessManager::new();
         let clone = manager.clone();
-        let claim = ManagerLockClaim::acquire(&manager.lock_held)?;
+        let lock = QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )?;
+        *manager
+            .lock_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(lock);
 
         assert!(matches!(
             manager.lock(QuickAccess::RecentFiles),
@@ -774,8 +803,51 @@ mod tests {
             Err(WincentError::ManagerAlreadyLocked)
         ));
 
-        drop(claim);
-        assert!(!clone.lock_held.load(Ordering::Acquire));
+        let new_link = recent_folder.join("new.lnk");
+        fs::write(&new_link, b"new").map_err(WincentError::Io)?;
+        assert_eq!(
+            clone.unlock()?,
+            vec![new_link.to_string_lossy().into_owned()]
+        );
+        assert!(!new_link.exists());
+        assert!(matches!(
+            manager.unlock(),
+            Err(WincentError::ManagerNotLocked)
+        ));
+        assert!(QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder,
+        )
+        .is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn last_manager_clone_drop_releases_lock() -> WincentResult<()> {
+        let (_dir, recent_folder) = lock_fixture()?;
+        let manager = QuickAccessManager::new();
+        let clone = manager.clone();
+        *manager
+            .lock_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some(QuickAccessLock::lock_target_in_recent_folder(
+                QuickAccessLockTarget::RecentFiles,
+                recent_folder.clone(),
+            )?);
+
+        drop(manager);
+        assert!(QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder.clone(),
+        )
+        .is_err());
+        drop(clone);
+        assert!(QuickAccessLock::lock_target_in_recent_folder(
+            QuickAccessLockTarget::RecentFiles,
+            recent_folder,
+        )
+        .is_ok());
         Ok(())
     }
 

@@ -91,10 +91,7 @@ pub mod status;
 pub mod prelude {
     pub use crate::error::WincentError;
     pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
-    pub use crate::quick_access_lock::{
-        QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
-        QuickAccessUnlockReport,
-    };
+    pub use crate::quick_access_lock::QuickAccessLockTarget;
     pub use crate::status::{FrequentFolderSlot, QuickAccessStatus};
 
     pub use crate::visible::{
@@ -120,10 +117,7 @@ pub mod prelude {
 
 use crate::error::WincentError;
 
-pub use crate::quick_access_lock::{
-    QuickAccessLock, QuickAccessLockTarget, QuickAccessUnlockFailure, QuickAccessUnlockOptions,
-    QuickAccessUnlockReport,
-};
+pub use crate::quick_access_lock::QuickAccessLockTarget;
 pub use crate::recent_links::find_windows_recent_links_for_target;
 
 /// Quick Access categories supported by this crate.

@@ -172,7 +172,7 @@ Core:
     detects Recent files and pinned or unpinned Frequent Folders automatically.
   refresh
     notifies the Shell, then refreshes open Explorer views.
-  lock [recent|frequent|all] [--cleanup-new-links]
+  lock [recent|frequent|all]
     Locked targets block Explorer from adding or removing matching Quick Access items.
   empty <recent|frequent|all>
 Utility APIs:
@@ -351,40 +351,28 @@ fn cmd_refresh(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
 }
 
 fn cmd_lock(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    let cleanup = args.iter().any(|arg| arg == "--cleanup-new-links");
+    if args.len() > 1 {
+        return Err(WincentError::InvalidArgument(
+            "usage: lock [recent|frequent|all]".to_string(),
+        ));
+    }
     let target = args
-        .iter()
-        .find(|arg| arg.as_str() != "--cleanup-new-links")
+        .first()
         .map(|arg| parse_category(arg, true))
         .transpose()?
         .unwrap_or(QuickAccess::All);
-    let lock = manager.lock(target)?;
+    manager.lock(target)?;
     println!("locked Quick Access backing files");
-    println!("target: {:?}", lock.target());
-    println!("recent_folder: {}", lock.recent_folder().display());
-    println!("initial_lnk_paths: {}", lock.initial_lnk_paths().len());
+    println!("target: {target:?}");
     println!("press Enter to unlock");
 
     let mut line = String::new();
     io::stdin().read_line(&mut line).map_err(WincentError::Io)?;
 
-    let report = if cleanup {
-        lock.unlock(QuickAccessUnlockOptions::new().cleanup_new_recent_links())?
-    } else {
-        manager.unlock(lock)?
-    };
-    println!("current_lnk_paths: {}", report.current_lnk_paths().len());
-    println!("new_lnk_paths: {}", report.new_lnk_paths().len());
-    println!("deleted_lnk_paths: {}", report.deleted_lnk_paths().len());
-    println!(
-        "failed_lnk_deletions: {}",
-        report.failed_lnk_deletions().len()
-    );
-    for path in report.deleted_lnk_paths() {
-        println!("  deleted {}", path.display());
-    }
-    for failure in report.failed_lnk_deletions() {
-        println!("  failed {}: {}", failure.path().display(), failure.error());
+    let new_links = manager.unlock()?;
+    println!("new_lnk_paths: {}", new_links.len());
+    for path in new_links {
+        println!("  {path}");
     }
     Ok(())
 }

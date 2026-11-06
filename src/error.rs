@@ -112,6 +112,10 @@ pub enum WincentError {
     #[error("Quick Access manager already holds a lock")]
     ManagerAlreadyLocked,
 
+    /// This manager has no outstanding Quick Access lock.
+    #[error("Quick Access manager has no lock to release")]
+    ManagerNotLocked,
+
     /// A clear operation completed some categories before a later category failed.
     #[error(
         "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"
