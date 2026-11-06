@@ -8,7 +8,7 @@ use crate::{
     quick_access_lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
     status::QuickAccessStatus,
     utils::paths_equal,
-    QuickAccess, WincentResult,
+    QuickAccess, VisibilityTarget, WincentResult,
 };
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -641,11 +641,13 @@ impl QuickAccessManager {
         empty::empty_items_with_backend(qa_type, self.timeout, self.backend.as_ref())
     }
 
-    /// Checks whether a Quick Access section is visible in Explorer.
+    /// Checks the configured visibility of an Explorer section or Start Recommended.
+    ///
+    /// `VisibilityTarget::All` checks only Recent Files and Frequent Folders.
     ///
     /// # Errors
     ///
-    /// Returns registry I/O errors when the current user's Explorer settings
+    /// Returns registry I/O errors when the current user's visibility settings
     /// cannot be read.
     ///
     /// # Examples
@@ -655,33 +657,36 @@ impl QuickAccessManager {
     /// use wincent::prelude::*;
     ///
     /// let manager = QuickAccessManager::new();
-    /// let visible = manager.is_visible(QuickAccess::RecentFiles)?;
+    /// let visible = manager.is_visible(VisibilityTarget::RecentFiles)?;
     /// println!("Recent Files visible: {visible}");
     /// # Ok(())
     /// # }
     /// ```
-    pub fn is_visible(&self, qa_type: QuickAccess) -> WincentResult<bool> {
-        visible::is_visible(qa_type)
+    pub fn is_visible(&self, target: VisibilityTarget) -> WincentResult<bool> {
+        visible::is_visible(target)
     }
 
-    /// Sets whether a Quick Access section is visible in Explorer.
+    /// Sets the visibility of an Explorer section or Start Recommended.
     ///
-    /// - `QuickAccess::RecentFiles` controls Recent Files visibility.
-    /// - `QuickAccess::FrequentFolders` controls unpinned Frequent Folders
+    /// - `VisibilityTarget::RecentFiles` controls Recent Files visibility.
+    /// - `VisibilityTarget::FrequentFolders` controls unpinned Frequent Folders
     ///   visibility; pinned folders remain visible when set to `false`.
-    /// - `QuickAccess::All` applies `visible` to both categories, with the same
-    ///   pinned-folder behavior when set to `false`.
+    /// - `VisibilityTarget::StartRecommended` controls recent files in Windows
+    ///   Recommended items. On some Windows 11 builds, hiding it also hides
+    ///   Explorer Recent Files.
+    /// - `VisibilityTarget::All` applies `visible` to both Explorer categories,
+    ///   excluding Start Recommended.
     ///
-    /// Success means the current-user registry value was written, not that an
-    /// open Explorer view has already reflected the change. This does not
-    /// refresh Explorer.
+    /// Success means the current-user registry value was written, not that
+    /// Explorer or the Start menu has already reflected the change. This does
+    /// not refresh either UI.
     ///
-    /// `QuickAccess::All` writes two values in sequence. If the second write
+    /// `VisibilityTarget::All` writes two values in sequence. If the second write
     /// fails, the first value may already have changed.
     ///
     /// # Errors
     ///
-    /// Returns registry I/O errors when the current user's Explorer settings
+    /// Returns registry I/O errors when the current user's visibility settings
     /// cannot be created or updated.
     ///
     /// # Examples
@@ -691,51 +696,12 @@ impl QuickAccessManager {
     /// use wincent::prelude::*;
     ///
     /// let manager = QuickAccessManager::new();
-    /// manager.set_visible(QuickAccess::RecentFiles, true)?;
+    /// manager.set_visible(VisibilityTarget::RecentFiles, true)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn set_visible(&self, qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
-        visible::set_visible(qa_type, visible)
-    }
-
-    /// Checks whether recently used files appear in Windows Recommended items.
-    ///
-    /// This reads the current-user `Start_TrackDocs` Explorer Advanced value
-    /// used by the Windows Recommended recent-files setting. Policy values,
-    /// MDM settings, Windows edition, or Explorer version can override the
-    /// effective UI state.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be read.
-    pub fn is_start_recommended_section_visible(&self) -> WincentResult<bool> {
-        visible::is_start_recommended_section_visible()
-    }
-
-    /// Sets whether recently used files appear in Windows Recommended items.
-    ///
-    /// Passing `true` writes `Start_TrackDocs = 1`; passing `false` writes
-    /// `Start_TrackDocs = 0` under the current-user Explorer Advanced key.
-    /// This controls whether recently used files appear in Windows Recommended
-    /// items.
-    ///
-    /// Success means the registry value was written, not that the Start menu
-    /// has already reflected the change. This does not refresh Explorer or
-    /// the Start menu.
-    ///
-    /// On some Windows 11 builds, setting this to `false` can also make
-    /// Explorer Recent Files invisible. In that state, make Start Recommended
-    /// visible again before relying on `ShowRecent` to control Recent Files
-    /// visibility.
-    ///
-    /// # Errors
-    ///
-    /// Returns registry I/O errors when the current-user Explorer Advanced key
-    /// cannot be created or updated.
-    pub fn set_start_recommended_section_visible(&self, visible: bool) -> WincentResult<()> {
-        visible::set_start_recommended_section_visible(visible)
+    pub fn set_visible(&self, target: VisibilityTarget, visible: bool) -> WincentResult<()> {
+        visible::set_visible(target, visible)
     }
 
     fn ensure_not_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {

@@ -94,10 +94,7 @@ pub mod prelude {
     pub use crate::quick_access_lock::QuickAccessLockTarget;
     pub use crate::status::{FrequentFolderSlot, QuickAccessStatus};
 
-    pub use crate::visible::{
-        is_start_recommended_section_visible, is_visible, set_start_recommended_section_visible,
-        set_visible,
-    };
+    pub use crate::visible::{is_visible, set_visible, VisibilityTarget};
 
     pub use crate::utils::{get_windows_version, WindowsVersion};
 
@@ -119,6 +116,7 @@ use crate::error::WincentError;
 
 pub use crate::quick_access_lock::QuickAccessLockTarget;
 pub use crate::recent_links::find_windows_recent_links_for_target;
+pub use crate::visible::VisibilityTarget;
 
 /// Quick Access categories supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

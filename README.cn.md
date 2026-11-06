@@ -103,8 +103,8 @@ fn main() -> WincentResult<()> {
 - **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。超时后的最终状态未知，底层操作仍可能稍后完成。库不会自动重试修改操作；再次修改前应先检查状态。
 - **自动删除分流**：`remove_item(path)` 自动识别文件和目录。Recent file 使用原生 `remove` Shell verb，未固定 Frequent Folder 使用 `removefromhome`，已固定 Frequent Folder 使用 `unpinfromhome`。
 - **清空行为**：`empty_items(...)` 成功清空后会刷新 Explorer。清空 Frequent Folders 会移除用户创建的项目（包括用户固定项）；Windows 可能重建系统默认固定项。
-- **开始菜单推荐项目可见性**：Start Recommended API 面向 Windows 11 开始菜单。它们写入当前用户的 `Explorer\Advanced\Start_TrackDocs` 值，不会在 Windows 10 上被阻止；但在 Windows 10 上该设置可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复最近文件可见性，请先显示开始菜单推荐项目，再用 `ShowRecent` 控制最近文件可见性。
-- **可见性写入**：`set_visible(category, bool)` 和 `set_start_recommended_section_visible(bool)` 只写入当前用户的注册表设置；成功不保证界面立即变化。相应的查询读取配置值，而非当前界面状态。`QuickAccess::All` 依次写入两个值，第二次写入失败时可能已经修改了第一个值。
+- **开始菜单推荐项目可见性**：`VisibilityTarget::StartRecommended` 通过当前用户的 `Explorer\Advanced\Start_TrackDocs` 值控制 Windows 11 开始菜单中的最近使用文件。Windows 10 上不会阻止该设置，但它可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复可见性，请先显示开始菜单推荐项目。
+- **可见性写入**：`set_visible(target, bool)` 只写入当前用户的注册表设置；成功不保证界面立即变化。`is_visible(target)` 读取配置值，而非当前界面状态。`VisibilityTarget::All` 只包含文件资源管理器中的最近文件和常用文件夹，依次写入两个值；第二次写入失败时第一次可能已成功。
 
 ## 贡献指南
 

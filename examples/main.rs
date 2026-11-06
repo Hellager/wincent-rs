@@ -179,11 +179,9 @@ Utility APIs:
   invalid-path <reason> [path]
 
 Visibility APIs:
-  visible get <recent|frequent|all>
-  visible set <recent|frequent|all> <true|false>
-  visible get-start-recommended
-  visible set-start-recommended <true|false>
-  Start Recommended commands control recent files in Windows Recommended items.
+  visible get <recent|frequent|start|all>
+  visible set <recent|frequent|start|all> <true|false>
+  The start target controls recent files in Windows Recommended items.
   Successful writes do not guarantee the UI changes immediately.
 
 DestList APIs:
@@ -412,28 +410,19 @@ fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
     require_len(args, 1, "visible <command>")?;
     match args[0].as_str() {
         "get" => {
-            require_exact_len(&args[1..], 1, "visible get <recent|frequent|all>")?;
-            let qa_type = parse_category(&args[1], true)?;
-            println!("{}", manager.is_visible(qa_type)?);
+            require_exact_len(&args[1..], 1, "visible get <recent|frequent|start|all>")?;
+            let target = parse_visibility_target(&args[1])?;
+            println!("{}", manager.is_visible(target)?);
         }
         "set" => {
             require_exact_len(
                 &args[1..],
                 2,
-                "visible set <recent|frequent|all> <true|false>",
+                "visible set <recent|frequent|start|all> <true|false>",
             )?;
-            let qa_type = parse_category(&args[1], true)?;
-            manager.set_visible(qa_type, parse_bool(&args[2])?)?;
+            let target = parse_visibility_target(&args[1])?;
+            manager.set_visible(target, parse_bool(&args[2])?)?;
             println!("updated visibility");
-        }
-        "get-start-recommended" => {
-            require_exact_len(&args[1..], 0, "visible get-start-recommended")?;
-            println!("{}", manager.is_start_recommended_section_visible()?);
-        }
-        "set-start-recommended" => {
-            require_exact_len(&args[1..], 1, "visible set-start-recommended <true|false>")?;
-            manager.set_start_recommended_section_visible(parse_bool(&args[1])?)?;
-            println!("updated recommended recent files visibility");
         }
         other => {
             return Err(WincentError::InvalidArgument(format!(
@@ -669,6 +658,18 @@ fn parse_category(value: &str, allow_all: bool) -> WincentResult<QuickAccess> {
         )),
         other => Err(WincentError::InvalidArgument(format!(
             "unknown Quick Access category: {other}"
+        ))),
+    }
+}
+
+fn parse_visibility_target(value: &str) -> WincentResult<VisibilityTarget> {
+    match value {
+        "recent" | "recent-files" | "files" => Ok(VisibilityTarget::RecentFiles),
+        "frequent" | "frequent-folders" | "folders" => Ok(VisibilityTarget::FrequentFolders),
+        "start" | "start-recommended" => Ok(VisibilityTarget::StartRecommended),
+        "all" => Ok(VisibilityTarget::All),
+        other => Err(WincentError::InvalidArgument(format!(
+            "unknown visibility target: {other}"
         ))),
     }
 }
@@ -969,16 +970,29 @@ mod tests {
     }
 
     #[test]
-    fn visible_set_start_recommended_requires_bool_argument() {
+    fn visibility_target_parses_start_without_changing_quick_access_categories() {
+        assert_eq!(
+            parse_visibility_target("start").unwrap(),
+            VisibilityTarget::StartRecommended
+        );
+        assert_eq!(
+            parse_visibility_target("all").unwrap(),
+            VisibilityTarget::All
+        );
+        assert!(parse_category("start", true).is_err());
+    }
+
+    #[test]
+    fn visible_set_start_requires_bool_argument() {
         let error = require_exact_len(
-            &[] as &[String],
-            1,
-            "visible set-start-recommended <true|false>",
+            &["start".to_string()],
+            2,
+            "visible set <recent|frequent|start|all> <true|false>",
         )
         .unwrap_err();
 
         assert!(
-            matches!(error, WincentError::InvalidArgument(message) if message == "usage: visible set-start-recommended <true|false>")
+            matches!(error, WincentError::InvalidArgument(message) if message == "usage: visible set <recent|frequent|start|all> <true|false>")
         );
     }
 
@@ -991,7 +1005,7 @@ mod tests {
                 "--refresh-explorer".to_string(),
             ],
             2,
-            "visible set <recent|frequent|all> <true|false>",
+            "visible set <recent|frequent|start|all> <true|false>",
         )
         .unwrap_err();
 

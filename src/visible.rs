@@ -5,9 +5,9 @@
 //!
 //! ## Behavior notes
 //!
-//! This module changes only the current user's `ShowRecent` and `ShowFrequent`
-//! registry values. It does not invoke the Explorer Folder Options UI and does
-//! not deliberately clear Quick Access history.
+//! This module changes only the current user's visibility settings. It does
+//! not invoke the Explorer Folder Options UI or deliberately clear Quick
+//! Access history.
 //!
 //! Observed Windows behavior:
 //!
@@ -21,10 +21,9 @@
 //!   clear all recent file entries.
 //!
 //! The Start menu Recommended section on Windows 11 can be controlled with the
-//! current user's Start document-tracking value. This module exposes it as a
-//! distinct API instead of mixing it with Quick Access categories. MDM settings,
-//! policy values, Windows edition, and Explorer version can override or delay
-//! the visible effect of the current-user value.
+//! current user's Start document-tracking value. MDM settings, policy values,
+//! Windows edition, and Explorer version can override or delay the visible
+//! effect of the current-user value.
 //!
 //! On some Windows 11 builds, hiding Start Recommended by setting
 //! `Start_TrackDocs = 0` can also make Explorer Recent Files invisible. In that
@@ -32,8 +31,23 @@
 //! again; restore Start Recommended first, then use `ShowRecent` for Recent
 //! Files visibility.
 
-use crate::{QuickAccess, WincentResult};
+use crate::WincentResult;
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+
+/// Visibility settings for Quick Access and Start Recommended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum VisibilityTarget {
+    /// Recently used files in Explorer.
+    RecentFiles,
+    /// Frequently used folders in Explorer.
+    FrequentFolders,
+    /// Recently used files in Windows Recommended items. Policies or Windows
+    /// versions may override the visible effect of this setting.
+    StartRecommended,
+    /// Both Explorer Recent Files and Frequent Folders, excluding Start Recommended.
+    All,
+}
 
 const EXPLORER_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer";
 const EXPLORER_ADVANCED_KEY: &str =
@@ -77,11 +91,11 @@ fn create_explorer_advanced_reg_key() -> WincentResult<RegKey> {
     Ok(key)
 }
 
-fn registry_value_for(qa_type: QuickAccess) -> Option<&'static str> {
-    match qa_type {
-        QuickAccess::RecentFiles => Some(SHOW_RECENT_VALUE),
-        QuickAccess::FrequentFolders => Some(SHOW_FREQUENT_VALUE),
-        QuickAccess::All => None,
+fn registry_value_for(target: VisibilityTarget) -> Option<&'static str> {
+    match target {
+        VisibilityTarget::RecentFiles => Some(SHOW_RECENT_VALUE),
+        VisibilityTarget::FrequentFolders => Some(SHOW_FREQUENT_VALUE),
+        VisibilityTarget::StartRecommended | VisibilityTarget::All => None,
     }
 }
 
@@ -143,18 +157,17 @@ fn write_start_recommended_visibility(reg_key: &RegKey, visible: bool) -> Wincen
     Ok(())
 }
 
-/// Checks whether a Quick Access section is visible in Explorer.
+/// Checks the configured visibility of an Explorer section or Start Recommended.
 ///
-/// `QuickAccess::All` returns `true` only when both Recent Files and Frequent
-/// Folders are visible.
+/// `VisibilityTarget::All` returns `true` only when both Explorer sections are
+/// visible; it does not include Start Recommended.
 ///
-/// Missing registry values are treated as visible, matching Explorer's default
-/// behavior for a new user profile.
+/// Missing registry values are treated as visible.
 /// This reads configured registry values, not the current rendered UI state.
 ///
 /// # Errors
 ///
-/// Returns registry I/O errors if the current user's Explorer settings cannot
+/// Returns registry I/O errors if the current user's visibility settings cannot
 /// be read.
 ///
 /// # Examples
@@ -163,17 +176,24 @@ fn write_start_recommended_visibility(reg_key: &RegKey, visible: bool) -> Wincen
 /// use wincent::prelude::*;
 ///
 /// # fn main() -> WincentResult<()> {
-/// let visible = is_visible(QuickAccess::RecentFiles)?;
+/// let visible = is_visible(VisibilityTarget::RecentFiles)?;
 /// println!("Recent Files visible: {visible}");
 /// # Ok(())
 /// # }
 /// ```
-pub fn is_visible(qa_type: QuickAccess) -> WincentResult<bool> {
+pub fn is_visible(target: VisibilityTarget) -> WincentResult<bool> {
+    if target == VisibilityTarget::StartRecommended {
+        let Some(reg_key) = open_explorer_advanced_reg_key()? else {
+            return Ok(true);
+        };
+        return read_start_recommended_visibility(&reg_key);
+    }
+
     let Some(reg_key) = open_quick_access_reg_key()? else {
         return Ok(true);
     };
 
-    if let Some(value_name) = registry_value_for(qa_type) {
+    if let Some(value_name) = registry_value_for(target) {
         return read_visibility_value(&reg_key, value_name);
     }
 
@@ -181,83 +201,41 @@ pub fn is_visible(qa_type: QuickAccess) -> WincentResult<bool> {
         && read_visibility_value(&reg_key, SHOW_FREQUENT_VALUE)?)
 }
 
-/// Sets whether a Quick Access section is visible in Explorer.
+/// Sets the visibility of an Explorer section or Start Recommended.
 ///
-/// Passing `QuickAccess::All` applies the same value to both Recent Files and
-/// Frequent Folders.
+/// `VisibilityTarget::All` applies the same value to Explorer Recent Files and
+/// Frequent Folders, but not Start Recommended.
 ///
-/// When hiding `QuickAccess::FrequentFolders` through this registry-backed API,
+/// When hiding `VisibilityTarget::FrequentFolders` through this registry-backed API,
 /// Explorer hides unpinned frequent folders, while pinned folders remain
-/// visible. Passing `QuickAccess::All` with `visible` set to `false` has the
+/// visible. Passing `VisibilityTarget::All` with `visible` set to `false` has the
 /// same Frequent Folders behavior.
 ///
-/// This updates registry values for the current user. It does not clear Quick
-/// Access history, invoke Explorer's Folder Options UI, or refresh Explorer.
-/// Success means the requested values were written, not that the UI has
-/// already changed. `QuickAccess::All` writes two values in sequence; if the
-/// second write fails, the first may already have changed.
+/// This updates registry values for the current user without refreshing Explorer
+/// or the Start menu. Success means the requested values were written, not
+/// that the UI has already changed. `VisibilityTarget::All` writes two values
+/// in sequence; if the second write fails, the first may already have changed.
+/// On some Windows 11 builds, hiding Start Recommended can also hide Explorer
+/// Recent Files; show it again before relying on the Recent Files setting.
 ///
 /// # Errors
 ///
-/// Returns registry I/O errors if the Explorer settings key cannot be created
+/// Returns registry I/O errors if the relevant settings key cannot be created
 /// or updated.
-pub fn set_visible(qa_type: QuickAccess, visible: bool) -> WincentResult<()> {
+pub fn set_visible(target: VisibilityTarget, visible: bool) -> WincentResult<()> {
+    if target == VisibilityTarget::StartRecommended {
+        let reg_key = create_explorer_advanced_reg_key()?;
+        return write_start_recommended_visibility(&reg_key, visible);
+    }
+
     let reg_key = create_quick_access_reg_key()?;
 
-    if let Some(value_name) = registry_value_for(qa_type) {
+    if let Some(value_name) = registry_value_for(target) {
         return write_visibility_value(&reg_key, value_name, visible);
     }
 
     write_visibility_value(&reg_key, SHOW_RECENT_VALUE, visible)?;
     write_visibility_value(&reg_key, SHOW_FREQUENT_VALUE, visible)
-}
-
-/// Checks the setting for recently used files in Windows Recommended items.
-///
-/// This reads the current-user value
-/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_TrackDocs`.
-/// This value controls whether recently used files appear in Windows
-/// Recommended items. Missing values are treated as visible. MDM settings,
-/// policy values, Windows edition, or Explorer version can override the
-/// effective UI state; this does not inspect the rendered Start menu.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
-/// be read.
-pub fn is_start_recommended_section_visible() -> WincentResult<bool> {
-    let Some(reg_key) = open_explorer_advanced_reg_key()? else {
-        return Ok(true);
-    };
-
-    read_start_recommended_visibility(&reg_key)
-}
-
-/// Sets whether recently used files appear in Windows Recommended items.
-///
-/// This writes the current-user value
-/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_TrackDocs`.
-/// Passing `true` writes `1`; passing `false` writes `0`. The value is not
-/// removed so repeated calls are deterministic. The value controls whether
-/// recently used files appear in Windows Recommended items.
-///
-/// On some Windows 11 builds, setting this to `false` can also make Explorer
-/// Recent Files invisible. In that state, setting `ShowRecent = 1` alone may
-/// not make Recent Files visible again; set Start Recommended visible first,
-/// then control Recent Files with `ShowRecent`.
-///
-/// Explorer may require a refresh, restart, sign-out, or supported Windows 11
-/// edition/build before the UI reflects the change. This operation does not
-/// refresh Explorer or the Start menu. Success means the registry write
-/// completed, not that the UI has already changed.
-///
-/// # Errors
-///
-/// Returns registry I/O errors if the current-user Explorer Advanced key cannot
-/// be created or updated.
-pub fn set_start_recommended_section_visible(visible: bool) -> WincentResult<()> {
-    let reg_key = create_explorer_advanced_reg_key()?;
-    write_start_recommended_visibility(&reg_key, visible)
 }
 
 #[cfg(test)]
@@ -267,14 +245,15 @@ mod tests {
     #[test]
     fn registry_value_names_match_quick_access_sections() {
         assert_eq!(
-            registry_value_for(QuickAccess::RecentFiles),
+            registry_value_for(VisibilityTarget::RecentFiles),
             Some(SHOW_RECENT_VALUE)
         );
         assert_eq!(
-            registry_value_for(QuickAccess::FrequentFolders),
+            registry_value_for(VisibilityTarget::FrequentFolders),
             Some(SHOW_FREQUENT_VALUE)
         );
-        assert_eq!(registry_value_for(QuickAccess::All), None);
+        assert_eq!(registry_value_for(VisibilityTarget::All), None);
+        assert_eq!(registry_value_for(VisibilityTarget::StartRecommended), None);
     }
 
     #[test]
@@ -318,13 +297,13 @@ mod tests {
     #[test]
     #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test recent_files_visibility_round_trip -- --ignored --nocapture"]
     fn recent_files_visibility_round_trip() -> WincentResult<()> {
-        let initial = is_visible(QuickAccess::RecentFiles)?;
+        let initial = is_visible(VisibilityTarget::RecentFiles)?;
 
-        set_visible(QuickAccess::RecentFiles, !initial)?;
-        assert_eq!(is_visible(QuickAccess::RecentFiles)?, !initial);
+        set_visible(VisibilityTarget::RecentFiles, !initial)?;
+        assert_eq!(is_visible(VisibilityTarget::RecentFiles)?, !initial);
 
-        set_visible(QuickAccess::RecentFiles, initial)?;
-        assert_eq!(is_visible(QuickAccess::RecentFiles)?, initial);
+        set_visible(VisibilityTarget::RecentFiles, initial)?;
+        assert_eq!(is_visible(VisibilityTarget::RecentFiles)?, initial);
 
         Ok(())
     }
@@ -332,14 +311,24 @@ mod tests {
     #[test]
     #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test frequent_folders_visibility_round_trip -- --ignored --nocapture"]
     fn frequent_folders_visibility_round_trip() -> WincentResult<()> {
-        let initial = is_visible(QuickAccess::FrequentFolders)?;
+        let initial = is_visible(VisibilityTarget::FrequentFolders)?;
 
-        set_visible(QuickAccess::FrequentFolders, !initial)?;
-        assert_eq!(is_visible(QuickAccess::FrequentFolders)?, !initial);
+        set_visible(VisibilityTarget::FrequentFolders, !initial)?;
+        assert_eq!(is_visible(VisibilityTarget::FrequentFolders)?, !initial);
 
-        set_visible(QuickAccess::FrequentFolders, initial)?;
-        assert_eq!(is_visible(QuickAccess::FrequentFolders)?, initial);
+        set_visible(VisibilityTarget::FrequentFolders, initial)?;
+        assert_eq!(is_visible(VisibilityTarget::FrequentFolders)?, initial);
 
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Reads and writes the current user's Explorer registry settings"]
+    fn start_recommended_visibility_round_trip() -> WincentResult<()> {
+        let initial = is_visible(VisibilityTarget::StartRecommended)?;
+        set_visible(VisibilityTarget::StartRecommended, !initial)?;
+        assert_eq!(is_visible(VisibilityTarget::StartRecommended)?, !initial);
+        set_visible(VisibilityTarget::StartRecommended, initial)?;
         Ok(())
     }
 }
