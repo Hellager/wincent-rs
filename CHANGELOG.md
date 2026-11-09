@@ -1,5 +1,49 @@
 ## Unreleased
 
+## [0.3.1-alpha.2] - 2026-11-09
+
+### Added
+- Public `standalone` module for querying Recent Files and Frequent Folders,
+  checking folder pin state, adding, pinning, removing, clearing, locking,
+  unlocking, and refreshing without creating a `QuickAccessManager`.
+  Functions and lock types are also re-exported from the crate root and prelude.
+- Explicit, nonzero caller-supplied timeouts for standalone Shell/COM mutations
+  and refreshes. Timeouts bound supported waits, do not cancel native work,
+  and do not trigger automatic mutation retries.
+- Owned `RecentFilesLock` and `FrequentFoldersLock` guards that share mutation
+  gates with managers and other wincent processes. Explicit unlock removes and
+  returns new Recent shortcut paths; dropping a guard releases it without cleanup.
+- Comprehensive VM-only acceptance tests for manager and standalone APIs on
+  target Windows 10 and Windows 11 builds, covering independent Shell query
+  comparisons, status, native mutations, visibility, scoped clearing, lock
+  lifetime, and cross-process mutation denial.
+- Standalone unit tests for timeout forwarding, input and error contracts,
+  pinned versus unpinned removal, and lock release after cleanup failure.
+- VM runners with guest identity and binary hash checks, source and evidence
+  archives, file/registry backup verification, and whole-VM snapshot rollback.
+- A sequential `examples/standalone.rs` application demonstrating queries,
+  additions, removals, locks, hiding, and restoration of visibility settings.
+
+### Changed
+- Standalone operations reuse the manager's backend filtering and native
+  mutation paths without changing existing manager behavior. Pinning accepts
+  existing unpinned folders and rejects already-pinned folders.
+- Renamed the internal `quick_access_lock` module to `lock` and updated module
+  references and cross-process test entry points.
+- The VM acceptance runner executes standalone unit tests before integration
+  checks and requires positive passing counts for both phases.
+
+### Removed
+- Public access to the `utils` module and `get_windows_recent_folder` helper.
+  `WindowsVersion` and `get_windows_version` remain available through `prelude`.
+- The crate-root `find_windows_recent_links_for_target` export; the helper is
+  now a crate-private, test-only implementation detail.
+
+### Documentation
+- Linked both root READMEs to the standalone application example.
+- Added English and Chinese VM acceptance guides describing coverage, recovery,
+  evidence requirements, and build-specific validation limits.
+
 ## [0.3.0-alpha.1] - 2026-11-06
 
 ### Added
