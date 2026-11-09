@@ -105,7 +105,7 @@ pub enum WincentError {
     #[non_exhaustive]
     QuickAccessLocked {
         /// Category whose mutation was refused.
-        qa_type: crate::quick_access_lock::QuickAccessLockTarget,
+        qa_type: crate::lock::QuickAccessLockTarget,
     },
 
     /// This manager already has an outstanding Quick Access lock.

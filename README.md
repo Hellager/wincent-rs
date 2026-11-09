@@ -90,6 +90,11 @@ fn main() -> WincentResult<()> {
 }
 ```
 
+## Standalone Functions
+
+For comprehensive usage without `QuickAccessManager`, see the
+[standalone functions example](examples/standalone.rs).
+
 ## System Requirements and Limitations
 
 - **OS**: Windows 10 or Windows 11.

@@ -255,7 +255,7 @@ pub(crate) fn validate_path(path: &str, expected_type: PathType) -> WincentResul
 }
 
 /// Returns the path to the current user's Windows Recent folder.
-pub fn get_windows_recent_folder() -> WincentResult<String> {
+pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
     // SAFETY: SHGetKnownFolderPath writes a heap-allocated wide string into `result`.
     // FOLDERID_Recent is a well-known constant, the flag is 0, and no token handle is needed.
     let result = unsafe { SHGetKnownFolderPath(&FOLDERID_Recent, KNOWN_FOLDER_FLAG(0x00), None) }?;

@@ -10,6 +10,7 @@ if ([System.IO.Path]::GetFullPath($ConfigPath) -ne "$Root\config.json") {
     throw 'Config must reside in its dedicated VM run directory'
 }
 $Exe = "$Root\quick-access-manager.exe"
+$UnitExe = "$Root\standalone-unit-tests.exe"
 $Recent = Join-Path $env:APPDATA 'Microsoft\Windows\Recent'
 $Backup = Join-Path $Root 'original'
 $RegistrySpecs = @(
@@ -111,6 +112,8 @@ try {
     if ($platform -ne $config.platform) { throw "Platform mismatch: $platform != $($config.platform)" }
     $exeHash = (Get-FileHash -LiteralPath $Exe).Hash
     if ($exeHash -ne $config.exe_sha256) { throw 'Uploaded executable hash mismatch' }
+    $unitHash = (Get-FileHash -LiteralPath $UnitExe).Hash
+    if ($unitHash -ne $config.unit_exe_sha256) { throw 'Uploaded unit executable hash mismatch' }
     $version = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
     $dlls = @('shell32.dll', 'windows.storage.dll', 'explorer.exe') | ForEach-Object {
         $path = if ($_ -eq 'explorer.exe') { "$env:WINDIR\$_" } else { "$env:WINDIR\System32\$_" }
@@ -133,6 +136,7 @@ try {
         script_session = $Session
         explorer_session = $explorer.SessionId
         exe_sha256 = $exeHash
+        unit_exe_sha256 = $unitHash
         source_commit = $config.source_commit
         dlls = @($dlls)
     }) 'environment.json'
@@ -164,6 +168,8 @@ try {
     $env:WINCENT_QAM_GUEST = $env:COMPUTERNAME
     $wrapper = @(
         '@echo off',
+        "`"$UnitExe`" standalone::tests:: --test-threads=1 --nocapture > `"$Root\unit-tests.log`" 2>&1",
+        'if errorlevel 1 exit /b %ERRORLEVEL%',
         "`"$Exe`" --ignored --exact quick_access_manager --nocapture > `"$Root\test.log`" 2>&1",
         'exit /b %ERRORLEVEL%'
     ) -join "`r`n"
@@ -181,8 +187,9 @@ try {
     # A timeout never cancels an in-flight COM call; terminate this run's process
     # before restoring, and use the host snapshot as the final isolation boundary.
     try {
-        Get-CimInstance Win32_Process -Filter "Name='quick-access-manager.exe'" |
-            Where-Object { $_.ExecutablePath -ieq $Exe } |
+        Get-CimInstance Win32_Process `
+            -Filter "Name='quick-access-manager.exe' OR Name='standalone-unit-tests.exe'" |
+            Where-Object { $_.ExecutablePath -ieq $Exe -or $_.ExecutablePath -ieq $UnitExe } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }
         if ($null -ne $process -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
         if ($backupReady) {
@@ -237,6 +244,13 @@ try {
                 })
         }
         $completed = @($checks | Where-Object { $_.id -eq 'suite.completed' -and $_.ok }).Count -eq 1
+        $unitChecks = 0
+        if (Test-Path -LiteralPath "$Root\unit-tests.log") {
+            $unitLog = Get-Content -LiteralPath "$Root\unit-tests.log" -Raw
+            if ($unitLog -match 'test result: ok\. (\d+) passed; 0 failed;') {
+                $unitChecks = [int]$Matches[1]
+            }
+        }
         Write-Json ([ordered]@{
             run_id = $config.run_id
             platform = $config.platform
@@ -244,7 +258,10 @@ try {
             completed = $completed
             checks = $checks.Count
             failures = @($checks | Where-Object { -not $_.ok }).Count
-            passed = $completed -and $exitCode -eq 0 -and $null -eq $failure -and $restored
+            unit_checks = $unitChecks
+            unit_passed = $unitChecks -gt 0
+            passed = $completed -and $unitChecks -gt 0 -and $exitCode -eq 0 -and
+                $null -eq $failure -and $restored
             check_results = $checks
         }) 'result.json'
         Write-Json ([ordered]@{
@@ -256,8 +273,9 @@ try {
             restore_failure = $restoreFailure
             targets_removed = -not (Test-Path -LiteralPath "$Root\targets")
             remaining_test_processes = @(
-                Get-CimInstance Win32_Process -Filter "Name='quick-access-manager.exe'" |
-                    Where-Object { $_.ExecutablePath -ieq $Exe }
+                Get-CimInstance Win32_Process `
+                    -Filter "Name='quick-access-manager.exe' OR Name='standalone-unit-tests.exe'" |
+                    Where-Object { $_.ExecutablePath -ieq $Exe -or $_.ExecutablePath -ieq $UnitExe }
             ).Count
             timestamp = (Get-Date).ToString('o')
         }) 'final-state.json'

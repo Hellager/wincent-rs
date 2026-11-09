@@ -93,6 +93,11 @@ fn main() -> WincentResult<()> {
 }
 ```
 
+## 独立函数
+
+无需创建 `QuickAccessManager` 的完整用法请参阅
+[独立函数综合例程](examples/standalone.rs)。
+
 ## 系统要求与限制
 
 - **操作系统**：Windows 10 或 Windows 11。

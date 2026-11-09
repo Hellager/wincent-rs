@@ -5,7 +5,7 @@ use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     empty,
     error::WincentError,
-    quick_access_lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
+    lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
     status::QuickAccessStatus,
     utils::paths_equal,
     QuickAccess, VisibilityTarget, WincentResult,
@@ -737,8 +737,8 @@ mod tests {
         let destinations = dir.path().join("AutomaticDestinations");
         fs::create_dir(&destinations).map_err(WincentError::Io)?;
         for file in [
-            crate::quick_access_lock::RECENT_FILES_AUTOMATIC_DESTINATION,
-            crate::quick_access_lock::FREQUENT_FOLDERS_AUTOMATIC_DESTINATION,
+            crate::lock::RECENT_FILES_AUTOMATIC_DESTINATION,
+            crate::lock::FREQUENT_FOLDERS_AUTOMATIC_DESTINATION,
         ] {
             fs::write(destinations.join(file), b"lock").map_err(WincentError::Io)?;
         }

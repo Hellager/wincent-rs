@@ -9,7 +9,7 @@ use crate::{
         remove_from_recent_files_with_timeout, remove_pinned_frequent_folder_with_timeout,
         remove_unpinned_frequent_folder_with_timeout,
     },
-    quick_access_lock::{MutationPermit, QuickAccessLockTarget},
+    lock::{MutationPermit, QuickAccessLockTarget},
     utils::PathType,
     QuickAccess, WincentResult,
 };
@@ -54,7 +54,7 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
 /// limit come from the recovered CAutoList rules. Hidden-item visibility comes
 /// from Explorer's Folder Options setting and the attributes serialized in the
 /// numeric Shell Link stream when the item was added.
-fn ui_visible_items(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
+pub(crate) fn ui_visible_items(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
     let (parsed, apply_limit) = match qa_type {
         QuickAccess::RecentFiles => (parse_file(recent_files_dest_path()?)?, true),
         QuickAccess::FrequentFolders => (parse_file(frequent_folders_dest_path()?)?, false),

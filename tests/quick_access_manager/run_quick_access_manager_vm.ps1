@@ -76,6 +76,7 @@ function Guest-Exists([string]$Path) {
 function Pull-Evidence {
     foreach ($name in @(
         'environment.json', 'checks.tsv', 'result.json', 'final-state.json', 'test.log',
+        'unit-tests.log',
         'FAILURE.txt', 'RESTORE_FAILURE.txt', 'ARTIFACT_FAILURE.txt', 'evidence.zip'
     )) {
         if (Guest-Exists "$GuestRoot\$name") {
@@ -142,6 +143,13 @@ try {
                 $_.target.name -eq 'quick_access_manager' -and $_.executable })
         if ($artifacts.Count -ne 1) { throw 'Expected exactly one compiled test executable' }
         $exe = $artifacts[0].executable
+        $unitMessages = & cargo test --release --lib --no-run --message-format=json
+        if ($LASTEXITCODE -ne 0) { throw 'Standalone unit test compilation failed' }
+        $unitArtifacts = @($unitMessages | ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.reason -eq 'compiler-artifact' -and
+                $_.target.name -eq 'wincent' -and $_.executable })
+        if ($unitArtifacts.Count -ne 1) { throw 'Expected exactly one library test executable' }
+        $unitExe = $unitArtifacts[0].executable
         $commit = (& git rev-parse HEAD | Out-String).Trim()
         @(& rustc --version; & cargo --version) |
             Set-Content -LiteralPath "$EvidenceDir\toolchain.txt" -Encoding UTF8
@@ -153,7 +161,12 @@ try {
     Get-ChildItem -LiteralPath $PSScriptRoot -File -Force |
         Where-Object { $_.Name -ne '.env' } |
         Copy-Item -Destination "$EvidenceDir\suite-source"
+    # New library modules may be untracked and therefore absent from source.diff.
+    Copy-Item -LiteralPath "$RepoRoot\src" -Destination "$EvidenceDir\library-source" -Recurse
+    Copy-Item -LiteralPath "$RepoRoot\Cargo.toml", "$RepoRoot\Cargo.lock" `
+        -Destination "$EvidenceDir\library-source"
     $hostHash = (Get-FileHash -LiteralPath $exe).Hash
+    $unitHash = (Get-FileHash -LiteralPath $unitExe).Hash
     $running = (Vm @('list')).text -split "`r?`n"
     $wasRunning = @($running | Where-Object { $_.Trim() -ieq $Vmx }).Count -gt 0
     Log "Creating whole-VM rollback snapshot: $Snapshot"
@@ -176,11 +189,13 @@ try {
         guest_user = $GuestUser
         platform = $Platform
         exe_sha256 = $hostHash
+        unit_exe_sha256 = $unitHash
         source_commit = $commit
     }
     $config | ConvertTo-Json | Set-Content -LiteralPath "$EvidenceDir\config.json" -Encoding UTF8
     foreach ($pair in @(
         @($exe, "$GuestRoot\quick-access-manager.exe"),
+        @($unitExe, "$GuestRoot\standalone-unit-tests.exe"),
         @("$PSScriptRoot\vm_quick_access_manager_guest.ps1", "$GuestRoot\guest.ps1"),
         @("$PSScriptRoot\vm_quick_access_manager_start.ps1", "$GuestRoot\start.ps1"),
         @("$EvidenceDir\config.json", "$GuestRoot\config.json")
@@ -209,11 +224,13 @@ try {
     $final = Get-Content -LiteralPath "$EvidenceDir\final-state.json" -Raw | ConvertFrom-Json
     $environment = Get-Content -LiteralPath "$EvidenceDir\environment.json" -Raw | ConvertFrom-Json
     if ($result.run_id -ne $RunId -or $final.run_id -ne $RunId -or
-        $environment.exe_sha256 -ne $hostHash -or $environment.platform -ne $Platform) {
+        $environment.exe_sha256 -ne $hostHash -or $environment.unit_exe_sha256 -ne $unitHash -or
+        $environment.platform -ne $Platform) {
         throw 'Evidence identity, platform or binary hash mismatch'
     }
     if (-not $result.passed -or -not $result.completed -or $result.checks -le 0 -or
-        $result.failures -ne 0 -or -not $final.restored -or $final.restore_failure -or
+        $result.failures -ne 0 -or -not $result.unit_passed -or $result.unit_checks -le 0 -or
+        -not $final.restored -or $final.restore_failure -or
         -not $final.targets_removed -or $final.remaining_test_processes -ne 0) {
         throw "Suite or restoration failed; inspect $EvidenceDir"
     }
@@ -222,7 +239,7 @@ try {
         throw 'Evidence archive is incomplete'
     }
     Verify-Archive
-    Log "Passed $($result.checks) checks; guest state restoration verified"
+    Log "Passed $($result.checks) checks and $($result.unit_checks) unit tests; restoration verified"
 } catch {
     $failure = $_
     if ($snapshotCreated) {

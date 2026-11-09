@@ -1419,7 +1419,7 @@ mod tests {
 
     fn remove_seed_recent_links(seed_path: &Path) -> WincentResult<()> {
         let seed_path = seed_path.to_string_lossy();
-        for lnk_path in crate::find_windows_recent_links_for_target(&seed_path)? {
+        for lnk_path in crate::recent_links::find_windows_recent_links_for_target(&seed_path)? {
             fs::remove_file(&lnk_path).map_err(WincentError::Io)?;
             println!("deleted seed Recent shortcut {}", lnk_path.display());
         }

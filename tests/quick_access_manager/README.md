@@ -1,6 +1,6 @@
 # QuickAccessManager VM acceptance suite
 
-End-to-end validation of the **current public manager API** on a dedicated
+End-to-end validation of the **current manager and standalone APIs** on a dedicated
 Windows 10 or Windows 11 VMware guest. This is a correctness suite, not a
 latency benchmark. See [README.cn.md](README.cn.md) for Chinese instructions.
 
@@ -75,6 +75,9 @@ manually recover the VM in that case.
 | Lock lifetime | Disjoint categories, lock survives one clone dropping, last clone releases, `unlock` reports/removes newly created `.lnk` paths |
 | Refresh | Open Quick Access/Home window, populated and cleared state; checks API result, not pixels |
 | Clear | Recent/Frequent/All seeded with both file and folder, scoped preservation, repeated clear; does not incorrectly require Windows default pins to disappear |
+| Standalone functions | Query parity with manager and independent Shell results, explicit timeouts, zero-timeout rejection, path types, pin status, pinning existing unpinned folders, both removal routes, scoped clear and refresh |
+| Standalone locks | Typed guards, disjoint locks, overlapping acquisition, manager interoperability, cross-process mutation denial, explicit shortcut cleanup and release on drop |
+| Standalone unit tests | Exact timeout forwarding, no mutation retry, missing versus failed reads, error categories, cleanup failure still releases both guard types |
 
 Every phase uses bounded convergence polling after native mutation. A failed
 prerequisite aborts its dependent phases and records `suite.completed=false`;
@@ -86,6 +89,10 @@ visible unpinned parent folder. Rapid repeated visits coalesce into one usage
 point, so adding all 25 files immediately is insufficient for this fixture.
 These two waits prepare test data; they are not performance measurements.
 Allow several minutes for a complete run, including snapshot creation and rollback.
+The standalone phase prepares two additional unpinned parents using the same
+66-second visit intervals. It runs after manager coverage, with fresh paths.
+Before the acceptance suite, the guest runs the library's `standalone::tests::`
+unit tests; those tests are also never executed on the host.
 Each clear case uses fresh paths: removing a Recent item can leave a blocked
 entry in Shell's cached state, so re-adding the previous mutation target is not
 a reliable way to prepare the next case.
@@ -96,6 +103,8 @@ Default output: `temp/track_wincent/evidence/qam-<platform>-<run-id>/`.
 
 - `result.json`: per-check IDs, results/details, count, completion and process exit.
 - `checks.tsv`, `test.log`: streaming checks and Rust test output, including failures.
+- `unit-tests.log`: standalone unit test output; `result.json` records its positive
+  passing count as `unit_checks` and success as `unit_passed`.
 - `environment.json`: actual build/UBR, display version, user/session, binary hash,
   source commit, Explorer / Shell DLL versions and hashes.
 - `final-state.json`: guest restoration, target removal and remaining test processes.
@@ -106,17 +115,19 @@ Default output: `temp/track_wincent/evidence/qam-<platform>-<run-id>/`.
   post-clear CFB files, raw records, independent Shell results and lock-child logs.
 - `suite-source/`, `source.diff`, `source-status.txt`: exact suite sources and
   local source changes, without `.env` credentials.
+- `library-source/`: library sources and Cargo manifests, including new modules
+  not yet tracked by Git. Both uploaded executables have verified SHA-256 hashes.
 - `guest-running.png`: best-effort screenshot; not a UI correctness assertion.
 
 Accept a build only when `result.json` is completed with zero failures and a
-positive check count, guest restoration is successful, the executable hash
-matches, and `host-result.json` reports `passed=true` and
+positive check count, `unit_passed=true` with `unit_checks>0`, guest restoration
+is successful, both executable hashes match, and `host-result.json` reports `passed=true` and
 `snapshot_reverted=true`. Missing reports are failures, not skipped tests.
 
 ## Scope and limitations
 
 This suite validates normal behavior and error contracts of the public
-`QuickAccessManager` API. Results apply only to the library revision and Windows
+`QuickAccessManager` and `quick_access` APIs. Results apply only to the library revision and Windows
 build actually tested. Run the suite again on each target system version and
 retain its evidence; a passing run does not establish compatibility with other
 or future versions.

@@ -1,5 +1,5 @@
 use crate::com::{classify_coinit_result, ComInitStatus};
-use crate::quick_access_lock::MutationPermit;
+use crate::lock::MutationPermit;
 use crate::{error::WincentError, WincentResult};
 use std::panic::AssertUnwindSafe;
 use std::sync::{
@@ -189,7 +189,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quick_access_lock::QuickAccessLockTarget;
+    use crate::lock::QuickAccessLockTarget;
     use serial_test::serial;
     use std::sync::{mpsc, Arc, Condvar, Mutex};
     use std::time::{Duration, Instant};

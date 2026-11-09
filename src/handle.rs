@@ -19,8 +19,8 @@
 use crate::{
     destlist::FrequentFolderPinStatus,
     error::WincentError,
+    lock::MutationPermit,
     query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
-    quick_access_lock::MutationPermit,
     utils::{paths_equal, validate_path, PathType},
     QuickAccess, WincentResult,
 };
@@ -735,7 +735,7 @@ mod tests {
                 .pop()
                 .expect("category admission")
         };
-        use crate::quick_access_lock::QuickAccessLockTarget::{FrequentFolders, RecentFiles};
+        use crate::lock::QuickAccessLockTarget::{FrequentFolders, RecentFiles};
 
         for result in [
             remove_from_recent_files_with_timeout(recent, Duration::ZERO, permit(RecentFiles)),

@@ -15,7 +15,7 @@ use crate::{
     backend::QuickAccessBackend,
     destlist::{frequent_folders_dest_path, parse_file},
     error::WincentError,
-    quick_access_lock::MutationPermit,
+    lock::MutationPermit,
     recent_links,
     utils::paths_equal,
     QuickAccess, WincentResult,
@@ -559,7 +559,7 @@ mod tests {
     fn empty_recent_files_zero_timeout_is_rejected() {
         let recent_folder = tempfile::tempdir().expect("temp Recent directory");
         let permit = MutationPermit::acquire_in_folder(
-            crate::quick_access_lock::QuickAccessLockTarget::RecentFiles,
+            crate::lock::QuickAccessLockTarget::RecentFiles,
             recent_folder.path(),
             false,
         )

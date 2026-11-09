@@ -72,13 +72,14 @@ mod empty;
 pub mod error;
 mod explorer_window;
 mod handle;
+mod lock;
 pub mod manager;
 mod query;
-mod quick_access_lock;
 mod recent_links;
+pub mod standalone;
 #[cfg(test)]
 mod test_utils;
-pub mod utils;
+pub(crate) mod utils;
 
 pub mod visible;
 
@@ -90,8 +91,15 @@ pub mod status;
 /// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
     pub use crate::error::WincentError;
+    pub use crate::lock::QuickAccessLockTarget;
     pub use crate::manager::{QuickAccessManager, QuickAccessManagerBuilder};
-    pub use crate::quick_access_lock::QuickAccessLockTarget;
+    pub use crate::standalone::{
+        add_to_recent_files, empty_frequent_folders, empty_recent_files, get_frequent_folders,
+        get_recent_files, is_folder_pinned, lock_frequent_folders, lock_recent_files,
+        pin_to_frequent_folders, refresh_quick_access, remove_from_frequent_folders,
+        remove_from_recent_files, unlock_frequent_folders, unlock_recent_files,
+        FrequentFoldersLock, RecentFilesLock,
+    };
     pub use crate::status::{FrequentFolderSlot, QuickAccessStatus};
 
     pub use crate::visible::{is_visible, set_visible, VisibilityTarget};
@@ -114,8 +122,14 @@ pub mod prelude {
 
 use crate::error::WincentError;
 
-pub use crate::quick_access_lock::QuickAccessLockTarget;
-pub use crate::recent_links::find_windows_recent_links_for_target;
+pub use crate::lock::QuickAccessLockTarget;
+pub use crate::standalone::{
+    add_to_recent_files, empty_frequent_folders, empty_recent_files, get_frequent_folders,
+    get_recent_files, is_folder_pinned, lock_frequent_folders, lock_recent_files,
+    pin_to_frequent_folders, refresh_quick_access, remove_from_frequent_folders,
+    remove_from_recent_files, unlock_frequent_folders, unlock_recent_files, FrequentFoldersLock,
+    RecentFilesLock,
+};
 pub use crate::visible::VisibilityTarget;
 
 /// Quick Access categories supported by this crate.

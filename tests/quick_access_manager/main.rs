@@ -1,4 +1,4 @@
-//! Destructive, VM-only acceptance tests for the public manager facade.
+//! Destructive, VM-only acceptance tests for manager and standalone APIs.
 //!
 //! Run through run_quick_access_manager_vm.ps1, never cargo test -- --ignored
 //! on a workstation. The guest harness owns backup, restoration and JSON reports.
@@ -6,6 +6,7 @@
 #![cfg(windows)]
 
 mod shell;
+mod standalone;
 
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -802,6 +803,7 @@ fn suite(checks: &mut Checks, root: &Path) -> TestResult {
         false,
     )?;
     mutations_and_clear(checks, &manager, root)?;
+    standalone::run(checks, &manager, root)?;
     Ok(())
 }
 
@@ -838,6 +840,19 @@ fn lock_probe() -> TestResult {
     ] {
         if !matches!(result, Err(WincentError::QuickAccessLocked { .. })) {
             return Err(format!("cross-process lock not enforced: {result:?}").into());
+        }
+    }
+    let clear = match category {
+        QuickAccess::RecentFiles => empty_recent_files(WAIT),
+        QuickAccess::FrequentFolders | QuickAccess::All => empty_frequent_folders(WAIT),
+        _ => return Err("unsupported lock category".into()),
+    };
+    for result in [
+        add_to_recent_files(root.join("targets").join("lock-probe.txt"), WAIT),
+        clear,
+    ] {
+        if !matches!(result, Err(WincentError::QuickAccessLocked { .. })) {
+            return Err(format!("standalone cross-process lock not enforced: {result:?}").into());
         }
     }
     Ok(())

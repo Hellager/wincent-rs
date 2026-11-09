@@ -1,6 +1,6 @@
 # QuickAccessManager 综合 VM 测试
 
-面向新 Windows 系统版本的公开 API 验收套件。只在指定 VMware guest 中执行；
+面向新 Windows 系统版本的 manager 与独立函数公开 API 验收套件。只在指定 VMware guest 中执行；
 宿主只编译、传文件、取证和回滚，不运行任何 Quick Access 测试。
 
 ## 运行
@@ -40,6 +40,9 @@ Win11 使用同一套测试，仅改为 `-Platform win11` 并指定对应 VM。
 | 可见性 | 四种 target 的 hide/read/show/read；All 不含 Start；混合状态 All=false；fixture 前显式启用 Start 跟踪 |
 | 刷新 | 打开的 Quick Access/Home 窗口；有内容和清空后 API 返回成功，不将其描述为像素级 UI 验证 |
 | 清空 | 每种类别都先种入文件与目录；检查目标消失及另一类别保留；重复清空；允许 Windows 重建默认 pin |
+| 独立函数 | 与 manager 及独立 Shell 查询对照；显式超时、零超时拒绝、路径类型、固定状态、已有未固定目录转固定、两种目录移除、分类清空与刷新 |
+| 独立锁 | 类型化锁对象、不同类别共存、重复加锁、manager 互操作、跨进程阻断、显式清理和 drop 释放 |
+| 独立函数单元测试 | 精确传递超时、不重试修改、区分文件缺失与读取失败、错误类别、两种锁在解锁清理失败时仍释放 |
 
 原生写入后使用有界轮询等待持久化，不将 `Ok(())` 等同于立即可见，不自动重试超时 mutation。
 前置 fixture 失败立即中止依赖阶段并记录 `suite.completed=false`，不会把能力缺失静默
@@ -48,6 +51,8 @@ Win11 使用同一套测试，仅改为 `-Platform win11` 并指定对应 VM。
 前 3 个 Recent 文件按 **66 秒间隔**加入，以原生方式生成可见的未固定父目录。
 短时重复访问会合并计分，仅快速加入 25 个文件不足以生成该 fixture。
 这两个等待是测试数据的必要准备，不是性能计时；含快照和回滚，一轮需要数分钟。
+独立函数阶段在 manager 验证后使用全新路径，以同样的 66 秒访问间隔准备两个未固定父目录。
+guest 在综合验收前先运行库内 `standalone::tests::` 单元测试；这些测试也不在宿主执行。
 每个清空用例使用全新文件/目录路径。Recent 的 remove 可能留下 Shell 缓存中的屏蔽状态，
 不能通过重新 add 上一阶段已移除的文件来建立下一阶段基线。
 
@@ -77,21 +82,24 @@ Win11 使用同一套测试，仅改为 `-Platform win11` 并指定对应 VM。
 | --- | --- |
 | `result.json` | 检查明细、总数、失败数、完成标记、二进制退出码 |
 | `checks.tsv`、`test.log` | 流式检查和完整测试日志，失败时仍保留已完成检查 |
+| `unit-tests.log` | 独立函数单元测试日志；`result.json` 记录 `unit_checks` 和 `unit_passed` |
 | `environment.json` | build/UBR、用户、会话、exe SHA-256、提交、Shell DLL/Explorer 版本与哈希 |
 | `final-state.json` | guest 文件/注册表恢复、fixture 删除、测试进程残留 |
 | `host-result.json` | 整机快照回滚与最终整体通过标记 |
 | `archive-verification.json` | 归档内每个原始文件（包括隐藏文件）的长度和 SHA-256 校验 |
 | `evidence.zip` | 原始备份、恢复清单、注册表、阶段 CFB、raw entry、独立 Shell 输出、子进程日志 |
 | `suite-source/`、`source.diff`、`source-status.txt` | 对应构建的套件源码及工作区改动，不收集 `.env` |
+| `library-source/` | 库源码和 Cargo 清单，包含尚未被 Git 跟踪的新模块；两份上传测试程序均校验 SHA-256 |
 | `guest-running.png` | 尽力采集的截图，仅作辅助，不作为 UI 通过判据 |
 
-完整通过要求：检查数大于零、`completed=true`、失败数为零、哈希匹配、guest
+完整通过要求：检查数大于零、`completed=true`、失败数为零、`unit_passed=true`、
+`unit_checks>0`、两份程序哈希匹配、guest
 `restored=true`、无残留测试进程，以及宿主 `passed=true` / `snapshot_reverted=true`。
 任何报告缺失、阶段未执行、恢复失败都不能视为通过。
 
 ## 测试范围与边界
 
-本套件验证 `QuickAccessManager` 公开 API 的正常行为与错误契约。验收结论仅适用于
+本套件验证 `QuickAccessManager` 与 `quick_access` 公开 API 的正常行为与错误契约。验收结论仅适用于
 实际受测的库版本和 Windows build；每个目标系统版本都应重新运行本套件并保留证据，
 不能将一次通过外推为其他版本或未来版本的兼容保证。
 

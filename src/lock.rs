@@ -584,10 +584,7 @@ mod tests {
             recent_folder.clone(),
         )?;
         let output = Command::new(std::env::current_exe().map_err(WincentError::Io)?)
-            .args([
-                "--exact",
-                "quick_access_lock::tests::cross_process_admission_probe",
-            ])
+            .args(["--exact", "lock::tests::cross_process_admission_probe"])
             .env("WINCENT_TEST_LOCK_FOLDER", recent_folder)
             .output()
             .map_err(WincentError::Io)?;
