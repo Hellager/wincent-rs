@@ -424,28 +424,18 @@ impl QuickAccessManager {
     /// ```
     pub fn add_item<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
         let path = path_to_shell_string(path.as_ref())?;
-        let path_type = self.backend.path_type(&path)?;
-        let qa_type = match path_type {
-            crate::utils::PathType::File => QuickAccess::RecentFiles,
-            crate::utils::PathType::Directory => QuickAccess::FrequentFolders,
-        };
+        let (qa_type, lock_target) = self.resolve_path_category(&path)?;
         let _admission = self
             .backend
             .uses_system_mutation_gate()
-            .then(|| {
-                MutationPermit::acquire(match path_type {
-                    crate::utils::PathType::File => QuickAccessLockTarget::All,
-                    crate::utils::PathType::Directory => QuickAccessLockTarget::FrequentFolders,
-                })
-            })
+            .then(|| MutationPermit::acquire_one(lock_target))
             .transpose()?;
         self.ensure_not_present(&path, qa_type)?;
 
-        match path_type {
-            crate::utils::PathType::File => self.backend.add_recent_file(&path, self.timeout),
-            crate::utils::PathType::Directory => {
-                self.backend.add_frequent_folder(&path, self.timeout)
-            }
+        match qa_type {
+            QuickAccess::RecentFiles => self.backend.add_recent_file(&path, self.timeout),
+            QuickAccess::FrequentFolders => self.backend.add_frequent_folder(&path, self.timeout),
+            QuickAccess::All => unreachable!(),
         }
     }
 
@@ -478,28 +468,19 @@ impl QuickAccessManager {
     /// ```
     pub fn remove_item<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
         let path = path_to_shell_string(path.as_ref())?;
-        let path_type = self.backend.path_type(&path)?;
-        let qa_type = match path_type {
-            crate::utils::PathType::File => QuickAccess::RecentFiles,
-            crate::utils::PathType::Directory => QuickAccess::FrequentFolders,
-        };
+        let (qa_type, lock_target) = self.resolve_path_category(&path)?;
         let _admission = self
             .backend
             .uses_system_mutation_gate()
-            .then(|| {
-                MutationPermit::acquire_one(match path_type {
-                    crate::utils::PathType::File => QuickAccessLockTarget::RecentFiles,
-                    crate::utils::PathType::Directory => QuickAccessLockTarget::FrequentFolders,
-                })
-            })
+            .then(|| MutationPermit::acquire_one(lock_target))
             .transpose()?;
 
-        match path_type {
-            crate::utils::PathType::File => {
+        match qa_type {
+            QuickAccess::RecentFiles => {
                 self.ensure_present(&path, qa_type)?;
                 self.backend.remove_recent_file(&path, self.timeout)
             }
-            crate::utils::PathType::Directory => {
+            QuickAccess::FrequentFolders => {
                 self.ensure_present(&path, qa_type)?;
                 let pin_status = self.backend.frequent_folder_pin_status(&path)?;
                 match pin_status {
@@ -517,6 +498,7 @@ impl QuickAccessManager {
                 }
                 Ok(())
             }
+            QuickAccess::All => unreachable!(),
         }
     }
 
@@ -702,6 +684,22 @@ impl QuickAccessManager {
     /// ```
     pub fn set_visible(&self, target: VisibilityTarget, visible: bool) -> WincentResult<()> {
         visible::set_visible(target, visible)
+    }
+
+    fn resolve_path_category(
+        &self,
+        path: &str,
+    ) -> WincentResult<(QuickAccess, QuickAccessLockTarget)> {
+        let path_type = self.backend.path_type(path)?;
+        match path_type {
+            crate::utils::PathType::File => {
+                Ok((QuickAccess::RecentFiles, QuickAccessLockTarget::RecentFiles))
+            }
+            crate::utils::PathType::Directory => Ok((
+                QuickAccess::FrequentFolders,
+                QuickAccessLockTarget::FrequentFolders,
+            )),
+        }
     }
 
     fn ensure_not_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
