@@ -340,7 +340,7 @@ fn lock_fixture() -> WincentResult<(tempfile::TempDir, PathBuf)> {
 }
 
 #[test]
-fn typed_guards_can_coexist_and_drop_does_not_delete_shortcuts() -> WincentResult<()> {
+fn typed_guards_can_coexist_and_unlock_without_deleting_shortcuts() -> WincentResult<()> {
     let (_directory, root) = lock_fixture()?;
     let recent = RecentFilesLock {
         inner: QuickAccessLock::lock_target_in_recent_folder(
@@ -356,16 +356,16 @@ fn typed_guards_can_coexist_and_drop_does_not_delete_shortcuts() -> WincentResul
     };
     let link = root.join("keep-on-drop.lnk");
     fs::write(&link, b"fixture")?;
-    drop(recent);
-    drop(frequent);
+    recent.unlock();
+    frequent.unlock();
     assert!(link.exists());
     let all = QuickAccessLock::lock_target_in_recent_folder(QuickAccessLockTarget::All, root)?;
-    all.unlock()?;
+    drop(all);
     Ok(())
 }
 
 #[test]
-fn both_unlock_functions_clean_the_entire_recent_shortcut_delta() -> WincentResult<()> {
+fn both_guard_types_can_clean_the_entire_recent_shortcut_delta() -> WincentResult<()> {
     for category in [
         QuickAccessLockTarget::RecentFiles,
         QuickAccessLockTarget::FrequentFolders,
@@ -374,12 +374,13 @@ fn both_unlock_functions_clean_the_entire_recent_shortcut_delta() -> WincentResu
         let inner = QuickAccessLock::lock_target_in_recent_folder(category, root.clone())?;
         let link = root.join("new-shortcut.lnk");
         fs::write(&link, b"fixture")?;
-        let paths = if category == QuickAccessLockTarget::RecentFiles {
-            unlock_recent_files(RecentFilesLock { inner })?
+        let report = if category == QuickAccessLockTarget::RecentFiles {
+            RecentFilesLock { inner }.unlock_and_cleanup()?
         } else {
-            unlock_frequent_folders(FrequentFoldersLock { inner })?
+            FrequentFoldersLock { inner }.unlock_and_cleanup()?
         };
-        assert_eq!(paths, vec![link.to_string_lossy()]);
+        assert_eq!(report.cleaned_shortcuts(), std::slice::from_ref(&link));
+        assert!(report.is_complete());
         assert!(!link.exists());
         drop(QuickAccessLock::lock_target_in_recent_folder(
             category, root,
@@ -399,12 +400,15 @@ fn unlock_cleanup_failure_still_releases_both_guard_types() -> WincentResult<()>
         let link = root.join("deny-delete.lnk");
         fs::write(&link, b"fixture")?;
         let deny_delete = OpenOptions::new().read(true).share_mode(1).open(&link)?;
-        let result = if category == QuickAccessLockTarget::RecentFiles {
-            unlock_recent_files(RecentFilesLock { inner })
+        let report = if category == QuickAccessLockTarget::RecentFiles {
+            RecentFilesLock { inner }.unlock_and_cleanup()?
         } else {
-            unlock_frequent_folders(FrequentFoldersLock { inner })
+            FrequentFoldersLock { inner }.unlock_and_cleanup()?
         };
-        assert!(result.is_err());
+        assert!(report.cleaned_shortcuts().is_empty());
+        assert_eq!(report.cleanup_failures().len(), 1);
+        assert_eq!(report.cleanup_failures()[0].path(), link);
+        assert!(!report.is_complete());
         drop(QuickAccessLock::lock_target_in_recent_folder(
             category, root,
         )?);

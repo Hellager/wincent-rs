@@ -66,11 +66,10 @@ fn main() -> WincentResult<()> {
             "Frequent folders while locked: {:?}",
             get_frequent_folders()?
         );
-        println!("Removed shortcuts: {:?}", unlock_recent_files(recent_lock)?);
-        println!(
-            "Removed shortcuts: {:?}",
-            unlock_frequent_folders(frequent_lock)?
-        );
+        let report = recent_lock.unlock_and_cleanup()?;
+        println!("Cleaned shortcuts: {:?}", report.cleaned_shortcuts());
+        println!("Cleanup failures: {:?}", report.cleanup_failures());
+        frequent_lock.unlock();
 
         set_visible(VisibilityTarget::All, false)?;
         refresh_quick_access(timeout)?;

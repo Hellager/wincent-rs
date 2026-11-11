@@ -220,7 +220,7 @@ fn locks(
             )?;
             while_locked(checks, manager, root, category, file, folder)?;
             fs::write(&link, b"new shortcut while independently locked")?;
-            unlock_recent_files(guard)?
+            guard.unlock_and_cleanup()?
         } else {
             let guard = lock_frequent_folders()?;
             let repeated = lock_frequent_folders();
@@ -231,11 +231,13 @@ fn locks(
             )?;
             while_locked(checks, manager, root, category, file, folder)?;
             fs::write(&link, b"new shortcut while independently locked")?;
-            unlock_frequent_folders(guard)?
+            guard.unlock_and_cleanup()?
         };
         checks.check(
             &format!("standalone.unlock.delta.{category:?}"),
-            links.iter().any(|value| Path::new(value) == link) && !link.exists(),
+            links.cleaned_shortcuts().iter().any(|value| value == &link)
+                && links.is_complete()
+                && !link.exists(),
             &links,
         )?;
         manager.lock(category)?;

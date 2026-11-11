@@ -11,6 +11,7 @@ use crate::recent_links::recent_lnk_paths;
 use crate::utils::{get_windows_recent_folder, os_str_to_wide_null, paths_equal};
 use crate::WincentResult;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE};
@@ -45,6 +46,57 @@ pub enum QuickAccessLockTarget {
     ///
     /// Mutations through wincent are rejected for both categories while held.
     All,
+}
+
+/// Results from cleaning up shortcuts while releasing a Quick Access lock.
+#[must_use = "inspect cleanup failures before discarding an unlock report"]
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct UnlockReport {
+    cleaned_shortcuts: Vec<PathBuf>,
+    cleanup_failures: Vec<ShortcutCleanupFailure>,
+}
+
+impl UnlockReport {
+    /// Recent `.lnk` paths that were removed or were already absent.
+    #[must_use]
+    pub fn cleaned_shortcuts(&self) -> &[PathBuf] {
+        &self.cleaned_shortcuts
+    }
+
+    /// Recent `.lnk` paths that could not be removed.
+    #[must_use]
+    pub fn cleanup_failures(&self) -> &[ShortcutCleanupFailure] {
+        &self.cleanup_failures
+    }
+
+    /// Returns `true` when every discovered shortcut was cleaned up.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.cleanup_failures.is_empty()
+    }
+}
+
+/// A Recent `.lnk` file that could not be removed during unlock cleanup.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ShortcutCleanupFailure {
+    path: PathBuf,
+    error: io::Error,
+}
+
+impl ShortcutCleanupFailure {
+    /// Returns the shortcut path that could not be removed.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the filesystem error raised while removing the shortcut.
+    #[must_use]
+    pub fn error(&self) -> &io::Error {
+        &self.error
+    }
 }
 
 /// Holds category admission gates and locks backing files.
@@ -187,29 +239,31 @@ impl QuickAccessLock {
         })
     }
 
-    /// Returns new Recent shortcut paths and releases all held handles.
-    pub(crate) fn unlock(self) -> WincentResult<Vec<String>> {
+    /// Cleans up new Recent shortcuts and releases all held handles.
+    pub(crate) fn unlock_and_cleanup(self) -> WincentResult<UnlockReport> {
         let current_lnk_paths = recent_lnk_paths(&self.recent_folder)?;
         let new_lnk_paths = diff_new_paths(&self.initial_lnk_paths, &current_lnk_paths);
-        let mut failures = Vec::new();
+        Ok(cleanup_shortcuts(new_lnk_paths))
+    }
+}
 
-        for path in &new_lnk_paths {
-            if let Err(error) = fs::remove_file(path) {
-                failures.push(format!("{}: {error}", path.display()));
+fn cleanup_shortcuts(paths: Vec<PathBuf>) -> UnlockReport {
+    let mut cleaned_shortcuts = Vec::new();
+    let mut cleanup_failures = Vec::new();
+
+    for path in paths {
+        match fs::remove_file(&path) {
+            Ok(()) => cleaned_shortcuts.push(path),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                cleaned_shortcuts.push(path);
             }
+            Err(error) => cleanup_failures.push(ShortcutCleanupFailure { path, error }),
         }
+    }
 
-        if !failures.is_empty() {
-            return Err(WincentError::SystemError(format!(
-                "Failed to remove Recent shortcuts: {}",
-                failures.join("; ")
-            )));
-        }
-
-        Ok(new_lnk_paths
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect())
+    UnlockReport {
+        cleaned_shortcuts,
+        cleanup_failures,
     }
 }
 
@@ -349,10 +403,11 @@ mod tests {
         )?;
         assert!(!can_open_exclusively(&recent_file));
 
-        std::thread::spawn(move || lock.unlock())
+        let report = std::thread::spawn(move || lock.unlock_and_cleanup())
             .join()
             .expect("unlock worker panicked")?;
 
+        assert!(report.is_complete());
         assert!(can_open_exclusively(&recent_file));
         Ok(())
     }
@@ -367,9 +422,10 @@ mod tests {
         let new_link = recent_folder.join("new.lnk");
         fs::write(&new_link, b"new").map_err(WincentError::Io)?;
 
-        let new_links = lock.unlock()?;
+        let report = lock.unlock_and_cleanup()?;
 
-        assert_eq!(new_links, vec![new_link.to_string_lossy().into_owned()]);
+        assert_eq!(report.cleaned_shortcuts(), std::slice::from_ref(&new_link));
+        assert!(report.is_complete());
         assert!(!new_link.exists());
         assert!(can_open_exclusively(&recent_file));
         Ok(())
@@ -449,7 +505,7 @@ mod tests {
         };
         assert!(!can_open_exclusively(&recent_file));
 
-        assert!(lock.unlock().is_err());
+        assert!(lock.unlock_and_cleanup().is_err());
 
         assert!(can_open_exclusively(&recent_file));
         Ok(())
@@ -468,9 +524,19 @@ mod tests {
         fs::write(&another_link, b"other").map_err(WincentError::Io)?;
         let deletion_blocker = LockedFile::open(&new_link)?;
 
-        let result = lock.unlock();
+        let report = lock.unlock_and_cleanup()?;
 
-        assert!(matches!(result, Err(WincentError::SystemError(_))));
+        assert_eq!(
+            report.cleaned_shortcuts(),
+            std::slice::from_ref(&another_link)
+        );
+        assert_eq!(report.cleanup_failures().len(), 1);
+        assert_eq!(report.cleanup_failures()[0].path(), new_link);
+        assert_ne!(
+            report.cleanup_failures()[0].error().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(!report.is_complete());
         assert!(new_link.exists());
         assert!(!another_link.exists());
         assert!(can_open_exclusively(&recent_file));
@@ -648,12 +714,24 @@ mod tests {
         fs::remove_file(&gone).map_err(WincentError::Io)?;
         fs::write(&new, b"new").map_err(WincentError::Io)?;
 
-        let new_links = lock.unlock()?;
+        let report = lock.unlock_and_cleanup()?;
 
-        assert_eq!(new_links, vec![new.to_string_lossy().into_owned()]);
+        assert_eq!(report.cleaned_shortcuts(), std::slice::from_ref(&new));
+        assert!(report.is_complete());
         assert!(existing.exists());
         assert!(!gone.exists());
         assert!(!new.exists());
         Ok(())
+    }
+
+    #[test]
+    fn cleanup_treats_already_absent_shortcut_as_complete() {
+        let path = PathBuf::from("already-absent.lnk");
+
+        let report = cleanup_shortcuts(vec![path.clone()]);
+
+        assert_eq!(report.cleaned_shortcuts(), &[path]);
+        assert!(report.cleanup_failures().is_empty());
+        assert!(report.is_complete());
     }
 }

@@ -172,7 +172,7 @@ Core:
     detects Recent files and pinned or unpinned Frequent Folders automatically.
   refresh
     notifies the Shell, then refreshes open Explorer views.
-  lock [recent|frequent|all]
+  lock [recent|frequent|all] [--cleanup-new-links]
     Locked targets block Explorer from adding or removing matching Quick Access items.
   empty <recent|frequent|all>
 Utility APIs:
@@ -349,16 +349,27 @@ fn cmd_refresh(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
 }
 
 fn cmd_lock(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    if args.len() > 1 {
-        return Err(WincentError::InvalidArgument(
-            "usage: lock [recent|frequent|all]".to_string(),
-        ));
+    let usage = || {
+        WincentError::InvalidArgument(
+            "usage: lock [recent|frequent|all] [--cleanup-new-links]".to_string(),
+        )
+    };
+    let mut cleanup = false;
+    let mut target = None;
+    for arg in args {
+        if arg == "--cleanup-new-links" {
+            if cleanup {
+                return Err(usage());
+            }
+            cleanup = true;
+        } else {
+            if target.is_some() {
+                return Err(usage());
+            }
+            target = Some(parse_category(arg, true)?);
+        }
     }
-    let target = args
-        .first()
-        .map(|arg| parse_category(arg, true))
-        .transpose()?
-        .unwrap_or(QuickAccess::All);
+    let target = target.unwrap_or(QuickAccess::All);
     manager.lock(target)?;
     println!("locked Quick Access backing files");
     println!("target: {target:?}");
@@ -367,10 +378,22 @@ fn cmd_lock(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> 
     let mut line = String::new();
     io::stdin().read_line(&mut line).map_err(WincentError::Io)?;
 
-    let new_links = manager.unlock()?;
-    println!("new_lnk_paths: {}", new_links.len());
-    for path in new_links {
-        println!("  {path}");
+    if cleanup {
+        let report = manager.unlock_and_cleanup()?;
+        println!("cleaned_shortcuts: {}", report.cleaned_shortcuts().len());
+        for path in report.cleaned_shortcuts() {
+            println!("  cleaned {}", path.display());
+        }
+        for failure in report.cleanup_failures() {
+            println!(
+                "  failed to clean {}: {}",
+                failure.path().display(),
+                failure.error()
+            );
+        }
+    } else {
+        manager.unlock()?;
+        println!("released lock without shortcut cleanup");
     }
     Ok(())
 }

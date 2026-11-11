@@ -5,7 +5,7 @@ use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     empty,
     error::WincentError,
-    lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget},
+    lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget, UnlockReport},
     status::QuickAccessStatus,
     utils::paths_equal,
     QuickAccess, VisibilityTarget, WincentResult,
@@ -507,7 +507,8 @@ impl QuickAccessManager {
     ///
     /// `QuickAccess::All` locks both categories. The lock rejects cooperating
     /// mutations and inhibits writes to the selected backing files until
-    /// [`QuickAccessManager::unlock`] or the last manager clone is dropped.
+    /// [`QuickAccessManager::unlock`], [`QuickAccessManager::unlock_and_cleanup`],
+    /// or the last manager clone is dropped.
     /// A manager and its clones can hold only one lock at a time.
     /// Independent managers may lock different categories concurrently; an
     /// overlapping lock attempt fails at the system file gate.
@@ -525,7 +526,7 @@ impl QuickAccessManager {
     /// # fn main() -> WincentResult<()> {
     /// let manager = QuickAccessManager::new();
     /// manager.lock(QuickAccess::RecentFiles)?;
-    /// let new_links = manager.unlock()?;
+    /// manager.unlock()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -546,22 +547,43 @@ impl QuickAccessManager {
         Ok(())
     }
 
-    /// Releases the lock and returns paths of Recent `.lnk` files added while locked.
+    /// Releases the lock without scanning or deleting Recent shortcuts.
     ///
-    /// These paths are for reference and do not represent every blocked item.
-    /// The lock is released even if this method returns an error.
+    /// Use [`QuickAccessManager::unlock_and_cleanup`] when new Recent `.lnk`
+    /// files created while locked should also be removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WincentError::ManagerNotLocked`] if no lock is held.
+    pub fn unlock(&self) -> WincentResult<()> {
+        drop(self.take_lock()?);
+        Ok(())
+    }
+
+    /// Releases the lock and cleans up new Recent `.lnk` files.
+    ///
+    /// Cleanup is best-effort. Individual deletion failures are returned in
+    /// [`UnlockReport::cleanup_failures`] while successfully cleaned paths are
+    /// retained in the same report. The lock is released even when collecting
+    /// the Recent shortcut snapshot returns an error.
+    ///
+    /// The shortcut delta covers the entire Recent directory and is not limited
+    /// to the locked Quick Access category.
     ///
     /// # Errors
     ///
     /// Returns [`WincentError::ManagerNotLocked`] if no lock is held, or an
-    /// error if the Recent shortcuts cannot be processed.
-    pub fn unlock(&self) -> WincentResult<Vec<String>> {
+    /// error if the current Recent shortcuts cannot be enumerated.
+    pub fn unlock_and_cleanup(&self) -> WincentResult<UnlockReport> {
+        self.take_lock()?.unlock_and_cleanup()
+    }
+
+    fn take_lock(&self) -> WincentResult<QuickAccessLock> {
         let mut state = self
             .lock_state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let lock = state.take().ok_or(WincentError::ManagerNotLocked)?;
-        lock.unlock()
+        state.take().ok_or(WincentError::ManagerNotLocked)
     }
 
     /// Notifies the Shell about Quick Access changes and refreshes matching
@@ -770,11 +792,8 @@ mod tests {
 
         let new_link = recent_folder.join("new.lnk");
         fs::write(&new_link, b"new").map_err(WincentError::Io)?;
-        assert_eq!(
-            clone.unlock()?,
-            vec![new_link.to_string_lossy().into_owned()]
-        );
-        assert!(!new_link.exists());
+        clone.unlock()?;
+        assert!(new_link.exists());
         assert!(matches!(
             manager.unlock(),
             Err(WincentError::ManagerNotLocked)
@@ -784,6 +803,33 @@ mod tests {
             recent_folder,
         )
         .is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn manager_unlock_and_cleanup_reports_new_shortcuts() -> WincentResult<()> {
+        let (_dir, recent_folder) = lock_fixture()?;
+        let manager = QuickAccessManager::new();
+        *manager
+            .lock_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Some(QuickAccessLock::lock_target_in_recent_folder(
+                QuickAccessLockTarget::RecentFiles,
+                recent_folder.clone(),
+            )?);
+        let new_link = recent_folder.join("new.lnk");
+        fs::write(&new_link, b"new").map_err(WincentError::Io)?;
+
+        let report = manager.unlock_and_cleanup()?;
+
+        assert_eq!(report.cleaned_shortcuts(), std::slice::from_ref(&new_link));
+        assert!(report.is_complete());
+        assert!(!new_link.exists());
+        assert!(matches!(
+            manager.unlock_and_cleanup(),
+            Err(WincentError::ManagerNotLocked)
+        ));
         Ok(())
     }
 

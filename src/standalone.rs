@@ -6,8 +6,9 @@
 //! It does not cancel native work already running. Do not automatically retry
 //! a timed-out mutation; inspect the resulting state first.
 //!
-//! Lock functions return owned guards. Keep the guard alive until unlocking,
-//! or drop it to release the lock without cleaning up new Recent shortcuts.
+//! Lock functions return owned guards. Keep the guard alive until unlocking.
+//! Dropping it or calling `unlock` releases the lock without cleaning up new
+//! Recent shortcuts; `unlock_and_cleanup` also removes newly created shortcuts.
 //!
 //! # Examples
 //!
@@ -23,7 +24,7 @@
 //!
 //! let lock = lock_recent_files()?;
 //! // Keep the guard while Recent Files should be locked.
-//! let removed_shortcuts = unlock_recent_files(lock)?;
+//! let report = lock.unlock_and_cleanup()?;
 //! # Ok(())
 //! # }
 //! ```
@@ -32,7 +33,7 @@ use crate::backend::{self, QuickAccessBackend, SystemQuickAccessBackend};
 use crate::destlist::FrequentFolderPinStatus;
 use crate::empty;
 use crate::error::WincentError;
-use crate::lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget};
+use crate::lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget, UnlockReport};
 use crate::utils::{paths_equal, PathType};
 use crate::{QuickAccess, WincentResult};
 use std::fmt;
@@ -169,11 +170,31 @@ pub fn remove_from_frequent_folders<P: AsRef<Path>>(
 
 /// An owned Recent Files lock, released when dropped.
 ///
-/// Does not implement `Clone`. Dropping only releases handles; use
-/// [`unlock_recent_files`] to also remove and report newly created shortcuts.
+/// Does not implement `Clone`. Dropping or calling [`RecentFilesLock::unlock`]
+/// only releases handles. Use [`RecentFilesLock::unlock_and_cleanup`] to also
+/// remove and report newly created shortcuts.
 #[must_use = "keep the guard alive to keep Recent Files locked"]
 pub struct RecentFilesLock {
     inner: QuickAccessLock,
+}
+
+impl RecentFilesLock {
+    /// Releases the lock without scanning or deleting Recent shortcuts.
+    pub fn unlock(self) {
+        drop(self);
+    }
+
+    /// Releases the lock and cleans up new shortcuts from the Recent directory.
+    ///
+    /// Cleanup is best-effort. Individual deletion failures are returned in
+    /// [`UnlockReport::cleanup_failures`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current Recent shortcuts cannot be enumerated.
+    pub fn unlock_and_cleanup(self) -> WincentResult<UnlockReport> {
+        self.inner.unlock_and_cleanup()
+    }
 }
 
 impl fmt::Debug for RecentFilesLock {
@@ -184,11 +205,32 @@ impl fmt::Debug for RecentFilesLock {
 
 /// An owned Frequent Folders lock, released when dropped.
 ///
-/// Does not implement `Clone`. Dropping only releases handles; use
-/// [`unlock_frequent_folders`] to also remove and report newly created shortcuts.
+/// Does not implement `Clone`. Dropping or calling [`FrequentFoldersLock::unlock`]
+/// only releases handles. Use [`FrequentFoldersLock::unlock_and_cleanup`] to also
+/// remove and report newly created shortcuts.
 #[must_use = "keep the guard alive to keep Frequent Folders locked"]
 pub struct FrequentFoldersLock {
     inner: QuickAccessLock,
+}
+
+impl FrequentFoldersLock {
+    /// Releases the lock without scanning or deleting Recent shortcuts.
+    pub fn unlock(self) {
+        drop(self);
+    }
+
+    /// Releases the lock and cleans up new shortcuts from the Recent directory.
+    ///
+    /// The shortcut delta covers the entire Recent directory, not only folder
+    /// shortcuts. Cleanup is best-effort, with individual deletion failures in
+    /// [`UnlockReport::cleanup_failures`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current Recent shortcuts cannot be enumerated.
+    pub fn unlock_and_cleanup(self) -> WincentResult<UnlockReport> {
+        self.inner.unlock_and_cleanup()
+    }
 }
 
 impl fmt::Debug for FrequentFoldersLock {
@@ -226,31 +268,6 @@ pub fn lock_frequent_folders() -> WincentResult<FrequentFoldersLock> {
     Ok(FrequentFoldersLock {
         inner: QuickAccessLock::lock_target(QuickAccessLockTarget::FrequentFolders)?,
     })
-}
-
-/// Consumes a Recent Files guard, removes new Recent `.lnk` files and releases it.
-///
-/// Returns deleted shortcut paths, not target paths or every blocked item.
-/// As with manager unlock, the delta covers the entire Recent directory.
-/// The lock is released even when shortcut enumeration or deletion fails.
-///
-/// # Errors
-///
-/// Returns an error if Recent shortcuts cannot be enumerated or removed.
-pub fn unlock_recent_files(lock: RecentFilesLock) -> WincentResult<Vec<String>> {
-    lock.inner.unlock()
-}
-
-/// Consumes a Frequent Folders guard, removes new Recent `.lnk` files and releases it.
-///
-/// The delta covers the entire Recent directory, not only folder shortcuts.
-/// Returns deleted shortcut paths. The lock is released even on cleanup error.
-///
-/// # Errors
-///
-/// Returns an error if Recent shortcuts cannot be enumerated or removed.
-pub fn unlock_frequent_folders(lock: FrequentFoldersLock) -> WincentResult<Vec<String>> {
-    lock.inner.unlock()
 }
 
 /// Notifies the Shell and refreshes open Quick Access/Home views.

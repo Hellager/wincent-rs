@@ -593,10 +593,14 @@ fn lock_checks(
             child_ok,
             "separate process must reject overlapping mutation",
         )?;
-        let unlocked = clone.unlock()?;
+        let unlocked = clone.unlock_and_cleanup()?;
         checks.check(
             &format!("lock.unlock.{category:?}"),
-            unlocked.iter().all(|path| !Path::new(path).exists()),
+            unlocked
+                .cleaned_shortcuts()
+                .iter()
+                .all(|path| !path.exists())
+                && unlocked.is_complete(),
             unlocked,
         )?;
         let again = manager.unlock();
@@ -630,10 +634,12 @@ fn lock_checks(
     let link = recent_dir.join(format!("wincent-qam-{}.lnk", std::process::id()));
     // A new shortcut need not be a valid Shell link: unlock tracks new .lnk paths.
     fs::write(&link, b"VM-only unlock path tracking fixture")?;
-    let links = manager.unlock()?;
+    let links = manager.unlock_and_cleanup()?;
     checks.check(
         "lock.last_clone_drop_releases_and_unlock_reports_links",
-        links.iter().any(|value| Path::new(value) == link) && !link.exists(),
+        links.cleaned_shortcuts().iter().any(|value| value == &link)
+            && links.is_complete()
+            && !link.exists(),
         links,
     )?;
     Ok(())

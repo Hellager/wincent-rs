@@ -1,5 +1,17 @@
 ## Unreleased
 
+### Changed
+- **Breaking:** `QuickAccessManager::unlock` and standalone lock-guard `unlock`
+  methods now only release their locks. Explicit `unlock_and_cleanup` methods
+  perform destructive Recent shortcut cleanup.
+- **Breaking:** `UnlockReport` now exposes `PathBuf` cleanup results through
+  accessors and preserves per-shortcut deletion failures. Cleanup is
+  best-effort, and an already-absent shortcut counts as successfully cleaned.
+
+### Removed
+- **Breaking:** Replaced the `unlock_recent_files` and
+  `unlock_frequent_folders` free functions with methods on their typed guards.
+
 ## [0.3.1-alpha.2] - 2026-11-09
 
 ### Added
