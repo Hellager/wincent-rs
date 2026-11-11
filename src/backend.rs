@@ -3,14 +3,16 @@ use crate::{
         frequent_folders_dest_path, parse_file_if_exists, recent_files_dest_path,
         AutomaticDestinations, DEFAULT_RECENT_FILES_RESULT_LIMIT,
     },
-    empty,
-    handle::{
-        add_file_to_recent_native, add_to_frequent_folders_with_timeout,
-        remove_from_recent_files_with_timeout, remove_pinned_frequent_folder_with_timeout,
-        remove_unpinned_frequent_folder_with_timeout,
-    },
     lock::{MutationPermit, QuickAccessLockTarget},
-    utils::PathType,
+    path::PathType,
+    shell::{
+        clear,
+        mutation::{
+            add_file_to_recent_native, add_to_frequent_folders_with_timeout,
+            remove_from_recent_files_with_timeout, remove_pinned_frequent_folder_with_timeout,
+            remove_unpinned_frequent_folder_with_timeout,
+        },
+    },
     QuickAccess, WincentResult,
 };
 use std::time::Duration;
@@ -21,7 +23,7 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     }
 
     fn path_type(&self, path: &str) -> WincentResult<PathType> {
-        crate::utils::detect_path_type(path)
+        crate::path::detect_path_type(path)
     }
 
     fn get_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<Vec<String>>;
@@ -67,7 +69,7 @@ pub(crate) fn ui_visible_items(qa_type: QuickAccess) -> WincentResult<Vec<String
             for path in frequent {
                 if !merged
                     .iter()
-                    .any(|existing| crate::utils::paths_equal(existing, &path))
+                    .any(|existing| crate::path::paths_equal(existing, &path))
                 {
                     merged.push(path);
                 }
@@ -152,20 +154,20 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
 
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()> {
         let permit = MutationPermit::acquire_one(QuickAccessLockTarget::RecentFiles)?;
-        empty::empty_recent_files_with_api(timeout, permit)
+        clear::clear_recent_files(timeout, permit)
     }
 
     fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()> {
         let _permit = MutationPermit::acquire_one(QuickAccessLockTarget::FrequentFolders)?;
-        empty::clear_frequent_folders_with_destlist_reset(timeout)
+        clear::clear_frequent_folders(timeout)
     }
 
     fn notify_shell_change(&self) {
-        crate::utils::notify_shell_change();
+        crate::shell::explorer::notify_shell_change();
     }
 
     fn refresh_shell_views(&self, timeout: Duration) -> WincentResult<()> {
-        crate::utils::refresh_shell_views(timeout)
+        crate::shell::explorer::refresh_shell_views_with_timeout(timeout)
     }
 }
 

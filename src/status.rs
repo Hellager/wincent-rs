@@ -41,7 +41,7 @@ use crate::destlist::{
     frequent_folders_dest_path, parse_file_if_exists, recent_files_dest_path,
     AutomaticDestinations, DestListEntry, DEFAULT_RECENT_FILES_RESULT_LIMIT,
 };
-use crate::utils::paths_equal;
+use crate::path::paths_equal;
 use crate::{QuickAccess, WincentResult};
 
 /// Position and pin state in a rule-based Frequent Folders query result.

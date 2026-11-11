@@ -66,20 +66,17 @@
 //!
 
 mod backend;
-mod com;
-mod com_thread;
 mod empty;
 pub mod error;
-mod explorer_window;
-mod handle;
 mod lock;
 pub mod manager;
-mod query;
+mod path;
 mod recent_links;
+mod shell;
 pub mod standalone;
 #[cfg(test)]
 mod test_utils;
-pub(crate) mod utils;
+mod windows;
 
 pub mod visible;
 
@@ -103,7 +100,7 @@ pub mod prelude {
 
     pub use crate::visible::{is_visible, set_visible, VisibilityTarget};
 
-    pub use crate::utils::{get_windows_version, WindowsVersion};
+    pub use crate::windows::{get_windows_version, WindowsVersion};
 
     pub use crate::{QuickAccess, WincentResult};
 

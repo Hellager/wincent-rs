@@ -6,8 +6,8 @@ use crate::{
     empty,
     error::WincentError,
     lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget, UnlockReport},
+    path::paths_equal,
     status::QuickAccessStatus,
-    utils::paths_equal,
     QuickAccess, VisibilityTarget, WincentResult,
 };
 use std::fmt;
@@ -715,10 +715,10 @@ impl QuickAccessManager {
     ) -> WincentResult<(QuickAccess, QuickAccessLockTarget)> {
         let path_type = self.backend.path_type(path)?;
         match path_type {
-            crate::utils::PathType::File => {
+            crate::path::PathType::File => {
                 Ok((QuickAccess::RecentFiles, QuickAccessLockTarget::RecentFiles))
             }
-            crate::utils::PathType::Directory => Ok((
+            crate::path::PathType::Directory => Ok((
                 QuickAccess::FrequentFolders,
                 QuickAccessLockTarget::FrequentFolders,
             )),
@@ -926,14 +926,14 @@ mod tests {
     }
 
     impl crate::backend::QuickAccessBackend for FakeBackend {
-        fn path_type(&self, path: &str) -> WincentResult<crate::utils::PathType> {
+        fn path_type(&self, path: &str) -> WincentResult<crate::path::PathType> {
             if let Some(error) = self.validate_path_error.lock().unwrap().take() {
                 return Err(error);
             }
             if Path::new(path).extension().is_some() {
-                Ok(crate::utils::PathType::File)
+                Ok(crate::path::PathType::File)
             } else {
-                Ok(crate::utils::PathType::Directory)
+                Ok(crate::path::PathType::Directory)
             }
         }
 

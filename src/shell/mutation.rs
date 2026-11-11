@@ -20,8 +20,8 @@ use crate::{
     destlist::FrequentFolderPinStatus,
     error::WincentError,
     lock::MutationPermit,
-    query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
-    utils::{paths_equal, validate_path, PathType},
+    path::{paths_equal, validate_path, PathType},
+    shell::query::{folder_items, item_path, shell_folder, FREQUENT_FOLDERS_NAMESPACE},
     QuickAccess, WincentResult,
 };
 use std::ffi::OsString;
@@ -271,7 +271,7 @@ fn pin_frequent_folder_native(
     // "pintohome" can act as a toggle. The check prevents toggling an
     // existing folder off.
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread_with_permit(
+    crate::shell::thread::run_on_sta_thread_with_permit(
         move || {
             run_pin_frequent_folder_checked(
                 &path,
@@ -380,7 +380,7 @@ pub(crate) fn add_file_to_recent_native(
 ) -> WincentResult<()> {
     validate_path(path, PathType::File)?;
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread_with_permits(
+    crate::shell::thread::run_on_sta_thread_with_permits(
         move || add_file_to_recent_native_current_sta(&path),
         timeout,
         permits,
@@ -452,7 +452,7 @@ fn remove_recent_file_native(
     permit: MutationPermit,
 ) -> WincentResult<()> {
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread_with_permit(
+    crate::shell::thread::run_on_sta_thread_with_permit(
         move || {
             let recent_namespace = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
             let folder = shell_folder(recent_namespace)?;
@@ -613,7 +613,7 @@ pub(crate) fn remove_unpinned_frequent_folder_with_timeout(
     }
     validate_path(path, PathType::Directory)?;
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread_with_permit(
+    crate::shell::thread::run_on_sta_thread_with_permit(
         move || remove_unpinned_frequent_folder_current_sta(&path),
         timeout,
         permit,
@@ -634,7 +634,7 @@ pub(crate) fn remove_pinned_frequent_folder_with_timeout(
     }
     validate_path(path, PathType::Directory)?;
     let path = path.to_owned();
-    crate::com_thread::run_on_sta_thread_with_permit(
+    crate::shell::thread::run_on_sta_thread_with_permit(
         move || remove_pinned_frequent_folder_current_sta(&path),
         timeout,
         permit,

@@ -1,4 +1,4 @@
-use crate::com::{classify_coinit_result, ComInitStatus};
+use super::com::{classify_coinit_result, ComInitStatus};
 use crate::lock::MutationPermit;
 use crate::{error::WincentError, WincentResult};
 use std::panic::AssertUnwindSafe;

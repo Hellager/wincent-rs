@@ -5,11 +5,25 @@ use windows::Win32::System::Com::{
     CoCreateInstance, IDispatch, IServiceProvider, CLSCTX_LOCAL_SERVER,
 };
 use windows::Win32::UI::Shell::{
-    IShellBrowser, IShellWindows, IWebBrowser2, SID_STopLevelBrowser, ShellWindows,
+    IShellBrowser, IShellWindows, IWebBrowser2, SHChangeNotify, SID_STopLevelBrowser, ShellWindows,
+    SHCNE_ASSOCCHANGED, SHCNF_IDLIST,
 };
 
+pub(crate) fn notify_shell_change() {
+    // SAFETY: SHCNE_ASSOCCHANGED with SHCNF_IDLIST accepts null item pointers.
+    unsafe {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn refresh_quick_access(timeout: Duration) -> WincentResult<()> {
+    notify_shell_change();
+    refresh_shell_views_with_timeout(timeout)
+}
+
 pub(crate) fn refresh_shell_views_with_timeout(timeout: Duration) -> WincentResult<()> {
-    crate::com_thread::run_on_sta_thread(refresh_shell_views_on_sta, timeout)
+    crate::shell::thread::run_on_sta_thread(refresh_shell_views_on_sta, timeout)
 }
 
 fn refresh_shell_views_on_sta() -> WincentResult<()> {
@@ -176,7 +190,7 @@ fn is_home_or_recent_url(url: &str) -> bool {
 
 #[cfg(test)]
 fn list_detected_explorer_locations() -> WincentResult<Vec<ExplorerLocation>> {
-    crate::com_thread::run_on_sta_thread(
+    crate::shell::thread::run_on_sta_thread(
         || {
             let (shell_windows, count) = shell_windows_with_count()?;
             let mut locations = Vec::new();
@@ -206,7 +220,7 @@ fn list_detected_explorer_locations() -> WincentResult<Vec<ExplorerLocation>> {
 
 #[cfg(test)]
 fn refresh_detected_recent_access_locations() -> WincentResult<RefreshResult> {
-    crate::com_thread::run_on_sta_thread(
+    crate::shell::thread::run_on_sta_thread(
         || {
             let (shell_windows, count) = shell_windows_with_count()?;
             refresh_recent_access_shell_views(&shell_windows, count)

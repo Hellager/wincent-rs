@@ -36,8 +36,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::error::WincentError;
+use crate::path::normalize_path_lightweight;
 use crate::recent_links::{is_lnk_file, resolve_lnk_target};
-use crate::utils::{get_windows_recent_folder, normalize_path_lightweight};
+use crate::windows::get_windows_recent_folder;
 use crate::WincentResult;
 
 use super::parser::{
@@ -276,7 +277,7 @@ where
         base,
         options,
         resolver,
-        || crate::utils::refresh_quick_access(Duration::from_secs(10)),
+        || crate::shell::explorer::refresh_quick_access(Duration::from_secs(10)),
         wait_for_rebuilt_dest,
     ))
 }
@@ -666,7 +667,7 @@ mod tests {
                 println!(
                     "initial parse failed: {error}; refreshing Quick Access windows and retrying"
                 );
-                crate::utils::refresh_quick_access(Duration::from_secs(10))?;
+                crate::shell::explorer::refresh_quick_access(Duration::from_secs(10))?;
                 thread::sleep(Duration::from_secs(1));
                 parse_file_with_retries(dest_path, Duration::from_secs(5))
             }
@@ -1099,7 +1100,7 @@ mod tests {
         }
 
         fs::remove_file(&dest_path).map_err(WincentError::Io)?;
-        crate::utils::refresh_quick_access(Duration::from_secs(10))?;
+        crate::shell::explorer::refresh_quick_access(Duration::from_secs(10))?;
         thread::sleep(ExperimentalRemoveOptions::default().rebuild_delay());
 
         let rebuilt = wait_for_rebuilt_dest(&dest_path, &matching_paths, REBUILD_POLL_TIMEOUT)?;
@@ -1264,7 +1265,7 @@ mod tests {
     }
 
     fn read_application_document_list(kind: AutomaticDestinationsKind) -> WincentResult<()> {
-        crate::com_thread::run_on_sta_thread(
+        crate::shell::thread::run_on_sta_thread(
             move || {
                 // SAFETY: The dedicated worker initialized COM in STA mode and the wrapper owns
                 // the returned interface pointer.

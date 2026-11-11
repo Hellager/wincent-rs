@@ -34,7 +34,7 @@ use crate::destlist::FrequentFolderPinStatus;
 use crate::empty;
 use crate::error::WincentError;
 use crate::lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget, UnlockReport};
-use crate::utils::{paths_equal, PathType};
+use crate::path::{paths_equal, PathType};
 use crate::{QuickAccess, WincentResult};
 use std::fmt;
 use std::path::Path;

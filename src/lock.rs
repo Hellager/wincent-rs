@@ -7,8 +7,9 @@
 //! Windows may still create Recent-folder `.lnk` shortcuts during the lock.
 
 use crate::error::WincentError;
+use crate::path::paths_equal;
 use crate::recent_links::recent_lnk_paths;
-use crate::utils::{get_windows_recent_folder, os_str_to_wide_null, paths_equal};
+use crate::windows::{get_windows_recent_folder, os_str_to_wide_null};
 use crate::WincentResult;
 use std::fs;
 use std::io;

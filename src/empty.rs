@@ -11,104 +11,8 @@
 //! - Full Quick Access reset capabilities
 //! - Atomic operations with proper cleanup sequencing
 
-use crate::{
-    backend::QuickAccessBackend,
-    destlist::{frequent_folders_dest_path, parse_file},
-    error::WincentError,
-    lock::MutationPermit,
-    recent_links,
-    utils::paths_equal,
-    QuickAccess, WincentResult,
-};
-use std::{io::ErrorKind, path::Path, time::Duration};
-use windows::Win32::UI::Shell::SHAddToRecentDocs;
-
-/// SHARD_PATHW - with a null data pointer, clears all recent documents.
-const SHARD_PATHW: u32 = 0x0000_0003;
-
-/// Clears the Windows Recent Files list via a dedicated STA thread.
-///
-/// Calls `SHAddToRecentDocs(SHARD_PATHW, NULL)`, which clears the Recent Files
-/// entries and streams together with their shortcuts in the Recent directory.
-///
-/// `timeout` limits how long the caller waits; the underlying Shell operation
-/// may still complete after the timeout elapses.
-pub(crate) fn empty_recent_files_with_api(
-    timeout: Duration,
-    permit: MutationPermit,
-) -> WincentResult<()> {
-    crate::com_thread::run_on_sta_thread_with_permit(
-        || {
-            // SAFETY: SHARD_PATHW with a null data pointer is a documented
-            // Windows API pattern for clearing the recent documents list.
-            unsafe { SHAddToRecentDocs(SHARD_PATHW, None) };
-            Ok(())
-        },
-        timeout,
-        permit,
-    )
-}
-
-/// Clears Frequent Folders by removing matching Recent shortcuts before the DestList.
-///
-/// Every raw DestList entry is included, including hidden entries. Matching `.lnk`
-/// files are deleted first so Explorer cannot use them while rebuilding the list.
-/// The DestList file is deleted only after all shortcut cleanup succeeds.
-pub(crate) fn clear_frequent_folders_with_destlist_reset(timeout: Duration) -> WincentResult<()> {
-    let jumplist_file = frequent_folders_dest_path()?;
-    if !jumplist_file.try_exists().map_err(WincentError::Io)? {
-        return Ok(());
-    }
-
-    let parsed = parse_file(&jumplist_file)?;
-    let paths = unique_paths(
-        parsed
-            .dest_list()
-            .entries()
-            .iter()
-            .map(crate::destlist::DestListEntry::path),
-    );
-
-    clear_frequent_folders_data(
-        &paths,
-        |targets| recent_links::delete_recent_links_for_targets(targets, timeout).map(|_| ()),
-        || remove_file_if_present(&jumplist_file),
-    )
-}
-
-fn unique_paths<'path>(paths: impl IntoIterator<Item = &'path str>) -> Vec<String> {
-    let mut unique: Vec<String> = Vec::new();
-
-    for path in paths {
-        if path.is_empty() || unique.iter().any(|existing| paths_equal(existing, path)) {
-            continue;
-        }
-        unique.push(path.to_owned());
-    }
-
-    unique
-}
-
-fn clear_frequent_folders_data<FDeleteLinks, FDeleteDestList>(
-    paths: &[String],
-    delete_links: FDeleteLinks,
-    delete_dest_list: FDeleteDestList,
-) -> WincentResult<()>
-where
-    FDeleteLinks: FnOnce(&[String]) -> WincentResult<()>,
-    FDeleteDestList: FnOnce() -> WincentResult<()>,
-{
-    delete_links(paths)?;
-    delete_dest_list()
-}
-
-fn remove_file_if_present(path: &Path) -> WincentResult<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(WincentError::Io(error)),
-    }
-}
+use crate::{backend::QuickAccessBackend, error::WincentError, QuickAccess, WincentResult};
+use std::time::Duration;
 
 /// Clears items from Windows Quick Access.
 ///
@@ -210,7 +114,6 @@ pub(crate) fn empty_items_with_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::{Cell, RefCell};
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -321,61 +224,6 @@ mod tests {
             }
             Ok(())
         }
-    }
-
-    #[test]
-    fn unique_paths_uses_windows_path_semantics() {
-        let paths = unique_paths(["C:\\Work", "c:/work/", "C:\\Other", "", "C:\\OTHER\\"]);
-
-        assert_eq!(paths, vec!["C:\\Work", "C:\\Other"]);
-    }
-
-    #[test]
-    fn frequent_cleanup_deletes_links_before_destlist() -> WincentResult<()> {
-        let calls = RefCell::new(Vec::new());
-        let paths = vec!["C:\\One".to_string(), "C:\\Two".to_string()];
-
-        clear_frequent_folders_data(
-            &paths,
-            |targets| {
-                calls
-                    .borrow_mut()
-                    .push(format!("links:{}", targets.join("|")));
-                Ok(())
-            },
-            || {
-                calls.borrow_mut().push("destlist".to_string());
-                Ok(())
-            },
-        )?;
-
-        assert_eq!(
-            calls.into_inner(),
-            vec!["links:C:\\One|C:\\Two", "destlist"]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn frequent_cleanup_preserves_destlist_when_link_cleanup_fails() {
-        let destlist_deleted = Cell::new(false);
-        let paths = vec!["C:\\One".to_string(), "C:\\Two".to_string()];
-
-        let error = clear_frequent_folders_data(
-            &paths,
-            |_| Err(WincentError::SystemError("link cleanup failed".to_string())),
-            || {
-                destlist_deleted.set(true);
-                Ok(())
-            },
-        )
-        .expect_err("link cleanup should fail");
-
-        assert!(matches!(
-            error,
-            WincentError::SystemError(ref message) if message == "link cleanup failed"
-        ));
-        assert!(!destlist_deleted.get());
     }
 
     #[test]
@@ -553,20 +401,5 @@ mod tests {
                 "refresh_shell_views".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn empty_recent_files_zero_timeout_is_rejected() {
-        let recent_folder = tempfile::tempdir().expect("temp Recent directory");
-        let permit = MutationPermit::acquire_in_folder(
-            crate::lock::QuickAccessLockTarget::RecentFiles,
-            recent_folder.path(),
-            false,
-        )
-        .expect("test admission")
-        .pop()
-        .expect("Recent Files admission");
-        let result = empty_recent_files_with_api(Duration::ZERO, permit);
-        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
     }
 }

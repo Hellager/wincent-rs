@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::WincentError;
-use crate::utils::{get_windows_recent_folder, normalize_path_lightweight, paths_equal};
+use crate::path::{normalize_path_lightweight, paths_equal};
+use crate::windows::get_windows_recent_folder;
 use crate::WincentResult;
 
 use super::cfb::{decode_utf16_lossy, read_i32, read_u16, read_u32, read_u64, CompoundFile};

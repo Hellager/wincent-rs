@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Changed
+- Reorganized internal Windows integration into focused Shell, path, platform,
+  and Shell Link modules without changing the public API.
+- Separated native clearing primitives from empty-operation orchestration so
+  backend dependencies remain one-directional.
+
 ## [0.3.3-alpha.2] - 2026-11-11
 
 ### Changed
