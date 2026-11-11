@@ -65,6 +65,7 @@ pub(crate) mod test_support;
 /// FILETIME conversion helpers for DestList timestamps.
 pub mod time;
 
+pub(crate) use parser::parse_file_if_exists;
 pub use parser::{
     entries, frequent_folders_dest_path, parse_bytes, parse_bytes_with_kind, parse_file,
     parse_file_with_kind, quick_access_entries, quick_access_entries_for_kind,

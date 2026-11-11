@@ -1,6 +1,7 @@
 use super::*;
 use std::fs;
 use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -219,9 +220,8 @@ fn pin_uses_only_pin_state_and_allows_existing_unpinned_entries() -> WincentResu
 }
 
 #[test]
-fn missing_pin_file_is_absent_but_other_errors_propagate() -> WincentResult<()> {
+fn pin_status_uses_domain_absence_and_propagates_backend_errors() -> WincentResult<()> {
     let mut backend = Backend::new(PathType::Directory);
-    backend.pin_error = Some(ErrorKind::NotFound);
     assert_eq!(
         pin_status(&backend, PATH)?,
         FrequentFolderPinStatus::NotFound
@@ -265,9 +265,8 @@ fn duplicate_and_missing_membership_keep_category_errors() {
 }
 
 #[test]
-fn adding_allows_missing_backing_file_but_not_other_query_errors() -> WincentResult<()> {
+fn adding_allows_an_empty_category_but_not_query_errors() -> WincentResult<()> {
     let mut backend = Backend::new(PathType::File);
-    backend.query_error = Some(ErrorKind::NotFound);
     mutate(Path::new(PATH), TIMEOUT, Mutation::AddRecent, &backend)?;
     backend.query_error = Some(ErrorKind::PermissionDenied);
     assert!(matches!(

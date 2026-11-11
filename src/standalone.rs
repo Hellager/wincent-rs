@@ -36,7 +36,6 @@ use crate::lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget};
 use crate::utils::{paths_equal, PathType};
 use crate::{QuickAccess, WincentResult};
 use std::fmt;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::time::Duration;
 
@@ -44,6 +43,7 @@ use std::time::Duration;
 ///
 /// Reads persisted data and applies the current Explorer visibility rules,
 /// including the Recent Files result limit. This is not a live window query.
+/// A missing Recent Files backing file returns an empty list.
 ///
 /// # Errors
 ///
@@ -54,7 +54,8 @@ pub fn get_recent_files() -> WincentResult<Vec<String>> {
 
 /// Returns Frequent Folders, including pinned folders, in Explorer query order.
 ///
-/// Uses the same persisted-data filtering as the manager's category query.
+/// Uses the same persisted-data filtering as the manager's category query. A
+/// missing Frequent Folders backing file returns an empty list.
 ///
 /// # Errors
 ///
@@ -317,12 +318,7 @@ fn pin_status(
     backend: &dyn QuickAccessBackend,
     path: &str,
 ) -> WincentResult<FrequentFolderPinStatus> {
-    match backend.frequent_folder_pin_status(path) {
-        Err(WincentError::Io(error)) if error.kind() == ErrorKind::NotFound => {
-            Ok(FrequentFolderPinStatus::NotFound)
-        }
-        result => result,
-    }
+    backend.frequent_folder_pin_status(path)
 }
 
 #[derive(Clone, Copy)]
@@ -378,14 +374,7 @@ fn mutate(
         return backend.add_frequent_folder(&path, timeout);
     }
 
-    let items = match backend.get_items(category, timeout) {
-        Err(WincentError::Io(error))
-            if matches!(operation, Mutation::AddRecent) && error.kind() == ErrorKind::NotFound =>
-        {
-            Vec::new()
-        }
-        result => result?,
-    };
+    let items = backend.get_items(category, timeout)?;
     let present = items.iter().any(|item| paths_equal(item, &path));
     if matches!(operation, Mutation::AddRecent) {
         if present {

@@ -36,15 +36,11 @@
 //! asynchronously and an open window may also need a refresh, so the rule-based
 //! result and the visible UI can temporarily differ.
 
-use std::io::ErrorKind;
-use std::path::PathBuf;
-
 use crate::destlist::parser::DestListRuleSet;
 use crate::destlist::{
-    frequent_folders_dest_path, parse_file, recent_files_dest_path, AutomaticDestinations,
-    DestListEntry, DEFAULT_RECENT_FILES_RESULT_LIMIT,
+    frequent_folders_dest_path, parse_file_if_exists, recent_files_dest_path,
+    AutomaticDestinations, DestListEntry, DEFAULT_RECENT_FILES_RESULT_LIMIT,
 };
-use crate::error::WincentError;
 use crate::utils::paths_equal;
 use crate::{QuickAccess, WincentResult};
 
@@ -202,18 +198,9 @@ pub(crate) fn status_for_parsed(
 
 /// Reads both backing files and evaluates the status of `path`.
 pub(crate) fn status_for_path(path: &str) -> WincentResult<QuickAccessStatus> {
-    let recent = load_list(recent_files_dest_path()?)?;
-    let frequent = load_list(frequent_folders_dest_path()?)?;
+    let recent = parse_file_if_exists(recent_files_dest_path()?)?;
+    let frequent = parse_file_if_exists(frequent_folders_dest_path()?)?;
     Ok(status_for_parsed(recent.as_ref(), frequent.as_ref(), path))
-}
-
-/// Parses one backing file, treating a missing file as an empty list.
-fn load_list(path: PathBuf) -> WincentResult<Option<AutomaticDestinations>> {
-    match parse_file(&path) {
-        Ok(parsed) => Ok(Some(parsed)),
-        Err(WincentError::Io(error)) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
 }
 
 #[cfg(test)]

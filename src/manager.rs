@@ -200,7 +200,8 @@ impl QuickAccessManager {
     /// Returns the selected Quick Access items as path strings.
     ///
     /// The returned items match those shown in Explorer's Quick Access once
-    /// its view is up to date.
+    /// its view is up to date. A missing category backing file is treated as
+    /// an empty category.
     ///
     /// # Errors
     ///
@@ -703,19 +704,19 @@ impl QuickAccessManager {
     }
 
     fn ensure_not_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
-        // This preflight check is best-effort; Explorer state may still change
-        // before the shell operation runs.
-        match self.contains_path(path, qa_type) {
-            Ok(true) => Err(WincentError::already_exists(path, qa_type)),
-            Ok(false) => Ok(()),
-            Err(WincentError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
+        // Best-effort preflight: Explorer state may change before the shell
+        // operation runs. A missing backing file is exposed by the backend as
+        // an empty category, so the add may initialize it.
+        if self.contains_path(path, qa_type)? {
+            return Err(WincentError::already_exists(path, qa_type));
         }
+        Ok(())
     }
 
     fn ensure_present(&self, path: &str, qa_type: QuickAccess) -> WincentResult<()> {
-        // This preflight check is best-effort; Explorer state may still change
-        // before the shell operation runs.
+        // Best-effort preflight: Explorer state may change before the shell
+        // operation runs. A missing backing file is an empty category and
+        // therefore produces `NotInQuickAccess`.
         if !self.contains_path(path, qa_type)? {
             return Err(WincentError::not_in_quick_access(path, qa_type));
         }
@@ -1242,21 +1243,18 @@ mod tests {
     }
 
     #[test]
-    fn add_item_allows_missing_destlist_during_duplicate_preflight() -> WincentResult<()> {
+    fn add_item_propagates_backend_query_errors() {
         let backend = Arc::new(FakeBackend::default());
         backend.fail_get_items_with(WincentError::Io(std::io::Error::from(
-            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::PermissionDenied,
         )));
         let manager =
             QuickAccessManager::with_backend_for_tests(Duration::from_secs(10), backend.clone());
 
-        manager.add_item("C:\\report.docx")?;
+        let result = manager.add_item("C:\\report.docx");
 
-        assert_eq!(
-            backend.calls(),
-            vec!["add_recent_file:C:\\report.docx".to_string()]
-        );
-        Ok(())
+        assert!(matches!(result, Err(WincentError::Io(_))));
+        assert!(backend.calls().is_empty());
     }
 
     #[test]

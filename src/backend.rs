@@ -1,7 +1,7 @@
 use crate::{
     destlist::{
-        frequent_folders_dest_path, parse_file, recent_files_dest_path, AutomaticDestinations,
-        DEFAULT_RECENT_FILES_RESULT_LIMIT,
+        frequent_folders_dest_path, parse_file_if_exists, recent_files_dest_path,
+        AutomaticDestinations, DEFAULT_RECENT_FILES_RESULT_LIMIT,
     },
     empty,
     handle::{
@@ -55,9 +55,11 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
 /// from Explorer's Folder Options setting and the attributes serialized in the
 /// numeric Shell Link stream when the item was added.
 pub(crate) fn ui_visible_items(qa_type: QuickAccess) -> WincentResult<Vec<String>> {
-    let (parsed, apply_limit) = match qa_type {
-        QuickAccess::RecentFiles => (parse_file(recent_files_dest_path()?)?, true),
-        QuickAccess::FrequentFolders => (parse_file(frequent_folders_dest_path()?)?, false),
+    match qa_type {
+        QuickAccess::RecentFiles => ui_visible_items_from_path(recent_files_dest_path()?, true),
+        QuickAccess::FrequentFolders => {
+            ui_visible_items_from_path(frequent_folders_dest_path()?, false)
+        }
         QuickAccess::All => {
             let recent = ui_visible_items(QuickAccess::RecentFiles)?;
             let frequent = ui_visible_items(QuickAccess::FrequentFolders)?;
@@ -70,8 +72,17 @@ pub(crate) fn ui_visible_items(qa_type: QuickAccess) -> WincentResult<Vec<String
                     merged.push(path);
                 }
             }
-            return Ok(merged);
+            Ok(merged)
         }
+    }
+}
+
+fn ui_visible_items_from_path(
+    path: impl AsRef<std::path::Path>,
+    apply_limit: bool,
+) -> WincentResult<Vec<String>> {
+    let Some(parsed) = parse_file_if_exists(path)? else {
+        return Ok(Vec::new());
     };
 
     let show_hidden_items = crate::visible::explorer_shows_hidden_items()?;
@@ -167,6 +178,8 @@ mod tests {
     use super::*;
     use crate::destlist::test_support::{automatic_destinations_for_test, destlist_entry_for_test};
     use crate::destlist::DestListKind;
+    use crate::error::WincentError;
+    use tempfile::tempdir;
 
     fn set_hidden_attribute(parsed: &mut AutomaticDestinations, stream_name: &str) {
         let stream = parsed
@@ -220,5 +233,14 @@ mod tests {
             ui_item_paths(&parsed, false, true),
             vec!["C:\\Visible", "C:\\Hidden"]
         );
+    }
+
+    #[test]
+    fn missing_ui_backing_file_is_an_empty_list() -> WincentResult<()> {
+        let directory = tempdir().map_err(WincentError::Io)?;
+        let missing = directory.path().join("missing.automaticDestinations-ms");
+
+        assert!(ui_visible_items_from_path(missing, true)?.is_empty());
+        Ok(())
     }
 }

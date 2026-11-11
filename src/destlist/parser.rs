@@ -1089,7 +1089,16 @@ pub fn visible_entries_for_kind(dest_list: &DestList, kind: DestListKind) -> Vec
 }
 
 pub(crate) fn frequent_folder_pin_status(path: &str) -> WincentResult<FrequentFolderPinStatus> {
-    let parsed = parse_file(frequent_folders_dest_path()?)?;
+    frequent_folder_pin_status_from_file(frequent_folders_dest_path()?, path)
+}
+
+fn frequent_folder_pin_status_from_file(
+    backing_path: impl AsRef<Path>,
+    path: &str,
+) -> WincentResult<FrequentFolderPinStatus> {
+    let Some(parsed) = parse_file_if_exists(backing_path)? else {
+        return Ok(FrequentFolderPinStatus::NotFound);
+    };
     Ok(frequent_folder_pin_status_from_entries(
         path,
         parsed.dest_list().entries(),
@@ -1355,6 +1364,20 @@ pub fn parse_file(path: impl AsRef<Path>) -> WincentResult<AutomaticDestinations
     let path = path.as_ref();
     let data = fs::read(path).map_err(WincentError::Io)?;
     parse_bytes_with_kind(data, dest_list_kind_from_path(path))
+}
+
+/// Parses an `.automaticDestinations-ms` file when it exists.
+///
+/// A missing backing file represents an uninitialized or empty persisted list.
+/// Other I/O and parsing failures are propagated unchanged.
+pub(crate) fn parse_file_if_exists(
+    path: impl AsRef<Path>,
+) -> WincentResult<Option<AutomaticDestinations>> {
+    match parse_file(path) {
+        Ok(parsed) => Ok(Some(parsed)),
+        Err(WincentError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Parses a renamed or copied Automatic Destinations file with an explicit
@@ -2163,6 +2186,38 @@ mod tests {
     };
     use std::io::{Cursor, Write};
     use std::iter;
+    use tempfile::tempdir;
+
+    #[test]
+    fn optional_parser_treats_a_missing_file_as_empty() -> WincentResult<()> {
+        let directory = tempdir().map_err(WincentError::Io)?;
+        let missing = directory.path().join("missing.automaticDestinations-ms");
+
+        assert!(parse_file_if_exists(missing)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn optional_parser_propagates_other_io_errors() -> WincentResult<()> {
+        let directory = tempdir().map_err(WincentError::Io)?;
+
+        let error = parse_file_if_exists(directory.path()).unwrap_err();
+
+        assert!(matches!(error, WincentError::Io(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn pin_status_treats_a_missing_backing_file_as_not_found() -> WincentResult<()> {
+        let directory = tempdir().map_err(WincentError::Io)?;
+        let missing = directory.path().join("missing.automaticDestinations-ms");
+
+        assert_eq!(
+            frequent_folder_pin_status_from_file(missing, "C:\\Projects")?,
+            FrequentFolderPinStatus::NotFound
+        );
+        Ok(())
+    }
 
     #[test]
     fn parse_bytes_rejects_wrong_magic() {
