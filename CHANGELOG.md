@@ -1,5 +1,7 @@
 ## Unreleased
 
+## [0.3.3-alpha.2] - 2026-11-11
+
 ### Changed
 - **Breaking:** `QuickAccessManager::unlock` and standalone lock-guard `unlock`
   methods now only release their locks. Explicit `unlock_and_cleanup` methods
@@ -7,6 +9,14 @@
 - **Breaking:** `UnlockReport` now exposes `PathBuf` cleanup results through
   accessors and preserves per-shortcut deletion failures. Cleanup is
   best-effort, and an already-absent shortcut counts as successfully cleaned.
+- Centralized manager path classification so add and remove operations share
+  the same Quick Access category and mutation-gate routing.
+
+### Fixed
+- Treated missing Recent Files and Frequent Folders backing files as empty,
+  uninitialized categories while preserving other I/O and parsing errors.
+- Allowed add operations to initialize missing backing files while keeping
+  absent remove and pin-status queries consistent with empty categories.
 
 ### Removed
 - **Breaking:** Replaced the `unlock_recent_files` and
