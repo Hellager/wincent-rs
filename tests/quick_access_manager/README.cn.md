@@ -41,8 +41,8 @@ Win11 使用同一套测试，仅改为 `-Platform win11` 并指定对应 VM。
 | 刷新 | 打开的 Quick Access/Home 窗口；有内容和清空后 API 返回成功，不将其描述为像素级 UI 验证 |
 | 清空 | 每种类别都先种入文件与目录；检查目标消失及另一类别保留；重复清空；允许 Windows 重建默认 pin |
 | 独立函数 | 与 manager 及独立 Shell 查询对照；显式超时、零超时拒绝、路径类型、固定状态、已有未固定目录转固定、两种目录移除、分类清空与刷新 |
-| 独立锁 | 类型化锁对象、不同类别共存、重复加锁、manager 互操作、跨进程阻断、显式清理和 drop 释放 |
-| 独立函数单元测试 | 精确传递超时、不重试修改、区分文件缺失与读取失败、错误类别、两种锁在解锁清理失败时仍释放 |
+| 独立锁 | 类型化锁对象、不同类别共存、重复加锁、manager 互操作、跨进程阻断、普通解锁保留 `.lnk`、显式清理、删除失败报告和锁释放 |
+| 非 DestList 单元测试 | 自动枚举并逐项运行 `src` 下所有非 `destlist` 测试；覆盖纯逻辑、超时、并发资源生命周期和错误分类 |
 
 原生写入后使用有界轮询等待持久化，不将 `Ok(())` 等同于立即可见，不自动重试超时 mutation。
 前置 fixture 失败立即中止依赖阶段并记录 `suite.completed=false`，不会把能力缺失静默
@@ -52,7 +52,8 @@ Win11 使用同一套测试，仅改为 `-Platform win11` 并指定对应 VM。
 短时重复访问会合并计分，仅快速加入 25 个文件不足以生成该 fixture。
 这两个等待是测试数据的必要准备，不是性能计时；含快照和回滚，一轮需要数分钟。
 独立函数阶段在 manager 验证后使用全新路径，以同样的 66 秒访问间隔准备两个未固定父目录。
-guest 在综合验收前先运行库内 `standalone::tests::` 单元测试；这些测试也不在宿主执行。
+guest 在综合验收前自动枚举库测试，排除 `destlist::` 后逐项精确运行；这些测试不在宿主执行，
+测试列表保存在 `unit-tests-list.txt`，避免新增模块后被静态过滤器漏掉。
 每个清空用例使用全新文件/目录路径。Recent 的 remove 可能留下 Shell 缓存中的屏蔽状态，
 不能通过重新 add 上一阶段已移除的文件来建立下一阶段基线。
 
@@ -82,7 +83,7 @@ guest 在综合验收前先运行库内 `standalone::tests::` 单元测试；这
 | --- | --- |
 | `result.json` | 检查明细、总数、失败数、完成标记、二进制退出码 |
 | `checks.tsv`、`test.log` | 流式检查和完整测试日志，失败时仍保留已完成检查 |
-| `unit-tests.log` | 独立函数单元测试日志；`result.json` 记录 `unit_checks` 和 `unit_passed` |
+| `unit-tests.log`、`unit-tests-list.txt` | 非 DestList 单元测试日志与实际枚举列表；`result.json` 记录 `unit_checks` 和 `unit_passed` |
 | `environment.json` | build/UBR、用户、会话、exe SHA-256、提交、Shell DLL/Explorer 版本与哈希 |
 | `final-state.json` | guest 文件/注册表恢复、fixture 删除、测试进程残留 |
 | `host-result.json` | 整机快照回滚与最终整体通过标记 |

@@ -326,13 +326,12 @@ try {
 
     $result = Get-Content -LiteralPath (Join-Path $EvidenceDir 'result.json') -Raw | ConvertFrom-Json
     if ($result.platform -ne $Platform) { throw "result platform $($result.platform) != requested $Platform" }
-    $requiredScenarios = if ($Platform -eq 'win10') {
-        @('recent_full', 'frequent_full', 'recent_under', 'frequent_under')
-    } else {
-        @('frequent_native')
+    if ($result.fixture_mode -ne 'native') { throw 'result fixture_mode must be native' }
+    if (-not $result.fixture_capabilities.frequent) {
+        throw 'native Frequent Folders fixture is unavailable'
     }
-    $requiredScenarios = @($requiredScenarios)
-    if ($Platform -eq 'win11' -and $result.fixture_capabilities.recent) {
+    $requiredScenarios = @('frequent_native')
+    if ($result.fixture_capabilities.recent) {
         $requiredScenarios += 'recent_native'
     }
     foreach ($requiredScenario in $requiredScenarios) {

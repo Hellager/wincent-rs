@@ -293,42 +293,4 @@ mod tests {
         assert_eq!(start_track_docs_value_for_visible(true), 1);
         assert_eq!(start_track_docs_value_for_visible(false), 0);
     }
-
-    #[test]
-    #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test recent_files_visibility_round_trip -- --ignored --nocapture"]
-    fn recent_files_visibility_round_trip() -> WincentResult<()> {
-        let initial = is_visible(VisibilityTarget::RecentFiles)?;
-
-        set_visible(VisibilityTarget::RecentFiles, !initial)?;
-        assert_eq!(is_visible(VisibilityTarget::RecentFiles)?, !initial);
-
-        set_visible(VisibilityTarget::RecentFiles, initial)?;
-        assert_eq!(is_visible(VisibilityTarget::RecentFiles)?, initial);
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Reads and writes the current user's Explorer registry settings - run with: cargo test frequent_folders_visibility_round_trip -- --ignored --nocapture"]
-    fn frequent_folders_visibility_round_trip() -> WincentResult<()> {
-        let initial = is_visible(VisibilityTarget::FrequentFolders)?;
-
-        set_visible(VisibilityTarget::FrequentFolders, !initial)?;
-        assert_eq!(is_visible(VisibilityTarget::FrequentFolders)?, !initial);
-
-        set_visible(VisibilityTarget::FrequentFolders, initial)?;
-        assert_eq!(is_visible(VisibilityTarget::FrequentFolders)?, initial);
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Reads and writes the current user's Explorer registry settings"]
-    fn start_recommended_visibility_round_trip() -> WincentResult<()> {
-        let initial = is_visible(VisibilityTarget::StartRecommended)?;
-        set_visible(VisibilityTarget::StartRecommended, !initial)?;
-        assert_eq!(is_visible(VisibilityTarget::StartRecommended)?, !initial);
-        set_visible(VisibilityTarget::StartRecommended, initial)?;
-        Ok(())
-    }
 }

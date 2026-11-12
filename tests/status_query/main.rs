@@ -218,7 +218,8 @@ fn status_query() {
     } else {
         FIXTURE_TIMEOUT
     };
-    let run_id = env::var("WINCENT_STATUS_QUERY_RUN_ID").unwrap_or_else(|_| "local".to_string());
+    let run_id = env::var("WINCENT_STATUS_QUERY_RUN_ID")
+        .expect("WINCENT_STATUS_QUERY_RUN_ID must be set by the VM harness");
     let root = PathBuf::from(
         env::var("WINCENT_STATUS_QUERY_ROOT")
             .unwrap_or_else(|_| "C:\\WincentTrack\\status-targets".to_string()),
@@ -232,6 +233,7 @@ fn status_query() {
             .unwrap_or_else(|_| "C:\\WincentTrack\\status-timings.csv".to_string()),
     );
     let mutate = env::var("WINCENT_STATUS_QUERY_MUTATE").as_deref() == Ok("1");
+    require_vm_harness(&root, &run_id);
 
     fs::create_dir_all(&root).expect("create target root");
 
@@ -817,4 +819,38 @@ fn status_query() {
             failed.join("\n")
         );
     }
+}
+
+fn require_vm_harness(root: &Path, run_id: &str) {
+    assert!(
+        !run_id.is_empty()
+            && run_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "invalid VM run ID"
+    );
+    assert_eq!(
+        env::var("WINCENT_VM_RUN_ID").as_deref(),
+        Ok(run_id),
+        "VM run ID mismatch"
+    );
+    assert_eq!(
+        env::var("WINCENT_VM_ACK").as_deref(),
+        Ok(run_id),
+        "VM acknowledgement mismatch"
+    );
+    let guest = env::var("WINCENT_VM_GUEST").expect("WINCENT_VM_GUEST is required");
+    let computer = env::var("COMPUTERNAME").expect("COMPUTERNAME is required");
+    assert!(
+        guest.eq_ignore_ascii_case(&computer),
+        "guest identity mismatch"
+    );
+    let normalized = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    assert!(
+        normalized.starts_with("c:\\wincenttrack\\"),
+        "fixture root must be inside C:\\WincentTrack"
+    );
 }

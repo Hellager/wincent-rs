@@ -2,7 +2,8 @@
 
 use super::{membership, normalized, same_paths, shell, wait_for, Checks, TestResult, WAIT};
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -240,6 +241,60 @@ fn locks(
                 && !link.exists(),
             &links,
         )?;
+
+        let kept = recent.join(format!(
+            "standalone-keep-{category:?}-{}.lnk",
+            std::process::id()
+        ));
+        if category == QuickAccess::RecentFiles {
+            let guard = lock_recent_files()?;
+            fs::write(&kept, b"plain unlock must not clean shortcut delta")?;
+            guard.unlock();
+        } else {
+            let guard = lock_frequent_folders()?;
+            fs::write(&kept, b"plain unlock must not clean shortcut delta")?;
+            guard.unlock();
+        }
+        checks.check(
+            &format!("standalone.unlock.keeps_delta.{category:?}"),
+            kept.exists(),
+            &kept,
+        )?;
+        fs::remove_file(&kept)?;
+
+        let denied = recent.join(format!(
+            "standalone-deny-delete-{category:?}-{}.lnk",
+            std::process::id()
+        ));
+        let report = if category == QuickAccess::RecentFiles {
+            let guard = lock_recent_files()?;
+            fs::write(&denied, b"delete sharing failure")?;
+            let deny_delete = OpenOptions::new().read(true).share_mode(1).open(&denied)?;
+            let report = guard.unlock_and_cleanup()?;
+            manager.lock(category)?;
+            manager.unlock()?;
+            drop(deny_delete);
+            report
+        } else {
+            let guard = lock_frequent_folders()?;
+            fs::write(&denied, b"delete sharing failure")?;
+            let deny_delete = OpenOptions::new().read(true).share_mode(1).open(&denied)?;
+            let report = guard.unlock_and_cleanup()?;
+            manager.lock(category)?;
+            manager.unlock()?;
+            drop(deny_delete);
+            report
+        };
+        checks.check(
+            &format!("standalone.unlock.failure_releases.{category:?}"),
+            report.cleaned_shortcuts().is_empty()
+                && report.cleanup_failures().len() == 1
+                && report.cleanup_failures()[0].path() == denied
+                && !report.is_complete(),
+            &report,
+        )?;
+        fs::remove_file(&denied)?;
+
         manager.lock(category)?;
         let overlap = if category == QuickAccess::RecentFiles {
             lock_recent_files().map(drop)

@@ -134,21 +134,4 @@ mod tests {
         assert!(matches!(error, WincentError::SystemError(message) if message == "cleanup failed"));
         assert!(!*destlist_deleted.borrow());
     }
-
-    #[test]
-    fn recent_clear_rejects_zero_timeout() {
-        let recent_folder = tempfile::tempdir().expect("temp Recent directory");
-        let permit = MutationPermit::acquire_in_folder(
-            crate::lock::QuickAccessLockTarget::RecentFiles,
-            recent_folder.path(),
-            false,
-        )
-        .expect("test admission")
-        .pop()
-        .expect("Recent Files admission");
-
-        let result = clear_recent_files(Duration::ZERO, permit);
-
-        assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
-    }
 }

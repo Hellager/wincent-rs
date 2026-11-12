@@ -169,6 +169,7 @@ fn add_item_shell_latency() {
         env::var("WINCENT_ADD_LATENCY_ROOT")
             .expect("WINCENT_ADD_LATENCY_ROOT must point at the scratch directory"),
     );
+    require_vm_harness(&root);
     let iterations = parse_env_usize("WINCENT_ADD_LATENCY_ITERS", 20);
     let warmup = parse_env_usize("WINCENT_ADD_LATENCY_WARMUP", 2);
     let series_spec =
@@ -367,6 +368,36 @@ fn test_platform() -> &'static str {
         Ok(value) => panic!("WINCENT_TEST_PLATFORM must be win10 or win11, got {value}"),
         Err(_) => panic!("WINCENT_TEST_PLATFORM must be set by the VM guest harness"),
     }
+}
+
+fn require_vm_harness(root: &Path) {
+    let run_id = env::var("WINCENT_VM_RUN_ID").expect("WINCENT_VM_RUN_ID is required");
+    assert!(
+        !run_id.is_empty()
+            && run_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "invalid VM run ID"
+    );
+    assert_eq!(
+        env::var("WINCENT_VM_ACK").as_deref(),
+        Ok(run_id.as_str()),
+        "VM acknowledgement mismatch"
+    );
+    let guest = env::var("WINCENT_VM_GUEST").expect("WINCENT_VM_GUEST is required");
+    let computer = env::var("COMPUTERNAME").expect("COMPUTERNAME is required");
+    assert!(
+        guest.eq_ignore_ascii_case(&computer),
+        "guest identity mismatch"
+    );
+    let normalized = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    assert!(
+        normalized.starts_with("c:\\wincenttrack\\"),
+        "fixture root must be inside C:\\WincentTrack"
+    );
 }
 
 fn parse_env_usize(name: &str, default: usize) -> usize {

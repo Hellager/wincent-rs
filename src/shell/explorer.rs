@@ -189,47 +189,6 @@ fn is_home_or_recent_url(url: &str) -> bool {
 }
 
 #[cfg(test)]
-fn list_detected_explorer_locations() -> WincentResult<Vec<ExplorerLocation>> {
-    crate::shell::thread::run_on_sta_thread(
-        || {
-            let (shell_windows, count) = shell_windows_with_count()?;
-            let mut locations = Vec::new();
-
-            for index in 0..count {
-                // SAFETY: `shell_windows` is a live COM collection; individual
-                // access failures are ignored while collecting diagnostics.
-                let dispatch = match unsafe { shell_windows.Item(&index.into()) } {
-                    Ok(dispatch) => dispatch,
-                    Err(_) => continue,
-                };
-                let web_browser = match dispatch.cast::<IWebBrowser2>() {
-                    Ok(web_browser) => web_browser,
-                    Err(_) => continue,
-                };
-                let location = browser_location(&web_browser);
-                if is_probable_explorer_location(&location) {
-                    locations.push(location);
-                }
-            }
-
-            Ok(locations)
-        },
-        Duration::from_secs(10),
-    )
-}
-
-#[cfg(test)]
-fn refresh_detected_recent_access_locations() -> WincentResult<RefreshResult> {
-    crate::shell::thread::run_on_sta_thread(
-        || {
-            let (shell_windows, count) = shell_windows_with_count()?;
-            refresh_recent_access_shell_views(&shell_windows, count)
-        },
-        Duration::from_secs(10),
-    )
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -271,40 +230,5 @@ mod tests {
             location_name: String::new(),
             location_url: "https://example.com".to_string(),
         }));
-    }
-
-    #[test]
-    #[ignore = "Requires an interactive desktop session with Explorer windows"]
-    fn test_list_detected_explorer_windows() -> WincentResult<()> {
-        let locations = list_detected_explorer_locations()?;
-        println!("Detected Explorer windows: {}", locations.len());
-        for (index, location) in locations.iter().enumerate() {
-            println!(
-                "#{index}: name=\"{}\" url=\"{}\" recent_access={}",
-                location.location_name,
-                location.location_url,
-                is_recent_access_location(location)
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "Requires an interactive desktop session with a Quick Access/Home Explorer window"]
-    fn test_refresh_detected_recent_access_windows() -> WincentResult<()> {
-        let result = refresh_detected_recent_access_locations()?;
-        println!(
-            "Detected Quick Access/Home Explorer windows: {}, refreshed: {}",
-            result.matched, result.refreshed
-        );
-
-        if result.matched > 0 {
-            assert!(
-                result.refreshed > 0,
-                "detected Quick Access/Home windows but refreshed none"
-            );
-        }
-
-        Ok(())
     }
 }

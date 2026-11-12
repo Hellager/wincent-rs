@@ -76,7 +76,7 @@ function Guest-Exists([string]$Path) {
 function Pull-Evidence {
     foreach ($name in @(
         'environment.json', 'checks.tsv', 'result.json', 'final-state.json', 'test.log',
-        'unit-tests.log',
+        'unit-tests.log', 'unit-tests-list.txt', 'unit-tests-count.txt',
         'FAILURE.txt', 'RESTORE_FAILURE.txt', 'ARTIFACT_FAILURE.txt', 'evidence.zip'
     )) {
         if (Guest-Exists "$GuestRoot\$name") {
@@ -144,7 +144,7 @@ try {
         if ($artifacts.Count -ne 1) { throw 'Expected exactly one compiled test executable' }
         $exe = $artifacts[0].executable
         $unitMessages = & cargo test --release --lib --no-run --message-format=json
-        if ($LASTEXITCODE -ne 0) { throw 'Standalone unit test compilation failed' }
+        if ($LASTEXITCODE -ne 0) { throw 'Library unit test compilation failed' }
         $unitArtifacts = @($unitMessages | ForEach-Object { $_ | ConvertFrom-Json } |
             Where-Object { $_.reason -eq 'compiler-artifact' -and
                 $_.target.name -eq 'wincent' -and $_.executable })
@@ -195,9 +195,10 @@ try {
     $config | ConvertTo-Json | Set-Content -LiteralPath "$EvidenceDir\config.json" -Encoding UTF8
     foreach ($pair in @(
         @($exe, "$GuestRoot\quick-access-manager.exe"),
-        @($unitExe, "$GuestRoot\standalone-unit-tests.exe"),
+        @($unitExe, "$GuestRoot\library-unit-tests.exe"),
         @("$PSScriptRoot\vm_quick_access_manager_guest.ps1", "$GuestRoot\guest.ps1"),
         @("$PSScriptRoot\vm_quick_access_manager_start.ps1", "$GuestRoot\start.ps1"),
+        @("$PSScriptRoot\vm_quick_access_manager_tests.ps1", "$GuestRoot\tests.ps1"),
         @("$EvidenceDir\config.json", "$GuestRoot\config.json")
     )) {
         Vm @('copyFileFromHostToGuest', $Vmx, $pair[0], $pair[1]) -Guest | Out-Null

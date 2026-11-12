@@ -197,6 +197,9 @@ try {
         Set-Content -LiteralPath (Join-Path $MarkersDir '10-baseline-ready.txt') -Encoding UTF8
 
     $env:WINCENT_REFRESH_SYNC = '1'
+    $env:WINCENT_VM_RUN_ID = $RunId
+    $env:WINCENT_VM_ACK = $RunId
+    $env:WINCENT_VM_GUEST = $env:COMPUTERNAME
     $env:WINCENT_TEST_PLATFORM = $DetectedPlatform
     $env:WINCENT_REFRESH_SYNC_OUT = $ResultPath
     $env:WINCENT_REFRESH_SYNC_ROOT = $TargetsDir

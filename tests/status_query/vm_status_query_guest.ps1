@@ -198,6 +198,9 @@ try {
         Set-Content -LiteralPath (Join-Path $MarkersDir '10-baseline-ready.txt') -Encoding UTF8
 
     $env:WINCENT_STATUS_QUERY = '1'
+    $env:WINCENT_VM_RUN_ID = $RunId
+    $env:WINCENT_VM_ACK = $RunId
+    $env:WINCENT_VM_GUEST = $env:COMPUTERNAME
     $env:WINCENT_TEST_PLATFORM = $DetectedPlatform
     $env:WINCENT_STATUS_QUERY_RUN_ID = $RunId
     $env:WINCENT_STATUS_QUERY_OUT = $ResultPath

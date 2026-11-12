@@ -8,8 +8,8 @@ Measures Quick Access list retrieval latency through two independent paths:
 The benchmark runs inside a dedicated Windows VM. The host only orchestrates the
 VM, transfers artifacts, captures screenshots and collects evidence.
 
-The current numbers are preliminary: one official 20-sample run plus two repeat
-runs, not a capacity-planning benchmark.
+The archived synthetic-v4 numbers at the end are retained only for historical
+comparison; they are not results from the current native scenarios.
 
 ## Files
 
@@ -27,31 +27,20 @@ runs, not a capacity-planning benchmark.
 `-Platform` / `WINCENT_VM_PLATFORM` selects the flow explicitly. The guest also
 checks the Windows build number so a Windows 10 flow cannot run on Windows 11.
 
-| Platform | Fixture mode | Operations |
-| --- | --- | --- |
-| `win10` | `synthetic_v4` | Writes empty v4 CFBs, creates 120 Recent and 100 Frequent entries, then directly controls hidden/pin/access-count metadata. |
-| `win11` | `native_v6` | Never writes v6 entry bytes. Creates 20 Recent items through system `add_item` and two Frequent items through system pin, then measures the actual post-restart raw/Shell counts. |
+Both platforms use a `native` fixture. The test creates 20 Recent file visits
+and two pinned Frequent folders through system APIs, restarts Explorer, and
+measures the observed raw/Shell counts. It does not inject or edit DestList bytes.
 
-The Windows 11 flow does not require the injected 100-entry v4 Frequent list to
-survive Explorer rewriting and does not hard-code the observed rewritten count.
-Native Recent tracking can vary with the Windows 11 VM state. The result records
-the detected capability and omits `recent_native` when no Recent entries persist.
+Native Recent tracking can vary with VM state. The result records the detected
+capability and omits `recent_native` when no Recent entries persist. The native
+Frequent fixture is required.
 
 ## Scenarios
 
 | Scenario | Shell-visible count | Raw count |
 | --- | ---: | ---: |
-| Win10 `recent_full` | 20 (result window full) | 120 |
-| Win10 `recent_under` | 8 (under the window) | 120 |
-| Win10 `frequent_full` | 50 | 100 |
-| Win10 `frequent_under` | 40 | 100 |
-| Win11 `recent_native` | Actual post-restart value | Actual parsed value |
-| Win11 `frequent_native` | Actual post-restart value | Actual parsed value |
-
-The Shell query is expected to return 20 Recent Files in the full window and 8
-after 12 visible entries are hidden. Frequent Folders returns 46 pinned plus 4
-unpinned entries in the full state, then 36 pinned plus 4 unpinned after 10
-pinned entries are unpinned and hidden.
+| `recent_native` (when available) | Actual post-restart value | Actual parsed value |
+| `frequent_native` (required) | Actual post-restart value | Actual parsed value |
 
 ## What is measured
 
@@ -117,20 +106,19 @@ the script stops before touching the VM and asks you to create `.env`.
 The host prefers VMware `-interactive` to enter the Explorer session. The
 guest launcher retains the interactive scheduled-task path as a fallback.
 
-Windows 11 now uses the native v6 flow instead of injecting a v4 Frequent fixture.
-Treat `fixture_capabilities` as the source of truth for the scenarios available
-in a particular run.
+Both platforms use native system APIs. Treat `fixture_capabilities.recent` as
+the source of truth for optional Recent coverage; Frequent coverage is required.
 
 ## Run
 
 ```powershell
-# Windows 10: deterministic synthetic-v4 scenarios
+# Windows 10: native system-API fixture
 pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
     -Platform win10 `
     -EvidenceDir temp/track_wincent/evidence/my-get-item-latency-run `
     -Iters 20 -Warmup 2
 
-# Windows 11: native-v6 state created through system APIs
+# Windows 11: native system-API fixture
 pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
     -Platform win11 `
     -Vmx 'C:\VirtualMachine\Windows11\Windows 11 x64.vmx' `
@@ -149,11 +137,11 @@ then runs the resulting binary in the guest with:
 get_item_latency --ignored --exact --nocapture
 ```
 
-## Current preliminary results
+## Historical preliminary results (retired synthetic-v4 experiment)
 
-Environment: dedicated Windows 10 Home 22H2 `10.0.19045` VM, Explorer in
-session `1`. One official run with 20 samples per scenario and method. Units
-are milliseconds.
+These archived values came from the retired synthetic-v4 experiment. The current
+executable no longer produces these four scenarios. Environment: dedicated
+Windows 10 Home 22H2 `10.0.19045` VM, Explorer in session `1`.
 
 | Scenario | Shell mean | Shell median | Shell p95 | CFB mean | CFB median | CFB p95 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

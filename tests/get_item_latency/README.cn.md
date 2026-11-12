@@ -7,7 +7,7 @@
 
 测试在专用 Windows VM 内完成；host 只负责编排、文件传输、截图和证据回收。
 
-当前数据是初步结果：一轮正式 20 样本运行加两轮重复运行，不用于容量规划。
+文末保留旧 synthetic v4 实验的归档数据，仅作历史对比，不代表当前 native 场景结果。
 
 ## 文件
 
@@ -25,30 +25,20 @@
 `-Platform` / `WINCENT_VM_PLATFORM` 明确选择测试流程，guest 会根据 build number 再次校验，
 防止把 Win10 流程误跑到 Win11：
 
-| 平台 | fixture 模式 | 操作 |
-| --- | --- | --- |
-| `win10` | `synthetic_v4` | 写入空 v4 CFB，构造 120 个 Recent 和 100 个 Frequent，并直接调整 hidden/pin/access count |
-| `win11` | `native_v6` | 不写 v6 字节；通过系统 `add_item` 创建 20 个 Recent、通过系统 pin 创建 2 个 Frequent，Explorer 重启后按实际 raw/Shell 数量测量 |
+Win10 和 Win11 当前都使用 `native` fixture：通过系统 API 创建 20 个 Recent 文件访问和
+2 个 Frequent 固定目录，重启 Explorer 后按实际 raw/Shell 数量测量。测试不再直接写入
+或修改 DestList 字节。
 
-Win11 流程不再要求 Explorer 重启后仍保留 100 个 v4 Frequent 条目，也不会把实测的 56
-写成固定预期。
-Win11 的原生 Recent 跟踪能力可能随 VM 状态变化；结果会记录动态检测到的 capability，
-如果 Recent 条目未持久化，则不生成 `recent_native` 场景。
+原生 Recent 跟踪能力可能随 VM 状态与系统设置变化；结果会记录动态检测到的 capability，
+如果 Recent 条目未持久化，则不生成 `recent_native` 场景。原生 Frequent fixture 是必需项，
+缺失时整轮失败。
 
 ## 场景
 
 | 场景 | Shell 可见数 | Raw 数 |
 | --- | ---: | ---: |
-| Win10 `recent_full` | 20（结果窗口满） | 120 |
-| Win10 `recent_under` | 8（不足窗口） | 120 |
-| Win10 `frequent_full` | 50 | 100 |
-| Win10 `frequent_under` | 40 | 100 |
-| Win11 `recent_native` | Explorer 重启后的实际值 | 解析出的实际值 |
-| Win11 `frequent_native` | Explorer 重启后的实际值 | 解析出的实际值 |
-
-Recent Files 在满窗口时返回 20 项；再隐藏 12 个 visible 条目后返回 8 项。Frequent
-Folders 满状态为 46 pinned + 4 unpinned；将 10 个 pinned 条目 unpin 并隐藏后，剩 36
-pinned + 4 unpinned。
+| `recent_native`（能力可用时） | Explorer 重启后的实际值 | 解析出的实际值 |
+| `frequent_native`（必需） | Explorer 重启后的实际值 | 解析出的实际值 |
 
 ## 测量方法
 
@@ -108,19 +98,19 @@ host 脚本的解析顺序：
 host 优先使用 VMware `-interactive` 在 Explorer session 中启动 guest 流程；不支持该模式时，
 guest launcher 仍保留交互计划任务回退路径。
 
-Windows 11 使用 native v6 流程，不再注入 v4 Frequent fixture。每次运行应以
-`fixture_capabilities` 为准判断实际可用场景。
+两个平台都只使用原生系统 API fixture。每次运行应以 `fixture_capabilities` 为准判断
+Recent 是否可用；Frequent 必须可用。
 
 ## 运行
 
 ```powershell
-# Win10：确定性 synthetic v4 四场景
+# Win10：原生系统 API fixture
 pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
     -Platform win10 `
     -EvidenceDir temp/track_wincent/evidence/my-get-item-latency-run `
     -Iters 20 -Warmup 2
 
-# Win11：系统 API 构造 native v6 状态，两场景
+# Win11：原生系统 API fixture
 pwsh -File tests/get_item_latency/run_get_item_latency_vm.ps1 `
     -Platform win11 `
     -Vmx 'C:\VirtualMachine\Windows11\Windows 11 x64.vmx' `
@@ -139,9 +129,10 @@ cargo test --release --test get_item_latency --no-run
 get_item_latency --ignored --exact --nocapture
 ```
 
-## 当前初步结果
+## 历史初步结果（旧 synthetic v4 实验）
 
-环境：专用 Windows 10 Home 22H2 `10.0.19045` VM，Explorer 运行在 session `1`。
+以下数字来自已经归档的旧 synthetic v4 实验，只用于保留历史对比，当前可执行测试不会再
+生成这些四个场景。环境：专用 Windows 10 Home 22H2 `10.0.19045` VM，Explorer 运行在 session `1`。
 一轮正式运行，每个场景/方法 20 个样本。单位毫秒。
 
 | 场景 | Shell mean | Shell median | Shell p95 | CFB mean | CFB median | CFB p95 |

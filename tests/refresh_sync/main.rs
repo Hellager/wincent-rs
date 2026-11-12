@@ -90,6 +90,7 @@ fn refresh_sync() {
         env::var("WINCENT_REFRESH_SYNC_ROOT")
             .expect("WINCENT_REFRESH_SYNC_ROOT must point at the fixture root"),
     );
+    require_vm_harness(&root);
     let phase_sleep_ms = env::var("WINCENT_REFRESH_SYNC_PHASE_SLEEP_MS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -289,6 +290,36 @@ fn refresh_sync() {
     );
     fs::write(&out_path, result).expect("write refresh-sync result");
     phase(&root, "80-complete", 500);
+}
+
+fn require_vm_harness(root: &Path) {
+    let run_id = env::var("WINCENT_VM_RUN_ID").expect("WINCENT_VM_RUN_ID is required");
+    assert!(
+        !run_id.is_empty()
+            && run_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "invalid VM run ID"
+    );
+    assert_eq!(
+        env::var("WINCENT_VM_ACK").as_deref(),
+        Ok(run_id.as_str()),
+        "VM acknowledgement mismatch"
+    );
+    let guest = env::var("WINCENT_VM_GUEST").expect("WINCENT_VM_GUEST is required");
+    let computer = env::var("COMPUTERNAME").expect("COMPUTERNAME is required");
+    assert!(
+        guest.eq_ignore_ascii_case(&computer),
+        "guest identity mismatch"
+    );
+    let normalized = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    assert!(
+        normalized.starts_with("c:\\wincenttrack\\"),
+        "fixture root must be inside C:\\WincentTrack"
+    );
 }
 
 struct Fixture {

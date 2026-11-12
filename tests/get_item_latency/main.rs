@@ -4,10 +4,10 @@
 //! - live Shell namespace enumeration (STA COM), and
 //! - direct `.automaticDestinations-ms` CFB parsing.
 //!
-//! The fixture contains 120 Recent Files raw entries (20 visible) and 100
-//! Frequent Folders raw entries (46 pinned + 4 visible unpinned + 50 hidden
-//! unpinned). It is then reduced to 8 visible Recent Files and 40 visible
-//! Frequent Folders for the "under limit" scenarios.
+//! The fixture is created only through the current public system-mutation APIs:
+//! 20 Recent file visits and two pinned Frequent folders. After Explorer is
+//! restarted, each available list is measured using its observed Shell and raw
+//! entry counts. No synthetic DestList data is injected.
 //!
 //! This test mutates real Quick Access state and restarts Explorer. It is
 //! ignored by default and additionally gated behind `WINCENT_GET_ITEM_LATENCY=1`;
@@ -152,6 +152,7 @@ fn get_item_latency() {
         env::var("WINCENT_GET_ITEM_LATENCY_ROOT")
             .expect("WINCENT_GET_ITEM_LATENCY_ROOT must point at the fixture root"),
     );
+    require_vm_harness(&root);
     let iterations = parse_env_usize("WINCENT_GET_ITEM_LATENCY_ITERS", 20);
     let warmup = parse_env_usize("WINCENT_GET_ITEM_LATENCY_WARMUP", 2);
     assert!(iterations > 0, "iterations must be > 0");
@@ -257,6 +258,36 @@ fn parse_env_usize(name: &str, default: usize) -> usize {
             .unwrap_or_else(|_| panic!("{name} must be an integer, got {value}")),
         Err(_) => default,
     }
+}
+
+fn require_vm_harness(root: &Path) {
+    let run_id = env::var("WINCENT_VM_RUN_ID").expect("WINCENT_VM_RUN_ID is required");
+    assert!(
+        !run_id.is_empty()
+            && run_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "invalid VM run ID"
+    );
+    assert_eq!(
+        env::var("WINCENT_VM_ACK").as_deref(),
+        Ok(run_id.as_str()),
+        "VM acknowledgement mismatch"
+    );
+    let guest = env::var("WINCENT_VM_GUEST").expect("WINCENT_VM_GUEST is required");
+    let computer = env::var("COMPUTERNAME").expect("COMPUTERNAME is required");
+    assert!(
+        guest.eq_ignore_ascii_case(&computer),
+        "guest identity mismatch"
+    );
+    let normalized = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    assert!(
+        normalized.starts_with("c:\\wincenttrack\\"),
+        "fixture root must be inside C:\\WincentTrack"
+    );
 }
 
 fn recent_target(root: &Path, index: usize) -> PathBuf {

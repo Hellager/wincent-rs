@@ -7,9 +7,8 @@
 # Flow:
 #   1. verify session and locate both Quick Access backing files;
 #   2. back up Recent/Frequent CFB files plus the complete Recent .lnk set;
-#   3. run the Rust integration-test binary (tests/get_item_latency/main.rs);
-#      Windows 10 builds deterministic v4 fixtures, while Windows 11 creates
-#      native v6 state through system APIs and records available capabilities;
+#   3. run the Rust integration-test binary (tests/get_item_latency/main.rs),
+#      creating native state through system APIs and recording capabilities;
 #   4. stop Explorer, restore both CFB files and the Recent .lnk set, restart
 #      Explorer, and verify SHA-256/link-manifest equality;
 #   5. write markers, environment.json, final-state.json and a zip archive.
@@ -200,6 +199,9 @@ try {
         Set-Content -LiteralPath (Join-Path $MarkersDir '10-baseline-ready.txt') -Encoding UTF8
 
     $env:WINCENT_GET_ITEM_LATENCY = '1'
+    $env:WINCENT_VM_RUN_ID = $RunId
+    $env:WINCENT_VM_ACK = $RunId
+    $env:WINCENT_VM_GUEST = $env:COMPUTERNAME
     $env:WINCENT_TEST_PLATFORM = $DetectedPlatform
     $env:WINCENT_GET_ITEM_LATENCY_OUT = $ResultPath
     $env:WINCENT_GET_ITEM_LATENCY_ROOT = $TargetsDir
@@ -229,13 +231,12 @@ try {
     if ([int]$result.iterations -ne $Iters) {
         throw "result iterations $($result.iterations) != requested $Iters"
     }
-    $requiredScenarios = if ($DetectedPlatform -eq 'win10') {
-        @('recent_full', 'frequent_full', 'recent_under', 'frequent_under')
-    } else {
-        @('frequent_native')
+    if ($result.fixture_mode -ne 'native') { throw 'result fixture_mode must be native' }
+    if (-not $result.fixture_capabilities.frequent) {
+        throw 'native Frequent Folders fixture is unavailable'
     }
-    $requiredScenarios = @($requiredScenarios)
-    if ($DetectedPlatform -eq 'win11' -and $result.fixture_capabilities.recent) {
+    $requiredScenarios = @('frequent_native')
+    if ($result.fixture_capabilities.recent) {
         $requiredScenarios += 'recent_native'
     }
     foreach ($scenario in $requiredScenarios) {

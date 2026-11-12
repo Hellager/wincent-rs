@@ -72,12 +72,12 @@ manually recover the VM in that case.
 | Errors | Empty/missing paths, existing-but-absent file/folder, duplicate file/folder and category details |
 | Native mutation | 25 Recent files, two pinned folders, native unpinned parent, add/remove convergence, pinned and unpinned removal |
 | Locks | Recent/Frequent/All, clone-shared lock ownership, repeated lock/unlock errors, independent manager and child-process mutation denial, backing-file write denial, queries while locked |
-| Lock lifetime | Disjoint categories, lock survives one clone dropping, last clone releases, `unlock` reports/removes newly created `.lnk` paths |
+| Lock lifetime | Disjoint categories, clone lifetime, plain unlock preserving `.lnk`, cleanup success/failure reports, and lock release after failed deletion |
 | Refresh | Open Quick Access/Home window, populated and cleared state; checks API result, not pixels |
 | Clear | Recent/Frequent/All seeded with both file and folder, scoped preservation, repeated clear; does not incorrectly require Windows default pins to disappear |
 | Standalone functions | Query parity with manager and independent Shell results, explicit timeouts, zero-timeout rejection, path types, pin status, pinning existing unpinned folders, both removal routes, scoped clear and refresh |
-| Standalone locks | Typed guards, disjoint locks, overlapping acquisition, manager interoperability, cross-process mutation denial, explicit shortcut cleanup and release on drop |
-| Standalone unit tests | Exact timeout forwarding, no mutation retry, missing versus failed reads, error categories, cleanup failure still releases both guard types |
+| Standalone locks | Typed guards, disjoint locks, overlapping acquisition, manager interoperability, cross-process mutation denial, plain unlock, explicit cleanup, delete-sharing failure and release on drop |
+| Non-DestList unit tests | Dynamically discovers and runs every library test outside `destlist::`, covering pure logic, timeout handling, concurrency resource lifetime and error categories |
 
 Every phase uses bounded convergence polling after native mutation. A failed
 prerequisite aborts its dependent phases and records `suite.completed=false`;
@@ -91,8 +91,10 @@ These two waits prepare test data; they are not performance measurements.
 Allow several minutes for a complete run, including snapshot creation and rollback.
 The standalone phase prepares two additional unpinned parents using the same
 66-second visit intervals. It runs after manager coverage, with fresh paths.
-Before the acceptance suite, the guest runs the library's `standalone::tests::`
-unit tests; those tests are also never executed on the host.
+Before the acceptance suite, the guest lists the library test binary, excludes
+`destlist::`, and runs every remaining test by exact name. The discovered names
+are saved in `unit-tests-list.txt`, so newly added modules cannot be missed by a
+stale hard-coded filter. These tests are never executed on the host.
 Each clear case uses fresh paths: removing a Recent item can leave a blocked
 entry in Shell's cached state, so re-adding the previous mutation target is not
 a reliable way to prepare the next case.
@@ -103,8 +105,9 @@ Default output: `temp/track_wincent/evidence/qam-<platform>-<run-id>/`.
 
 - `result.json`: per-check IDs, results/details, count, completion and process exit.
 - `checks.tsv`, `test.log`: streaming checks and Rust test output, including failures.
-- `unit-tests.log`: standalone unit test output; `result.json` records its positive
-  passing count as `unit_checks` and success as `unit_passed`.
+- `unit-tests.log`, `unit-tests-list.txt`: non-DestList unit output and the exact
+  discovered test set; `result.json` records its positive passing count as
+  `unit_checks` and success as `unit_passed`.
 - `environment.json`: actual build/UBR, display version, user/session, binary hash,
   source commit, Explorer / Shell DLL versions and hashes.
 - `final-state.json`: guest restoration, target removal and remaining test processes.

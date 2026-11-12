@@ -51,19 +51,6 @@ pub(crate) fn find_windows_recent_links_for_target(target: &str) -> WincentResul
     Ok(matches)
 }
 
-#[cfg(test)]
-fn delete_recent_links_for_target_in<F>(
-    recent_folder: &Path,
-    target: &str,
-    timeout: Duration,
-    resolver: F,
-) -> WincentResult<Vec<PathBuf>>
-where
-    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
-{
-    delete_recent_links_for_targets_in(recent_folder, &[target.to_owned()], timeout, resolver)
-}
-
 fn delete_recent_links_for_targets_in<F>(
     recent_folder: &Path,
     targets: &[String],
@@ -87,10 +74,7 @@ where
             continue;
         };
 
-        if targets
-            .iter()
-            .any(|target| paths_equal(&resolved_target, target))
-        {
+        if resolved_target_matches(&resolved_target, targets) {
             fs::remove_file(&path).map_err(WincentError::Io)?;
             deleted.push(path);
         }
@@ -99,27 +83,37 @@ where
     Ok(deleted)
 }
 
+fn resolved_target_matches(resolved_target: &str, targets: &[String]) -> bool {
+    targets
+        .iter()
+        .any(|target| paths_equal(resolved_target, target))
+}
+
+fn sorted_lnk_file_paths(entries: impl IntoIterator<Item = (PathBuf, bool)>) -> Vec<PathBuf> {
+    let mut paths: Vec<_> = entries
+        .into_iter()
+        .filter_map(|(path, is_file)| (is_file && is_lnk_file(&path)).then_some(path))
+        .collect();
+    paths.sort();
+    paths
+}
+
 pub(crate) fn recent_lnk_paths(recent_folder: &Path) -> WincentResult<Vec<PathBuf>> {
-    let mut paths = Vec::new();
+    let mut entries = Vec::new();
 
     for entry in fs::read_dir(recent_folder).map_err(WincentError::Io)? {
         let entry = entry.map_err(WincentError::Io)?;
         let path = entry.path();
         let file_type = entry.file_type().map_err(WincentError::Io)?;
-        if file_type.is_file() && is_lnk_file(&path) {
-            paths.push(path);
-        }
+        entries.push((path, file_type.is_file()));
     }
 
-    paths.sort();
-    Ok(paths)
+    Ok(sorted_lnk_file_paths(entries))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use tempfile::tempdir;
 
     #[test]
     fn lnk_extension_detection_is_case_insensitive() {
@@ -130,85 +124,12 @@ mod tests {
     }
 
     #[test]
-    fn deep_clean_deletes_only_matching_recent_links() -> WincentResult<()> {
-        let dir = tempdir().map_err(WincentError::Io)?;
-        let matching = dir.path().join("matching.lnk");
-        let other = dir.path().join("other.lnk");
-        let broken = dir.path().join("broken.lnk");
-        let non_lnk = dir.path().join("matching.txt");
-        fs::write(&matching, b"matching").map_err(WincentError::Io)?;
-        fs::write(&other, b"other").map_err(WincentError::Io)?;
-        fs::write(&broken, b"broken").map_err(WincentError::Io)?;
-        fs::write(&non_lnk, b"not a shortcut").map_err(WincentError::Io)?;
+    fn resolved_target_matching_uses_windows_path_semantics() {
+        let targets = vec!["C:\\One".to_string(), "c:/two/".to_string()];
 
-        let mut targets = HashMap::new();
-        targets.insert(matching.clone(), "C:\\Work\\Report.docx".to_string());
-        targets.insert(other.clone(), "C:\\Work\\Other.docx".to_string());
-
-        let deleted = delete_recent_links_for_target_in(
-            dir.path(),
-            "c:/work/report.docx",
-            Duration::from_secs(1),
-            |path, _| Ok(targets.get(path).cloned()),
-        )?;
-
-        assert_eq!(deleted, vec![matching.clone()]);
-        assert!(!matching.exists());
-        assert!(other.exists());
-        assert!(broken.exists());
-        assert!(non_lnk.exists());
-        Ok(())
-    }
-
-    #[test]
-    fn deep_clean_matches_multiple_targets_in_one_scan() -> WincentResult<()> {
-        let dir = tempdir().map_err(WincentError::Io)?;
-        let first = dir.path().join("first.lnk");
-        let second = dir.path().join("second.lnk");
-        let other = dir.path().join("other.lnk");
-        for path in [&first, &second, &other] {
-            fs::write(path, b"shortcut").map_err(WincentError::Io)?;
-        }
-
-        let mut resolved = HashMap::new();
-        resolved.insert(first.clone(), "C:\\One".to_string());
-        resolved.insert(second.clone(), "c:/two/".to_string());
-        resolved.insert(other.clone(), "C:\\Other".to_string());
-
-        let deleted = delete_recent_links_for_targets_in(
-            dir.path(),
-            &["c:/one/".to_string(), "C:\\Two".to_string()],
-            Duration::from_secs(1),
-            |path, _| Ok(resolved.get(path).cloned()),
-        )?;
-
-        assert_eq!(deleted, vec![first.clone(), second.clone()]);
-        assert!(!first.exists());
-        assert!(!second.exists());
-        assert!(other.exists());
-        Ok(())
-    }
-
-    #[test]
-    fn deep_clean_propagates_resolver_errors() -> WincentResult<()> {
-        let dir = tempdir().map_err(WincentError::Io)?;
-        let link = dir.path().join("matching.lnk");
-        fs::write(&link, b"matching").map_err(WincentError::Io)?;
-
-        let error = delete_recent_links_for_target_in(
-            dir.path(),
-            "c:/work/report.docx",
-            Duration::from_secs(1),
-            |_, _| Err(WincentError::Timeout("resolver timed out".to_string())),
-        )
-        .unwrap_err();
-
-        assert!(link.exists());
-        assert!(matches!(
-            error,
-            WincentError::Timeout(message) if message == "resolver timed out"
-        ));
-        Ok(())
+        assert!(resolved_target_matches("c:/one/", &targets));
+        assert!(resolved_target_matches("C:\\TWO", &targets));
+        assert!(!resolved_target_matches("C:\\Other", &targets));
     }
 
     #[test]
@@ -252,17 +173,21 @@ mod tests {
     }
 
     #[test]
-    fn recent_lnk_paths_returns_only_lnk_files_sorted() -> WincentResult<()> {
-        let dir = tempdir().map_err(WincentError::Io)?;
-        let a = dir.path().join("a.lnk");
-        let b = dir.path().join("b.LNK");
-        let txt = dir.path().join("c.txt");
-        fs::write(&b, b"b").map_err(WincentError::Io)?;
-        fs::write(&txt, b"txt").map_err(WincentError::Io)?;
-        fs::write(&a, b"a").map_err(WincentError::Io)?;
+    fn recent_lnk_path_filter_is_pure_and_sorted() {
+        let a = PathBuf::from("a.lnk");
+        let b = PathBuf::from("b.LNK");
+        let txt = PathBuf::from("c.txt");
+        let directory = PathBuf::from("directory.lnk");
 
-        assert_eq!(recent_lnk_paths(dir.path())?, vec![a, b]);
-        Ok(())
+        assert_eq!(
+            sorted_lnk_file_paths([
+                (b.clone(), true),
+                (txt, true),
+                (directory, false),
+                (a.clone(), true),
+            ]),
+            vec![a, b]
+        );
     }
 
     const FILE_ATTRIBUTE_ARCHIVE_FOR_TEST: u32 = 0x0000_0020;

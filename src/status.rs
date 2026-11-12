@@ -255,22 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn locate_matches_existing_equivalent_paths() -> WincentResult<()> {
-        let directory = tempfile::tempdir()?;
-        let nested = directory.path().join("nested");
-        std::fs::create_dir(&nested)?;
-        let target = directory.path().join("report.txt");
-        std::fs::write(&target, b"status fixture")?;
-        let equivalent = nested.join("..").join("report.txt");
-        let target = target.to_string_lossy();
-        let equivalent = equivalent.to_string_lossy();
-        let entries = vec![destlist_entry_for_test(&target, 1, 0, -1, 1, None)];
-
-        assert_eq!(locate(&entries, &equivalent), Some(0));
-        Ok(())
-    }
-
-    #[test]
     fn frequent_visible_orders_pinned_first_then_ranked_unpinned() {
         let entries = vec![
             destlist_entry_for_test("C:\\Unpinned", 1, 0, 0, 3, None),

@@ -15,6 +15,15 @@ use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTME
 const MAX_ACTIVE_STA_WORKERS: usize = 4;
 static ACTIVE_STA_WORKERS: AtomicUsize = AtomicUsize::new(0);
 
+pub(crate) fn validate_timeout(timeout: Duration) -> WincentResult<()> {
+    if timeout.is_zero() {
+        return Err(WincentError::InvalidArgument(
+            "timeout must be greater than zero".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 struct StaComGuard;
 
 impl Drop for StaComGuard {
@@ -89,11 +98,7 @@ where
     F: FnOnce() -> WincentResult<T> + Send + 'static,
     T: Send + 'static,
 {
-    if timeout.is_zero() {
-        return Err(WincentError::InvalidArgument(
-            "timeout must be greater than zero".to_string(),
-        ));
-    }
+    validate_timeout(timeout)?;
 
     let active_worker = acquire_active_sta_worker()?;
     let (tx, rx) = mpsc::channel::<WincentResult<T>>();
@@ -177,9 +182,22 @@ where
     F: FnOnce() -> WincentResult<T> + Send + 'static,
     T: Send + 'static,
 {
+    run_on_sta_thread_with_resources(f, timeout, permits)
+}
+
+fn run_on_sta_thread_with_resources<F, T, R>(
+    f: F,
+    timeout: Duration,
+    resources: R,
+) -> WincentResult<T>
+where
+    F: FnOnce() -> WincentResult<T> + Send + 'static,
+    T: Send + 'static,
+    R: Send + 'static,
+{
     run_on_sta_thread(
         move || {
-            let _permits = permits;
+            let _resources = resources;
             f()
         },
         timeout,
@@ -189,9 +207,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lock::QuickAccessLockTarget;
     use serial_test::serial;
-    use std::sync::{mpsc, Arc, Condvar, Mutex};
+    use std::sync::{atomic::AtomicBool, mpsc, Arc, Condvar, Mutex};
     use std::time::{Duration, Instant};
 
     fn wait_for_active_worker_count(expected: usize, timeout: Duration) -> bool {
@@ -244,49 +261,38 @@ mod tests {
 
     #[test]
     #[serial(com_thread_active_workers)]
-    fn mutation_permit_stays_held_after_caller_timeout() {
+    fn worker_resource_stays_held_after_caller_timeout() {
+        struct DropProbe(Arc<AtomicBool>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
         wait_for_idle_workers();
-        let temp_dir = tempfile::tempdir().expect("temp Recent directory");
-        let permit = MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::RecentFiles,
-            temp_dir.path(),
-            false,
-        )
-        .expect("test admission")
-        .pop()
-        .expect("Recent Files admission");
         let (started_tx, started_rx) = mpsc::channel();
         let (finish_tx, finish_rx) = mpsc::channel();
+        let dropped = Arc::new(AtomicBool::new(false));
 
-        let result = run_on_sta_thread_with_permit(
+        let result = run_on_sta_thread_with_resources(
             move || {
                 started_tx.send(()).expect("signal worker start");
                 finish_rx.recv().expect("release worker");
                 Ok(())
             },
             Duration::from_millis(20),
-            permit,
+            DropProbe(Arc::clone(&dropped)),
         );
         assert!(matches!(result, Err(WincentError::Timeout(_))));
         started_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("worker started");
-
-        assert!(MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::RecentFiles,
-            temp_dir.path(),
-            true
-        )
-        .is_err());
+        assert!(!dropped.load(Ordering::Acquire));
 
         finish_tx.send(()).expect("release worker");
         assert!(wait_for_active_worker_count(0, Duration::from_secs(2)));
-        assert!(MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::RecentFiles,
-            temp_dir.path(),
-            true
-        )
-        .is_ok());
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[test]

@@ -201,6 +201,9 @@ try {
         Set-Content -LiteralPath (Join-Path $MarkersDir '10-baseline-ready.txt') -Encoding UTF8
 
     $env:WINCENT_ADD_LATENCY = '1'
+    $env:WINCENT_VM_RUN_ID = $RunId
+    $env:WINCENT_VM_ACK = $RunId
+    $env:WINCENT_VM_GUEST = $env:COMPUTERNAME
     $env:WINCENT_TEST_PLATFORM = $DetectedPlatform
     $env:WINCENT_ADD_LATENCY_OUT = $ResultPath
     $env:WINCENT_ADD_LATENCY_ROOT = $TargetsDir

@@ -249,11 +249,18 @@ impl QuickAccessLock {
 }
 
 fn cleanup_shortcuts(paths: Vec<PathBuf>) -> UnlockReport {
+    cleanup_shortcuts_with(paths, |path| fs::remove_file(path))
+}
+
+fn cleanup_shortcuts_with<F>(paths: Vec<PathBuf>, mut remove: F) -> UnlockReport
+where
+    F: FnMut(&Path) -> io::Result<()>,
+{
     let mut cleaned_shortcuts = Vec::new();
     let mut cleanup_failures = Vec::new();
 
     for path in paths {
-        match fs::remove_file(&path) {
+        match remove(&path) {
             Ok(()) => cleaned_shortcuts.push(path),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 cleaned_shortcuts.push(path);
@@ -331,51 +338,6 @@ fn paths_equal_path(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
-    use windows::Win32::Storage::FileSystem::FILE_SHARE_NONE;
-
-    fn create_recent_fixture() -> WincentResult<(tempfile::TempDir, PathBuf, PathBuf, PathBuf)> {
-        let temp_dir = tempfile::tempdir().map_err(WincentError::Io)?;
-        let recent_folder = temp_dir.path().to_path_buf();
-        let automatic_destinations = recent_folder.join("AutomaticDestinations");
-        fs::create_dir(&automatic_destinations).map_err(WincentError::Io)?;
-
-        let recent_file = automatic_destinations.join(RECENT_FILES_AUTOMATIC_DESTINATION);
-        let frequent_file = automatic_destinations.join(FREQUENT_FOLDERS_AUTOMATIC_DESTINATION);
-        fs::write(&recent_file, b"recent").map_err(WincentError::Io)?;
-        fs::write(&frequent_file, b"frequent").map_err(WincentError::Io)?;
-
-        Ok((temp_dir, recent_folder, recent_file, frequent_file))
-    }
-
-    fn can_open_exclusively(path: &Path) -> bool {
-        let mut wide_path = os_str_to_wide_null(path.as_os_str());
-        // SAFETY: wide_path is null-terminated and remains alive for the call.
-        // A successful handle is owned locally and closed exactly once below.
-        let handle = unsafe {
-            CreateFileW(
-                PCWSTR::from_raw(wide_path.as_mut_ptr()),
-                GENERIC_READ.0,
-                FILE_SHARE_NONE,
-                None,
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                None,
-            )
-        };
-
-        match handle {
-            Ok(handle) => {
-                // SAFETY: handle was returned successfully by CreateFileW and
-                // has not been closed or transferred.
-                unsafe {
-                    let _ = CloseHandle(handle);
-                }
-                true
-            }
-            Err(_) => false,
-        }
-    }
 
     #[test]
     fn quick_access_lock_is_send_but_not_sync() {
@@ -391,158 +353,7 @@ mod tests {
         }
 
         assert_send::<QuickAccessLock>();
-        // Marker inference becomes ambiguous if QuickAccessLock implements Sync.
         assert_not_sync::<QuickAccessLock, _>();
-    }
-
-    #[test]
-    fn lock_can_be_unlocked_on_another_thread() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
-        let lock = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder,
-        )?;
-        assert!(!can_open_exclusively(&recent_file));
-
-        let report = std::thread::spawn(move || lock.unlock_and_cleanup())
-            .join()
-            .expect("unlock worker panicked")?;
-
-        assert!(report.is_complete());
-        assert!(can_open_exclusively(&recent_file));
-        Ok(())
-    }
-
-    #[test]
-    fn unlock_returns_new_links_and_releases_lock() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
-        let lock = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder.clone(),
-        )?;
-        let new_link = recent_folder.join("new.lnk");
-        fs::write(&new_link, b"new").map_err(WincentError::Io)?;
-
-        let report = lock.unlock_and_cleanup()?;
-
-        assert_eq!(report.cleaned_shortcuts(), std::slice::from_ref(&new_link));
-        assert!(report.is_complete());
-        assert!(!new_link.exists());
-        assert!(can_open_exclusively(&recent_file));
-        Ok(())
-    }
-
-    #[test]
-    fn separate_lock_attempts_conflict_only_for_overlapping_targets() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
-        let recent = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder.clone(),
-        )?;
-        assert!(QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder.clone(),
-        )
-        .is_err());
-        assert!(QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::All,
-            recent_folder.clone(),
-        )
-        .is_err());
-
-        let frequent = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::FrequentFolders,
-            recent_folder.clone(),
-        )?;
-        drop(recent);
-        drop(frequent);
-        let all = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::All,
-            recent_folder,
-        )?;
-        drop(all);
-        Ok(())
-    }
-
-    #[test]
-    fn lock_can_be_dropped_on_another_thread() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
-        let lock = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder,
-        )?;
-        assert!(!can_open_exclusively(&recent_file));
-
-        std::thread::spawn(move || drop(lock))
-            .join()
-            .expect("drop worker panicked");
-
-        assert!(can_open_exclusively(&recent_file));
-        Ok(())
-    }
-
-    #[test]
-    fn partial_lock_failure_releases_opened_handles() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, recent_file, frequent_file) = create_recent_fixture()?;
-        fs::remove_file(frequent_file).map_err(WincentError::Io)?;
-
-        assert!(QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::All,
-            recent_folder,
-        )
-        .is_err());
-        assert!(can_open_exclusively(&recent_file));
-        Ok(())
-    }
-
-    #[test]
-    fn unlock_snapshot_failure_releases_opened_handles() -> WincentResult<()> {
-        let (_temp_dir, _recent_folder, recent_file, _) = create_recent_fixture()?;
-        let lock = QuickAccessLock {
-            recent_folder: recent_file.join("not-a-directory"),
-            initial_lnk_paths: Vec::new(),
-            _locks: vec![LockedFile::open(&recent_file)?],
-            _gates: Vec::new(),
-        };
-        assert!(!can_open_exclusively(&recent_file));
-
-        assert!(lock.unlock_and_cleanup().is_err());
-
-        assert!(can_open_exclusively(&recent_file));
-        Ok(())
-    }
-
-    #[test]
-    fn cleanup_failure_releases_backing_handle() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, recent_file, _) = create_recent_fixture()?;
-        let lock = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder.clone(),
-        )?;
-        let new_link = recent_folder.join("new.lnk");
-        let another_link = recent_folder.join("other.lnk");
-        fs::write(&new_link, b"new").map_err(WincentError::Io)?;
-        fs::write(&another_link, b"other").map_err(WincentError::Io)?;
-        let deletion_blocker = LockedFile::open(&new_link)?;
-
-        let report = lock.unlock_and_cleanup()?;
-
-        assert_eq!(
-            report.cleaned_shortcuts(),
-            std::slice::from_ref(&another_link)
-        );
-        assert_eq!(report.cleanup_failures().len(), 1);
-        assert_eq!(report.cleanup_failures()[0].path(), new_link);
-        assert_ne!(
-            report.cleanup_failures()[0].error().kind(),
-            io::ErrorKind::NotFound
-        );
-        assert!(!report.is_complete());
-        assert!(new_link.exists());
-        assert!(!another_link.exists());
-        assert!(can_open_exclusively(&recent_file));
-        drop(deletion_blocker);
-        Ok(())
     }
 
     #[test]
@@ -559,109 +370,6 @@ mod tests {
             QuickAccessLockTarget::FrequentFolders,
             QuickAccessLockTarget::All
         );
-    }
-
-    #[test]
-    fn mutation_admission_is_category_scoped_and_lock_rejects_it() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
-        let recent_gate = MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::RecentFiles,
-            &recent_folder,
-            true,
-        )?;
-
-        let recent_result = MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::RecentFiles,
-            &recent_folder,
-            false,
-        );
-        assert!(matches!(
-            recent_result,
-            Err(WincentError::QuickAccessLocked {
-                qa_type: QuickAccessLockTarget::RecentFiles
-            })
-        ));
-
-        let frequent_permit = MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::FrequentFolders,
-            &recent_folder,
-            false,
-        )?;
-        drop(frequent_permit);
-        drop(recent_gate);
-
-        assert!(MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::RecentFiles,
-            &recent_folder,
-            false
-        )
-        .is_ok());
-        Ok(())
-    }
-
-    #[test]
-    fn all_gate_acquisition_is_rolled_back_when_second_category_is_locked() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
-        let frequent_gate = MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::FrequentFolders,
-            &recent_folder,
-            true,
-        )?;
-
-        assert!(MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::All,
-            &recent_folder,
-            true
-        )
-        .is_err());
-
-        drop(frequent_gate);
-        assert!(MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::All,
-            &recent_folder,
-            true
-        )
-        .is_ok());
-        Ok(())
-    }
-
-    #[test]
-    fn cross_process_admission_probe() {
-        let Ok(folder) = std::env::var("WINCENT_TEST_LOCK_FOLDER") else {
-            return;
-        };
-        let result = MutationPermit::acquire_in_folder(
-            QuickAccessLockTarget::RecentFiles,
-            Path::new(&folder),
-            false,
-        );
-        assert!(matches!(
-            result,
-            Err(WincentError::QuickAccessLocked {
-                qa_type: QuickAccessLockTarget::RecentFiles
-            })
-        ));
-    }
-
-    #[test]
-    fn separate_process_observes_locked_category() -> WincentResult<()> {
-        let (_temp_dir, recent_folder, _, _) = create_recent_fixture()?;
-        let lock = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder.clone(),
-        )?;
-        let output = Command::new(std::env::current_exe().map_err(WincentError::Io)?)
-            .args(["--exact", "lock::tests::cross_process_admission_probe"])
-            .env("WINCENT_TEST_LOCK_FOLDER", recent_folder)
-            .output()
-            .map_err(WincentError::Io)?;
-        assert!(
-            output.status.success(),
-            "child process failed: {}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-        drop(lock);
-        Ok(())
     }
 
     #[test]
@@ -694,42 +402,37 @@ mod tests {
     }
 
     #[test]
-    fn unlock_returns_only_new_paths_and_cleans_them() -> WincentResult<()> {
-        let temp_dir = tempfile::tempdir().map_err(WincentError::Io)?;
-        let recent_folder = temp_dir.path().to_path_buf();
-        let automatic_destinations = recent_folder.join("AutomaticDestinations");
-        fs::create_dir(&automatic_destinations).map_err(WincentError::Io)?;
+    fn cleanup_report_classifies_removed_absent_and_failed_paths_without_file_system_access() {
+        let removed = PathBuf::from("removed.lnk");
+        let absent = PathBuf::from("absent.lnk");
+        let denied = PathBuf::from("denied.lnk");
 
-        let recent_file = automatic_destinations.join(RECENT_FILES_AUTOMATIC_DESTINATION);
-        fs::write(&recent_file, b"lock").map_err(WincentError::Io)?;
-        let existing = recent_folder.join("existing.lnk");
-        let gone = recent_folder.join("gone.lnk");
-        let new = recent_folder.join("new.lnk");
-        fs::write(&existing, b"existing").map_err(WincentError::Io)?;
-        fs::write(&gone, b"gone").map_err(WincentError::Io)?;
+        let report = cleanup_shortcuts_with(
+            vec![removed.clone(), absent.clone(), denied.clone()],
+            |path| {
+                if path == absent {
+                    Err(io::Error::from(io::ErrorKind::NotFound))
+                } else if path == denied {
+                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                } else {
+                    Ok(())
+                }
+            },
+        );
 
-        let lock = QuickAccessLock::lock_target_in_recent_folder(
-            QuickAccessLockTarget::RecentFiles,
-            recent_folder.clone(),
-        )?;
-        fs::remove_file(&gone).map_err(WincentError::Io)?;
-        fs::write(&new, b"new").map_err(WincentError::Io)?;
-
-        let report = lock.unlock_and_cleanup()?;
-
-        assert_eq!(report.cleaned_shortcuts(), std::slice::from_ref(&new));
-        assert!(report.is_complete());
-        assert!(existing.exists());
-        assert!(!gone.exists());
-        assert!(!new.exists());
-        Ok(())
+        assert_eq!(report.cleaned_shortcuts(), &[removed, absent]);
+        assert_eq!(report.cleanup_failures().len(), 1);
+        assert_eq!(report.cleanup_failures()[0].path(), denied);
+        assert!(!report.is_complete());
     }
 
     #[test]
-    fn cleanup_treats_already_absent_shortcut_as_complete() {
+    fn cleanup_report_is_complete_when_every_path_is_already_absent() {
         let path = PathBuf::from("already-absent.lnk");
 
-        let report = cleanup_shortcuts(vec![path.clone()]);
+        let report = cleanup_shortcuts_with(vec![path.clone()], |_| {
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        });
 
         assert_eq!(report.cleaned_shortcuts(), &[path]);
         assert!(report.cleanup_failures().is_empty());

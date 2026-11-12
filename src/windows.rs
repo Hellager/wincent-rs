@@ -145,14 +145,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recent_folder_exists() -> WincentResult<()> {
-        let recent_folder = get_windows_recent_folder()?;
-        assert!(!recent_folder.is_empty());
-        assert!(std::path::Path::new(&recent_folder).exists());
-        Ok(())
-    }
-
-    #[test]
     fn windows_version_has_a_valid_kernel_build() -> WincentResult<()> {
         let version = get_windows_version()?;
         assert!(version.major() >= 6);

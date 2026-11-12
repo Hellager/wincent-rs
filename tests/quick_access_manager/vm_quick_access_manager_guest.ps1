@@ -10,7 +10,8 @@ if ([System.IO.Path]::GetFullPath($ConfigPath) -ne "$Root\config.json") {
     throw 'Config must reside in its dedicated VM run directory'
 }
 $Exe = "$Root\quick-access-manager.exe"
-$UnitExe = "$Root\standalone-unit-tests.exe"
+$UnitExe = "$Root\library-unit-tests.exe"
+$TestRunner = "$Root\tests.ps1"
 $Recent = Join-Path $env:APPDATA 'Microsoft\Windows\Recent'
 $Backup = Join-Path $Root 'original'
 $RegistrySpecs = @(
@@ -166,16 +167,9 @@ try {
     $env:WINCENT_QAM_RUN_ID = [string]$config.run_id
     $env:WINCENT_QAM_VM_ACK = [string]$config.run_id
     $env:WINCENT_QAM_GUEST = $env:COMPUTERNAME
-    $wrapper = @(
-        '@echo off',
-        "`"$UnitExe`" standalone::tests:: --test-threads=1 --nocapture > `"$Root\unit-tests.log`" 2>&1",
-        'if errorlevel 1 exit /b %ERRORLEVEL%',
-        "`"$Exe`" --ignored --exact quick_access_manager --nocapture > `"$Root\test.log`" 2>&1",
-        'exit /b %ERRORLEVEL%'
-    ) -join "`r`n"
-    Set-Content -LiteralPath "$Root\run-test.cmd" -Value $wrapper -Encoding ASCII
-    $process = Start-Process -FilePath "$env:WINDIR\System32\cmd.exe" `
-        -ArgumentList @('/c', "$Root\run-test.cmd") -PassThru -WindowStyle Hidden
+    $process = Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $TestRunner, '-Root', $Root) `
+        -PassThru -WindowStyle Hidden
     if (-not $process.WaitForExit(900000)) { throw 'Test executable exceeded 900 seconds' }
     $process.Refresh()
     $exitCode = $process.ExitCode
@@ -188,7 +182,7 @@ try {
     # before restoring, and use the host snapshot as the final isolation boundary.
     try {
         Get-CimInstance Win32_Process `
-            -Filter "Name='quick-access-manager.exe' OR Name='standalone-unit-tests.exe'" |
+            -Filter "Name='quick-access-manager.exe' OR Name='library-unit-tests.exe'" |
             Where-Object { $_.ExecutablePath -ieq $Exe -or $_.ExecutablePath -ieq $UnitExe } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }
         if ($null -ne $process -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
@@ -245,11 +239,8 @@ try {
         }
         $completed = @($checks | Where-Object { $_.id -eq 'suite.completed' -and $_.ok }).Count -eq 1
         $unitChecks = 0
-        if (Test-Path -LiteralPath "$Root\unit-tests.log") {
-            $unitLog = Get-Content -LiteralPath "$Root\unit-tests.log" -Raw
-            if ($unitLog -match 'test result: ok\. (\d+) passed; 0 failed;') {
-                $unitChecks = [int]$Matches[1]
-            }
+        if (Test-Path -LiteralPath "$Root\unit-tests-count.txt") {
+            $unitChecks = [int](Get-Content -LiteralPath "$Root\unit-tests-count.txt" -Raw)
         }
         Write-Json ([ordered]@{
             run_id = $config.run_id
@@ -274,7 +265,7 @@ try {
             targets_removed = -not (Test-Path -LiteralPath "$Root\targets")
             remaining_test_processes = @(
                 Get-CimInstance Win32_Process `
-                    -Filter "Name='quick-access-manager.exe' OR Name='standalone-unit-tests.exe'" |
+                    -Filter "Name='quick-access-manager.exe' OR Name='library-unit-tests.exe'" |
                     Where-Object { $_.ExecutablePath -ieq $Exe -or $_.ExecutablePath -ieq $UnitExe }
             ).Count
             timestamp = (Get-Date).ToString('o')

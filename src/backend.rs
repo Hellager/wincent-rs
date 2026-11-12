@@ -180,8 +180,6 @@ mod tests {
     use super::*;
     use crate::destlist::test_support::{automatic_destinations_for_test, destlist_entry_for_test};
     use crate::destlist::DestListKind;
-    use crate::error::WincentError;
-    use tempfile::tempdir;
 
     fn set_hidden_attribute(parsed: &mut AutomaticDestinations, stream_name: &str) {
         let stream = parsed
@@ -235,14 +233,5 @@ mod tests {
             ui_item_paths(&parsed, false, true),
             vec!["C:\\Visible", "C:\\Hidden"]
         );
-    }
-
-    #[test]
-    fn missing_ui_backing_file_is_an_empty_list() -> WincentResult<()> {
-        let directory = tempdir().map_err(WincentError::Io)?;
-        let missing = directory.path().join("missing.automaticDestinations-ms");
-
-        assert!(ui_visible_items_from_path(missing, true)?.is_empty());
-        Ok(())
     }
 }

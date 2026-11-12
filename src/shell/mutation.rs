@@ -565,11 +565,7 @@ pub(crate) fn remove_from_recent_files_with_timeout(
     timeout: std::time::Duration,
     permit: MutationPermit,
 ) -> WincentResult<()> {
-    if timeout.is_zero() {
-        return Err(WincentError::InvalidArgument(
-            "timeout must be greater than zero".to_string(),
-        ));
-    }
+    crate::shell::thread::validate_timeout(timeout)?;
     validate_path(path, PathType::File)?;
     remove_recent_file_native(path, timeout, permit)
 }
@@ -591,11 +587,7 @@ pub(crate) fn add_to_frequent_folders_with_timeout(
     timeout: std::time::Duration,
     permit: MutationPermit,
 ) -> WincentResult<()> {
-    if timeout.is_zero() {
-        return Err(WincentError::InvalidArgument(
-            "timeout must be greater than zero".to_string(),
-        ));
-    }
+    crate::shell::thread::validate_timeout(timeout)?;
     pin_frequent_folder(path, timeout, permit)
 }
 
@@ -606,11 +598,7 @@ pub(crate) fn remove_unpinned_frequent_folder_with_timeout(
     timeout: std::time::Duration,
     permit: MutationPermit,
 ) -> WincentResult<()> {
-    if timeout.is_zero() {
-        return Err(WincentError::InvalidArgument(
-            "timeout must be greater than zero".to_string(),
-        ));
-    }
+    crate::shell::thread::validate_timeout(timeout)?;
     validate_path(path, PathType::Directory)?;
     let path = path.to_owned();
     crate::shell::thread::run_on_sta_thread_with_permit(
@@ -627,11 +615,7 @@ pub(crate) fn remove_pinned_frequent_folder_with_timeout(
     timeout: std::time::Duration,
     permit: MutationPermit,
 ) -> WincentResult<()> {
-    if timeout.is_zero() {
-        return Err(WincentError::InvalidArgument(
-            "timeout must be greater than zero".to_string(),
-        ));
-    }
+    crate::shell::thread::validate_timeout(timeout)?;
     validate_path(path, PathType::Directory)?;
     let path = path.to_owned();
     crate::shell::thread::run_on_sta_thread_with_permit(
@@ -722,41 +706,5 @@ mod tests {
         assert!(removed);
         assert!(checks.get() >= 2);
         Ok(())
-    }
-
-    #[test]
-    fn timeout_aware_operations_reject_zero_timeout() {
-        let recent = "C:\\Windows\\notepad.exe";
-        let folder = "C:\\Windows";
-        let recent_folder = tempfile::tempdir().expect("temp Recent directory");
-        let permit = |target| {
-            MutationPermit::acquire_in_folder(target, recent_folder.path(), false)
-                .expect("test admission")
-                .pop()
-                .expect("category admission")
-        };
-        use crate::lock::QuickAccessLockTarget::{FrequentFolders, RecentFiles};
-
-        for result in [
-            remove_from_recent_files_with_timeout(recent, Duration::ZERO, permit(RecentFiles)),
-            add_to_frequent_folders_with_timeout(folder, Duration::ZERO, permit(FrequentFolders)),
-            remove_unpinned_frequent_folder_with_timeout(
-                folder,
-                Duration::ZERO,
-                permit(FrequentFolders),
-            ),
-            remove_pinned_frequent_folder_with_timeout(
-                folder,
-                Duration::ZERO,
-                permit(FrequentFolders),
-            ),
-            add_file_to_recent_native(
-                recent,
-                Duration::ZERO,
-                vec![permit(RecentFiles), permit(FrequentFolders)],
-            ),
-        ] {
-            assert!(matches!(result, Err(WincentError::InvalidArgument(_))));
-        }
     }
 }
