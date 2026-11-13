@@ -11,8 +11,8 @@ pwsh -File tests/status_query/run_status_query_vm.ps1 `
     -EvidenceDir temp/track_wincent/evidence/status-query-<date>-v1
 ```
 
-Copy `.env.example` to `.env` in this directory and fill in the VM settings.
-The test-local `.env` file is ignored by Git. Pass `-NoMutate` to skip the
+Copy the repository-root `.env.example` to `.env` and fill in the VM settings.
+The shared root `.env` file is ignored by Git. Pass `-NoMutate` to skip the
 add/remove round trip.
 Encrypted VMs can set the optional `WINCENT_VM_PASSWORD`. The host prefers
 VMware `-interactive` for the Explorer session and keeps the scheduled-task

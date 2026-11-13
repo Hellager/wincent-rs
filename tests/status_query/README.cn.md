@@ -11,7 +11,7 @@ pwsh -File tests/status_query/run_status_query_vm.ps1 `
     -EvidenceDir temp/track_wincent/evidence/status-query-<date>-v1
 ```
 
-配置见同目录 `.env`（从 `.env.example` 复制，`tests/.gitignore` 会忽略该文件）。
+配置见项目根目录 `.env`（从根目录 `.env.example` 复制，根目录 `.gitignore` 会忽略该文件）。
 `-NoMutate` 可跳过 add/remove 闭环。
 加密 VM 可设置可选的 `WINCENT_VM_PASSWORD`；host 优先通过 VMware `-interactive` 进入
 Explorer session，并保留计划任务回退。

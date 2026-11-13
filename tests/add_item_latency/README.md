@@ -17,8 +17,8 @@ capacity-planning benchmark.
 | `run_add_item_latency_vm.ps1` | Host orchestrator: builds the test, uploads it, starts the guest run, polls markers, captures screenshots, pulls evidence and validates restore state. |
 | `vm_add_item_latency_start.ps1` | Guest launcher: cleans stale state, prefers the interactive session, and retains a scheduled-task fallback. |
 | `vm_add_item_latency_guest.ps1` | Guest orchestrator (session 1): baseline backup, test execution, restore, markers, environment/final-state JSON, evidence zip. |
-| `.env.example` | Configuration template. Copy to `.env` and fill in the VM paths and guest account. |
-| `.env` | Local values, including the guest password. Git-ignored. |
+| `../../.env.example` | Shared repository-root configuration template. |
+| `../../.env` | Shared local values, including the guest password. Git-ignored. |
 
 ## What is measured
 
@@ -57,8 +57,8 @@ reports how many of its targets are present as raw DestList entries.
 ## Configuration
 
 ```powershell
-Copy-Item tests/add_item_latency/.env.example tests/add_item_latency/.env
-# Edit .env: vmrun.exe, .vmx, guest user/password, evidence root, defaults.
+Copy-Item .env.example .env
+# Edit the repository-root .env: vmrun.exe, .vmx, guest credentials and defaults.
 ```
 
 The host script resolves settings as:
@@ -84,7 +84,7 @@ command-line parameter > .env value > non-secret built-in default
 
 `WINCENT_VM_VMX`, `WINCENT_VM_VMRUN`, `WINCENT_VM_GUEST_USER` and
 `WINCENT_VM_GUEST_PASSWORD` have no hard-coded fallback. If they are missing,
-the script stops before touching the VM and asks you to create `.env`.
+the script stops before touching the VM and asks you to create the root `.env`.
 
 The host prefers VMware `-interactive` to enter the Explorer session. The
 guest launcher retains the interactive scheduled-task path as a fallback.

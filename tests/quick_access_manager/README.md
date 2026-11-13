@@ -15,8 +15,9 @@ interactive logged-in test user with Explorer, host Rust/Cargo, and host
 PowerShell 7. Guest scripts support Windows PowerShell 5.1. Guest credentials
 must permit VMware guest operations and restarting that user's Explorer.
 
-1. Copy `.env.example` to `.env` and set the VM path, `vmrun` path, guest
-   credentials and `WINCENT_VM_PLATFORM=win10` or `win11`. `.env` is git-ignored.
+1. Copy the repository-root `.env.example` to `.env` and set the VM path,
+   `vmrun` path, guest credentials and `WINCENT_VM_PLATFORM=win10` or `win11`.
+   The shared root `.env` is git-ignored.
    Process environment variables and explicit script parameters also work.
 2. Log the test user into the guest desktop. Close unrelated guest applications
    that may write Recent history; do not interact with the guest during the run.

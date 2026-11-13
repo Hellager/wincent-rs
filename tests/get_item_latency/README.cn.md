@@ -17,8 +17,8 @@
 | `run_get_item_latency_vm.ps1` | host 编排：构建、上传、启动、轮询 marker、截图、回收证据、校验恢复状态 |
 | `vm_get_item_latency_start.ps1` | guest 启动器：清理旧状态，优先直接使用 interactive session，计划任务回退 |
 | `vm_get_item_latency_guest.ps1` | guest 编排（session 1）：baseline 备份、运行测试、恢复、marker、环境/最终状态 JSON、证据 zip |
-| `.env.example` | 配置模板；复制为 `.env` 后填写 VM 路径和 guest 账号 |
-| `.env` | 本机实际配置，含 guest 密码，已被 git 忽略 |
+| `../../.env.example` | 项目根目录共享配置模板 |
+| `../../.env` | 项目根目录共享配置，含 guest 密码，已被 git 忽略 |
 
 ## 测试夹具
 
@@ -67,8 +67,8 @@ host 只有在预期 shell 数量、raw 数量和场景统计都写入结果后�
 ## 配置
 
 ```powershell
-Copy-Item tests/get_item_latency/.env.example tests/get_item_latency/.env
-# 编辑 .env：填写 vmrun.exe、.vmx、guest 用户名/密码、证据根目录和默认参数。
+Copy-Item .env.example .env
+# 编辑项目根目录 .env：填写 vmrun.exe、.vmx、guest 用户名/密码和默认参数。
 ```
 
 host 脚本的解析顺序：
@@ -93,7 +93,7 @@ host 脚本的解析顺序：
 
 `WINCENT_VM_VMX`、`WINCENT_VM_VMRUN`、`WINCENT_VM_GUEST_USER`、
 `WINCENT_VM_GUEST_PASSWORD` 没有硬编码兜底值。缺少时脚本会在接触 VM 之前停止，并提示创建
-`.env`。
+项目根目录 `.env`。
 
 host 优先使用 VMware `-interactive` 在 Explorer session 中启动 guest 流程；不支持该模式时，
 guest launcher 仍保留交互计划任务回退路径。

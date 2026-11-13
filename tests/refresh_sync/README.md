@@ -49,14 +49,14 @@ screenshots. `result.json` records file/rule/Shell observations and timings.
 | `run_refresh_sync_vm.ps1` | Host orchestration, phase polling and screenshots. |
 | `vm_refresh_sync_start.ps1` | Guest session-1 launcher with an interactive path and task fallback. |
 | `vm_refresh_sync_guest.ps1` | Guest baseline/restore and test execution. |
-| `.env.example` | VM/credential/output configuration template. |
-| `.env` | Local values, including the guest password. Git-ignored. |
+| `../../.env.example` | Shared repository-root VM/credential/output template. |
+| `../../.env` | Shared local values, including the guest password. Git-ignored. |
 
 ## Configuration and run
 
 ```powershell
-Copy-Item tests/refresh_sync/.env.example tests/refresh_sync/.env
-# Edit .env, then:
+Copy-Item .env.example .env
+# Edit the repository-root .env, then:
 
 pwsh -File tests/refresh_sync/run_refresh_sync_vm.ps1 `
     -Platform win10 `

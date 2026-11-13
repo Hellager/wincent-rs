@@ -10,8 +10,8 @@
 Windows PowerShell 5.1。测试会清空 Quick Access、取消用户固定、切换可见性并重启
 Explorer，请只用专用 VM，不要在真实工作桌面手动执行 ignored 测试。
 
-复制 `.env.example` 为 `.env`，填写 VMX、vmrun、用户名、密码和平台；`.env`
-已由 `tests/.gitignore` 忽略。也可以使用进程环境变量或显式参数覆盖配置。
+复制项目根目录 `.env.example` 为 `.env`，填写 VMX、vmrun、用户名、密码和平台；根目录
+`.env` 已由 `.gitignore` 忽略。也可以使用进程环境变量或显式参数覆盖配置。
 
 ```powershell
 pwsh -File tests/quick_access_manager/run_quick_access_manager_vm.ps1 `

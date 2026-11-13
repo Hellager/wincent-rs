@@ -15,7 +15,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot '.env' }
+$DefaultEnvFile = Join-Path $RepoRoot '.env'
+if (-not $EnvFile) { $EnvFile = $DefaultEnvFile }
+if ([System.IO.Path]::IsPathRooted($EnvFile) -eq $false) {
+    $EnvFile = Join-Path $RepoRoot $EnvFile
+}
 $settings = @{}
 if (Test-Path -LiteralPath $EnvFile) {
     foreach ($line in Get-Content -LiteralPath $EnvFile) {
@@ -25,6 +29,8 @@ if (Test-Path -LiteralPath $EnvFile) {
         if ($parts.Count -ne 2) { throw 'Invalid .env entry (expected key=value)' }
         $settings[$parts[0].Trim()] = $parts[1].Trim().Trim('"').Trim("'")
     }
+} elseif ($EnvFile -ne $DefaultEnvFile) {
+    throw "environment file not found: $EnvFile"
 }
 function Setting([string]$Name) {
     if ($settings.ContainsKey($Name)) { return [string]$settings[$Name] }

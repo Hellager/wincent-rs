@@ -9,7 +9,7 @@
 # uses vmrun for file transfer, guest process control, marker polling and
 # screenshots; it never calls wincent on the host.
 #
-# Configuration is read from `.env` next to this script (see `.env.example`).
+# Configuration is read from the repository-root `.env` (see `.env.example`).
 # Explicit parameters override .env values. Both .env and command-line input are
 # optional only for non-secret defaults; VMX/vmrun/guest credentials must be
 # supplied somehow.
@@ -38,7 +38,8 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot '.env' }
+$DefaultEnvFile = Join-Path $RepoRoot '.env'
+if (-not $EnvFile) { $EnvFile = $DefaultEnvFile }
 if ([System.IO.Path]::IsPathRooted($EnvFile) -eq $false) {
     $EnvFile = Join-Path $RepoRoot $EnvFile
 }
@@ -61,7 +62,7 @@ if (Test-Path -LiteralPath $EnvFile) {
         }
         $script:EnvValues[$key] = $value
     }
-} elseif ($EnvFile -ne (Join-Path $PSScriptRoot '.env')) {
+} elseif ($EnvFile -ne $DefaultEnvFile) {
     throw "environment file not found: $EnvFile"
 }
 

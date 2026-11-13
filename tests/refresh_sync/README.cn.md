@@ -43,14 +43,14 @@ file/rule/Shell 观察和耗时。
 | `run_refresh_sync_vm.ps1` | host 编排、阶段轮询和截图 |
 | `vm_refresh_sync_start.ps1` | guest session 1 启动器，优先 interactive，计划任务回退 |
 | `vm_refresh_sync_guest.ps1` | guest baseline/恢复和测试执行 |
-| `.env.example` | VM/凭据/输出目录配置模板 |
-| `.env` | 本机实际配置，含 guest 密码，已被 git 忽略 |
+| `../../.env.example` | 项目根目录共享的 VM/凭据/输出目录配置模板 |
+| `../../.env` | 项目根目录共享配置，含 guest 密码，已被 git 忽略 |
 
 ## 配置与运行
 
 ```powershell
-Copy-Item tests/refresh_sync/.env.example tests/refresh_sync/.env
-# 编辑 .env，然后：
+Copy-Item .env.example .env
+# 编辑项目根目录 .env，然后：
 
 pwsh -File tests/refresh_sync/run_refresh_sync_vm.ps1 `
     -Platform win10 `
