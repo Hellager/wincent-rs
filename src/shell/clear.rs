@@ -28,7 +28,9 @@ pub(crate) fn clear_recent_files(timeout: Duration, permit: MutationPermit) -> W
 }
 
 /// Clears Frequent Folders backing data and matching Recent shortcuts.
-pub(crate) fn clear_frequent_folders(timeout: Duration) -> WincentResult<()> {
+///
+/// This is synchronous filesystem cleanup and has no timeout boundary.
+pub(crate) fn clear_frequent_folders_filesystem() -> WincentResult<()> {
     let jumplist_file = frequent_folders_dest_path()?;
     if !jumplist_file.try_exists().map_err(WincentError::Io)? {
         return Ok(());
@@ -45,7 +47,7 @@ pub(crate) fn clear_frequent_folders(timeout: Duration) -> WincentResult<()> {
 
     clear_frequent_folders_data(
         &paths,
-        |targets| recent_links::delete_recent_links_for_targets(targets, timeout).map(|_| ()),
+        |targets| recent_links::delete_recent_links_for_targets(targets).map(|_| ()),
         || remove_file_if_present(&jumplist_file),
     )
 }

@@ -16,18 +16,14 @@ use shell_link::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// Deletes Recent-folder `.lnk` files whose resolved target matches any target.
 ///
 /// Shortcuts that cannot be resolved are skipped so one inaccessible or
 /// malformed link does not block cleanup of the remaining Recent entries.
-pub(crate) fn delete_recent_links_for_targets(
-    targets: &[String],
-    timeout: Duration,
-) -> WincentResult<Vec<PathBuf>> {
+pub(crate) fn delete_recent_links_for_targets(targets: &[String]) -> WincentResult<Vec<PathBuf>> {
     let recent_folder = PathBuf::from(get_windows_recent_folder()?);
-    delete_recent_links_for_targets_in(&recent_folder, targets, timeout, resolve_lnk_target)
+    delete_recent_links_for_targets_in(&recent_folder, targets, resolve_lnk_target)
 }
 
 /// Finds shortcuts in the Windows Recent folder whose resolved target equals `target`.
@@ -42,7 +38,7 @@ pub(crate) fn find_windows_recent_links_for_target(target: &str) -> WincentResul
     let mut matches = Vec::new();
 
     for lnk_path in recent_lnk_paths(&recent_folder)? {
-        let Some(resolved_target) = resolve_lnk_target(&lnk_path, Duration::ZERO)? else {
+        let Some(resolved_target) = resolve_lnk_target(&lnk_path)? else {
             continue;
         };
 
@@ -57,11 +53,10 @@ pub(crate) fn find_windows_recent_links_for_target(target: &str) -> WincentResul
 fn delete_recent_links_for_targets_in<F>(
     recent_folder: &Path,
     targets: &[String],
-    timeout: Duration,
     mut resolver: F,
 ) -> WincentResult<Vec<PathBuf>>
 where
-    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+    F: FnMut(&Path) -> WincentResult<Option<String>>,
 {
     let mut deleted = Vec::new();
 
@@ -73,7 +68,7 @@ where
             continue;
         }
 
-        let resolved_target = match resolver(&path, timeout) {
+        let resolved_target = match resolver(&path) {
             Ok(Some(resolved_target)) => resolved_target,
             Ok(None) | Err(_) => continue,
         };
@@ -206,8 +201,7 @@ mod tests {
         let deleted = delete_recent_links_for_targets_in(
             recent_folder.path(),
             std::slice::from_ref(&target),
-            Duration::from_secs(1),
-            |path, _| {
+            |path| {
                 if path == bad_link {
                     Err(WincentError::Io(std::io::Error::from(
                         std::io::ErrorKind::PermissionDenied,

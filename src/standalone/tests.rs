@@ -95,8 +95,8 @@ impl QuickAccessBackend for Backend {
         self.record("clear_recent", timeout)
     }
 
-    fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()> {
-        self.record("clear_frequent", timeout)
+    fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
+        self.record("clear_frequent", Duration::ZERO)
     }
 
     fn notify_shell_change(&self) {
@@ -295,17 +295,21 @@ fn mutations_do_not_retry_a_timeout() {
 }
 
 #[test]
-fn scoped_clears_forward_timeout_and_refresh_only_after_success() -> WincentResult<()> {
-    for (category, expected) in [
-        (QuickAccess::RecentFiles, "clear_recent"),
-        (QuickAccess::FrequentFolders, "clear_frequent"),
+fn scoped_clears_use_timeout_only_for_supported_steps() -> WincentResult<()> {
+    for (category, expected, clear_timeout) in [
+        (QuickAccess::RecentFiles, "clear_recent", TIMEOUT),
+        (
+            QuickAccess::FrequentFolders,
+            "clear_frequent",
+            Duration::ZERO,
+        ),
     ] {
         let mut backend = Backend::new(PathType::File);
         empty_category(category, TIMEOUT, &backend)?;
         assert_eq!(
             backend.calls(),
             vec![
-                (expected, TIMEOUT),
+                (expected, clear_timeout),
                 ("notify", Duration::ZERO),
                 ("refresh", TIMEOUT)
             ]
@@ -316,7 +320,7 @@ fn scoped_clears_forward_timeout_and_refresh_only_after_success() -> WincentResu
             empty_category(category, TIMEOUT, &backend),
             Err(WincentError::Timeout(_))
         ));
-        assert_eq!(backend.calls(), vec![(expected, TIMEOUT)]);
+        assert_eq!(backend.calls(), vec![(expected, clear_timeout)]);
     }
     Ok(())
 }

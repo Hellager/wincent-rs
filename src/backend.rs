@@ -40,14 +40,14 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     fn remove_pinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn remove_unpinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()>;
-    fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()>;
+    fn clear_frequent_folders_jumplist(&self) -> WincentResult<()>;
     fn clear_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
         match qa_type {
             QuickAccess::RecentFiles => self.clear_recent_files(timeout),
-            QuickAccess::FrequentFolders => self.clear_frequent_folders_jumplist(timeout),
+            QuickAccess::FrequentFolders => self.clear_frequent_folders_jumplist(),
             QuickAccess::All => clear_all_items(
                 || self.clear_recent_files(timeout),
-                || self.clear_frequent_folders_jumplist(timeout),
+                || self.clear_frequent_folders_jumplist(),
             ),
         }
     }
@@ -201,15 +201,15 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
         clear::clear_recent_files(timeout, permit)
     }
 
-    fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()> {
+    fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
         let _permit = MutationPermit::acquire_one(QuickAccessLockTarget::FrequentFolders)?;
-        clear::clear_frequent_folders(timeout)
+        clear::clear_frequent_folders_filesystem()
     }
 
     fn clear_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
         match qa_type {
             QuickAccess::RecentFiles => self.clear_recent_files(timeout),
-            QuickAccess::FrequentFolders => self.clear_frequent_folders_jumplist(timeout),
+            QuickAccess::FrequentFolders => self.clear_frequent_folders_jumplist(),
             QuickAccess::All => {
                 let mut permits = MutationPermit::acquire(QuickAccessLockTarget::All)?.into_iter();
                 let recent_permit = permits.next().ok_or_else(|| {
@@ -227,7 +227,7 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
                     || clear::clear_recent_files(timeout, recent_permit),
                     || {
                         let _permit = frequent_permit;
-                        clear::clear_frequent_folders(timeout)
+                        clear::clear_frequent_folders_filesystem()
                     },
                 )
             }

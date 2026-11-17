@@ -2,7 +2,6 @@ use crate::error::WincentError;
 use crate::WincentResult;
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 pub(super) const SHELL_LINK_HEADER_SIZE: u32 = 0x4c;
 pub(super) const LINK_CLSID: [u8; 16] = [
@@ -42,10 +41,7 @@ struct NetworkLinkSummary {
     net_name: Option<String>,
 }
 
-pub(crate) fn resolve_lnk_target(
-    lnk_path: &Path,
-    _timeout: Duration,
-) -> WincentResult<Option<String>> {
+pub(crate) fn resolve_lnk_target(lnk_path: &Path) -> WincentResult<Option<String>> {
     let Some(summary) = read_shell_link_summary(lnk_path)? else {
         return Ok(None);
     };

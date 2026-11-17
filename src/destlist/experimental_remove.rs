@@ -46,7 +46,6 @@ use super::parser::{
     DestListEntry,
 };
 
-const SHORTCUT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const REBUILD_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Explorer automatic destination file family to modify.
@@ -248,7 +247,7 @@ fn experimental_remove_entry_paths_by_rebuild_with_resolver<P, F>(
 ) -> WincentResult<ExperimentalRemoveReport>
 where
     P: AsRef<Path>,
-    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+    F: FnMut(&Path) -> WincentResult<Option<String>>,
 {
     if target_paths.is_empty() {
         return Err(WincentError::InvalidArgument(
@@ -347,29 +346,25 @@ fn complete_after_destination_deleted<FResolve, FRefresh, FWait>(
     wait_for_rebuild: FWait,
 ) -> ExperimentalRemoveReport
 where
-    FResolve: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+    FResolve: FnMut(&Path) -> WincentResult<Option<String>>,
     FRefresh: FnOnce() -> WincentResult<()>,
     FWait: FnOnce(&Path, &[String], Duration) -> WincentResult<RebuiltDestWait>,
 {
-    let deleted_links = match delete_matching_recent_links(
-        &base.recent_folder,
-        &base.requested_paths,
-        SHORTCUT_RESOLVE_TIMEOUT,
-        resolver,
-    ) {
-        Ok(deleted_links) => deleted_links,
-        Err(error) => {
-            return base.report(
-                deleted_lnk_paths(&error.deleted),
-                Vec::new(),
-                false,
-                None,
-                None,
-                Some(error.source.to_string()),
-                Vec::new(),
-            );
-        }
-    };
+    let deleted_links =
+        match delete_matching_recent_links(&base.recent_folder, &base.requested_paths, resolver) {
+            Ok(deleted_links) => deleted_links,
+            Err(error) => {
+                return base.report(
+                    deleted_lnk_paths(&error.deleted),
+                    Vec::new(),
+                    false,
+                    None,
+                    None,
+                    Some(error.source.to_string()),
+                    Vec::new(),
+                );
+            }
+        };
 
     let missing_lnk_target_paths = missing_lnk_target_paths(&base.requested_paths, &deleted_links);
     let deleted_lnk_paths = deleted_lnk_paths(&deleted_links);
@@ -542,30 +537,24 @@ fn deleted_lnk_paths(deleted_links: &[DeletedRecentLink]) -> Vec<PathBuf> {
 fn delete_matching_recent_links<F>(
     recent_folder: &Path,
     target_paths: &[String],
-    timeout: Duration,
     resolver: F,
 ) -> Result<Vec<DeletedRecentLink>, RecentLinkCleanupError>
 where
-    F: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+    F: FnMut(&Path) -> WincentResult<Option<String>>,
 {
-    delete_matching_recent_links_with_remove(
-        recent_folder,
-        target_paths,
-        timeout,
-        resolver,
-        |path| fs::remove_file(path).map_err(WincentError::Io),
-    )
+    delete_matching_recent_links_with_remove(recent_folder, target_paths, resolver, |path| {
+        fs::remove_file(path).map_err(WincentError::Io)
+    })
 }
 
 fn delete_matching_recent_links_with_remove<FResolve, FRemove>(
     recent_folder: &Path,
     target_paths: &[String],
-    timeout: Duration,
     mut resolver: FResolve,
     mut remove_file: FRemove,
 ) -> Result<Vec<DeletedRecentLink>, RecentLinkCleanupError>
 where
-    FResolve: FnMut(&Path, Duration) -> WincentResult<Option<String>>,
+    FResolve: FnMut(&Path) -> WincentResult<Option<String>>,
     FRemove: FnMut(&Path) -> WincentResult<()>,
 {
     let mut deleted = Vec::new();
@@ -595,7 +584,7 @@ where
             continue;
         }
 
-        let target = match resolver(&path, timeout) {
+        let target = match resolver(&path) {
             Ok(Some(target)) => target,
             Ok(None) => continue,
             Err(source) => {
@@ -721,8 +710,7 @@ mod tests {
         let report = complete_after_destination_deleted(
             report_base_for_tests(dir.path()),
             ExperimentalRemoveOptions::new().with_rebuild_delay(Duration::ZERO),
-            move |path, timeout| {
-                assert_eq!(timeout, SHORTCUT_RESOLVE_TIMEOUT);
+            move |path| {
                 if path == matching_for_resolver {
                     Ok(Some("c:/work/report.docx".to_string()))
                 } else {
@@ -756,7 +744,7 @@ mod tests {
         let report = complete_after_destination_deleted(
             report_base_for_tests(dir.path()),
             ExperimentalRemoveOptions::new().with_rebuild_delay(Duration::ZERO),
-            |_, _| Err(WincentError::Timeout("resolver timed out".to_string())),
+            |_| Err(WincentError::Timeout("resolver timed out".to_string())),
             || panic!("refresh should not run after resolver failure"),
             |_, _, _| panic!("wait should not run after resolver failure"),
         );
@@ -780,7 +768,7 @@ mod tests {
         let report = complete_after_destination_deleted(
             report_base_for_tests(dir.path()),
             ExperimentalRemoveOptions::new().with_rebuild_delay(Duration::ZERO),
-            |_, _| Ok(None),
+            |_| Ok(None),
             || Ok(()),
             |_, _, timeout| {
                 assert_eq!(timeout, REBUILD_POLL_TIMEOUT);
@@ -814,9 +802,7 @@ mod tests {
         let deleted = delete_matching_recent_links(
             dir.path(),
             &["c:/work/report.docx".to_string()],
-            Duration::from_secs(7),
-            move |path, timeout| {
-                assert_eq!(timeout, Duration::from_secs(7));
+            move |path| {
                 if path == matching_for_resolver {
                     Ok(Some("C:\\Work\\Report.docx".to_string()))
                 } else {
@@ -842,8 +828,7 @@ mod tests {
         let deleted = delete_matching_recent_links(
             dir.path(),
             &["C:\\Work\\Report.docx".to_string()],
-            Duration::from_secs(7),
-            |_, _| Ok(None),
+            |_| Ok(None),
         )
         .map_err(|error| error.source)?;
 
@@ -861,8 +846,7 @@ mod tests {
         let error = delete_matching_recent_links_with_remove(
             dir.path(),
             &["C:\\Work\\Report.docx".to_string()],
-            Duration::from_secs(7),
-            |_, _| Ok(Some("C:\\Work\\Report.docx".to_string())),
+            |_| Ok(Some("C:\\Work\\Report.docx".to_string())),
             |_| {
                 Err(WincentError::SystemError(
                     "shortcut delete failed".to_string(),
@@ -1084,13 +1068,9 @@ mod tests {
         );
 
         let recent_folder = PathBuf::from(get_windows_recent_folder()?);
-        let deleted_links = delete_matching_recent_links(
-            &recent_folder,
-            &matching_paths,
-            SHORTCUT_RESOLVE_TIMEOUT,
-            resolve_lnk_target,
-        )
-        .map_err(|error| error.source)?;
+        let deleted_links =
+            delete_matching_recent_links(&recent_folder, &matching_paths, resolve_lnk_target)
+                .map_err(|error| error.source)?;
         for deleted_link in &deleted_links {
             assert!(
                 !deleted_link.lnk_path.exists(),

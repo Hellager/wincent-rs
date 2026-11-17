@@ -165,7 +165,7 @@ mod tests {
             Ok(())
         }
 
-        fn clear_frequent_folders_jumplist(&self, _timeout: Duration) -> WincentResult<()> {
+        fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
             self.record("clear_frequent_folders_jumplist");
             if let Some(error) = &self.clear_frequent_folders_jumplist_error {
                 return Err(WincentError::SystemError(error.clone()));

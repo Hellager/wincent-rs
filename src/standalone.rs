@@ -300,7 +300,9 @@ pub fn empty_recent_files(timeout: Duration) -> WincentResult<()> {
 /// Clears recorded Frequent Folders and their shortcuts, then refreshes views.
 ///
 /// User pins are removed; Windows may recreate default pins. A refresh
-/// failure may be returned after cleanup has already succeeded.
+/// failure may be returned after cleanup has already succeeded. The timeout
+/// bounds only the Explorer refresh; filesystem cleanup is synchronous and
+/// cannot be cancelled through this API.
 ///
 /// # Errors
 ///

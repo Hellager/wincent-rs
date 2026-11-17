@@ -611,6 +611,10 @@ impl QuickAccessManager {
     /// [`WincentError::QuickAccessLocked`] before clearing either category
     /// when a cooperating lock denies the request.
     ///
+    /// The configured timeout bounds native Recent Files work and Explorer
+    /// refreshes. Frequent Folders filesystem cleanup is synchronous and is
+    /// not cancelled when that timeout elapses.
+    ///
     /// # Examples
     ///
     /// ```rust,no_run
@@ -872,7 +876,7 @@ mod tests {
             Ok(())
         }
 
-        fn clear_frequent_folders_jumplist(&self, _timeout: Duration) -> WincentResult<()> {
+        fn clear_frequent_folders_jumplist(&self) -> WincentResult<()> {
             self.record("clear_frequent_folders_jumplist");
             Ok(())
         }
