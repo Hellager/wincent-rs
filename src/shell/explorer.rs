@@ -5,9 +5,18 @@ use windows::Win32::System::Com::{
     CoCreateInstance, IDispatch, IServiceProvider, CLSCTX_LOCAL_SERVER,
 };
 use windows::Win32::UI::Shell::{
-    IShellBrowser, IShellWindows, IWebBrowser2, SHChangeNotify, SID_STopLevelBrowser, ShellWindows,
-    SHCNE_ASSOCCHANGED, SHCNF_IDLIST,
+    Folder2, IShellBrowser, IShellFolderViewDual, IShellWindows, IWebBrowser2, SHChangeNotify,
+    SID_STopLevelBrowser, ShellWindows, SHCNE_ASSOCCHANGED, SHCNF_IDLIST,
 };
+
+const NON_RECENT_NAMESPACE_IDS: [&str; 6] = [
+    "20d04fe0-3aea-1069-a2d8-08002b30309d",
+    "645ff040-5081-101b-9f08-00aa002f954e",
+    "21ec2020-3aea-1069-a2dd-08002b30309d",
+    "26ee0668-a00a-44d7-9371-beb064c98683",
+    "208d2c60-3aea-1069-a2d7-08002b30309d",
+    "f02c1a0d-be21-4350-88b0-7367fc96ef3c",
+];
 
 pub(crate) fn notify_shell_change() {
     // SAFETY: SHCNE_ASSOCCHANGED with SHCNF_IDLIST accepts null item pointers.
@@ -66,6 +75,7 @@ struct RefreshResult {
 pub(crate) struct ExplorerLocation {
     pub(crate) location_name: String,
     pub(crate) location_url: String,
+    pub(crate) location_path: String,
 }
 
 fn refresh_recent_access_shell_views(
@@ -126,10 +136,28 @@ fn browser_location(web_browser: &IWebBrowser2) -> ExplorerLocation {
             .map(|value| value.to_string())
             .unwrap_or_else(|_| String::new())
     };
+    let location_path = browser_location_path(web_browser);
 
     ExplorerLocation {
         location_name,
         location_url,
+        location_path,
+    }
+}
+
+fn browser_location_path(web_browser: &IWebBrowser2) -> String {
+    // SAFETY: These automation interfaces belong to the live Explorer window
+    // and are queried synchronously on the same STA thread.
+    unsafe {
+        web_browser
+            .Document()
+            .and_then(|document| document.cast::<IShellFolderViewDual>())
+            .and_then(|view| view.Folder())
+            .and_then(|folder| folder.cast::<Folder2>())
+            .and_then(|folder| folder.Self_())
+            .and_then(|item| item.Path())
+            .map(|value| value.to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -167,9 +195,20 @@ fn refresh_shell_view(dispatch: &IDispatch) -> WincentResult<()> {
 fn is_recent_access_location(location: &ExplorerLocation) -> bool {
     // Home/Quick Access display names are localized. On some Windows builds,
     // ShellWindows also reports their LocationURL as empty, so a non-empty
-    // display name with no URL is the language-neutral fallback.
+    // display name with no URL remains the fallback after excluding common
+    // unrelated virtual folders by their language-neutral namespace paths.
     is_home_or_recent_url(&location.location_url)
-        || location.location_url.is_empty() && !location.location_name.is_empty()
+        || is_home_or_recent_url(&location.location_path)
+        || location.location_url.is_empty()
+            && !location.location_name.is_empty()
+            && !is_known_non_recent_namespace(&location.location_path)
+}
+
+fn is_known_non_recent_namespace(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    NON_RECENT_NAMESPACE_IDS
+        .iter()
+        .any(|namespace_id| lower.contains(namespace_id))
 }
 
 #[cfg(test)]
@@ -197,23 +236,41 @@ mod tests {
         assert!(is_recent_access_location(&ExplorerLocation {
             location_name: String::new(),
             location_url: "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}".to_string(),
+            location_path: String::new(),
         }));
         assert!(is_recent_access_location(&ExplorerLocation {
             location_name: "Quick Access".to_string(),
             location_url: String::new(),
+            location_path: String::new(),
         }));
         assert!(is_recent_access_location(&ExplorerLocation {
             location_name: "\u{5feb}\u{901f}\u{8bbf}\u{95ee}".to_string(),
             location_url: String::new(),
+            location_path: String::new(),
+        }));
+        assert!(is_recent_access_location(&ExplorerLocation {
+            location_name: "Localized Home".to_string(),
+            location_url: String::new(),
+            location_path: "shell:::{f874310e-b6b7-47dc-bc84-b9e6b38f5903}".to_string(),
         }));
         assert!(!is_recent_access_location(&ExplorerLocation {
             location_name: String::new(),
             location_url: String::new(),
+            location_path: String::new(),
         }));
         assert!(!is_recent_access_location(&ExplorerLocation {
             location_name: "Documents".to_string(),
             location_url: "file:///C:/Users/example/Documents".to_string(),
+            location_path: "C:\\Users\\example\\Documents".to_string(),
         }));
+
+        for namespace_id in NON_RECENT_NAMESPACE_IDS {
+            assert!(!is_recent_access_location(&ExplorerLocation {
+                location_name: "Localized virtual folder".to_string(),
+                location_url: String::new(),
+                location_path: format!("shell:::{{{namespace_id}}}"),
+            }));
+        }
     }
 
     #[test]
@@ -221,14 +278,17 @@ mod tests {
         assert!(is_probable_explorer_location(&ExplorerLocation {
             location_name: "Documents".to_string(),
             location_url: "file:///C:/Users/example/Documents".to_string(),
+            location_path: "C:\\Users\\example\\Documents".to_string(),
         }));
         assert!(is_probable_explorer_location(&ExplorerLocation {
             location_name: "Home".to_string(),
             location_url: String::new(),
+            location_path: String::new(),
         }));
         assert!(!is_probable_explorer_location(&ExplorerLocation {
             location_name: String::new(),
             location_url: "https://example.com".to_string(),
+            location_path: String::new(),
         }));
     }
 }
