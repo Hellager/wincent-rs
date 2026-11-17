@@ -129,6 +129,12 @@ impl MutationPermit {
     }
 
     pub(crate) fn acquire_one(target: QuickAccessLockTarget) -> WincentResult<Self> {
+        if target == QuickAccessLockTarget::All {
+            return Err(WincentError::InvalidArgument(
+                "QuickAccessLockTarget::All requires MutationPermit::acquire".into(),
+            ));
+        }
+
         Self::acquire(target)?.pop().ok_or_else(|| {
             WincentError::InvalidArgument("Quick Access lock target has no category".into())
         })
@@ -370,6 +376,17 @@ mod tests {
             QuickAccessLockTarget::FrequentFolders,
             QuickAccessLockTarget::All
         );
+    }
+
+    #[test]
+    fn acquire_one_rejects_all_before_system_access() {
+        let result = MutationPermit::acquire_one(QuickAccessLockTarget::All);
+
+        assert!(matches!(
+            result,
+            Err(WincentError::InvalidArgument(message))
+                if message == "QuickAccessLockTarget::All requires MutationPermit::acquire"
+        ));
     }
 
     #[test]
