@@ -19,6 +19,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Deletes Recent-folder `.lnk` files whose resolved target matches any target.
+///
+/// Shortcuts that cannot be resolved are skipped so one inaccessible or
+/// malformed link does not block cleanup of the remaining Recent entries.
 pub(crate) fn delete_recent_links_for_targets(
     targets: &[String],
     timeout: Duration,
@@ -70,8 +73,9 @@ where
             continue;
         }
 
-        let Some(resolved_target) = resolver(&path, timeout)? else {
-            continue;
+        let resolved_target = match resolver(&path, timeout) {
+            Ok(Some(resolved_target)) => resolved_target,
+            Ok(None) | Err(_) => continue,
         };
 
         if resolved_target_matches(&resolved_target, targets) {
@@ -188,6 +192,36 @@ mod tests {
             ]),
             vec![a, b]
         );
+    }
+
+    #[test]
+    fn recent_link_cleanup_skips_resolver_errors_and_continues() -> WincentResult<()> {
+        let recent_folder = tempfile::tempdir()?;
+        let bad_link = recent_folder.path().join("bad.lnk");
+        let matching_link = recent_folder.path().join("matching.lnk");
+        fs::write(&bad_link, b"unreadable shortcut")?;
+        fs::write(&matching_link, b"matching shortcut")?;
+        let target = "C:\\Work".to_string();
+
+        let deleted = delete_recent_links_for_targets_in(
+            recent_folder.path(),
+            std::slice::from_ref(&target),
+            Duration::from_secs(1),
+            |path, _| {
+                if path == bad_link {
+                    Err(WincentError::Io(std::io::Error::from(
+                        std::io::ErrorKind::PermissionDenied,
+                    )))
+                } else {
+                    Ok(Some(target.clone()))
+                }
+            },
+        )?;
+
+        assert_eq!(deleted, vec![matching_link.clone()]);
+        assert!(bad_link.exists());
+        assert!(!matching_link.exists());
+        Ok(())
     }
 
     const FILE_ATTRIBUTE_ARCHIVE_FOR_TEST: u32 = 0x0000_0020;
