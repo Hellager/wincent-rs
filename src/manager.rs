@@ -5,7 +5,7 @@ use crate::{
     backend::{QuickAccessBackend, SystemQuickAccessBackend},
     empty,
     error::WincentError,
-    lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget, UnlockReport},
+    lock::{QuickAccessLock, QuickAccessLockTarget, UnlockReport},
     path::paths_equal,
     status::QuickAccessStatus,
     QuickAccess, VisibilityTarget, WincentResult,
@@ -425,12 +425,7 @@ impl QuickAccessManager {
     /// ```
     pub fn add_item<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
         let path = path_to_shell_string(path.as_ref())?;
-        let (qa_type, lock_target) = self.resolve_path_category(&path)?;
-        let _admission = self
-            .backend
-            .uses_system_mutation_gate()
-            .then(|| MutationPermit::acquire_one(lock_target))
-            .transpose()?;
+        let qa_type = self.resolve_path_category(&path)?;
         self.ensure_not_present(&path, qa_type)?;
 
         match qa_type {
@@ -469,12 +464,7 @@ impl QuickAccessManager {
     /// ```
     pub fn remove_item<P: AsRef<Path>>(&self, path: P) -> WincentResult<()> {
         let path = path_to_shell_string(path.as_ref())?;
-        let (qa_type, lock_target) = self.resolve_path_category(&path)?;
-        let _admission = self
-            .backend
-            .uses_system_mutation_gate()
-            .then(|| MutationPermit::acquire_one(lock_target))
-            .transpose()?;
+        let qa_type = self.resolve_path_category(&path)?;
 
         match qa_type {
             QuickAccess::RecentFiles => {
@@ -633,16 +623,6 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn empty_items(&self, qa_type: QuickAccess) -> WincentResult<()> {
-        let target = match qa_type {
-            QuickAccess::RecentFiles => QuickAccessLockTarget::RecentFiles,
-            QuickAccess::FrequentFolders => QuickAccessLockTarget::FrequentFolders,
-            QuickAccess::All => QuickAccessLockTarget::All,
-        };
-        let _admission = self
-            .backend
-            .uses_system_mutation_gate()
-            .then(|| MutationPermit::acquire(target))
-            .transpose()?;
         empty::empty_items_with_backend(qa_type, self.timeout, self.backend.as_ref())
     }
 
@@ -709,19 +689,11 @@ impl QuickAccessManager {
         visible::set_visible(target, visible)
     }
 
-    fn resolve_path_category(
-        &self,
-        path: &str,
-    ) -> WincentResult<(QuickAccess, QuickAccessLockTarget)> {
+    fn resolve_path_category(&self, path: &str) -> WincentResult<QuickAccess> {
         let path_type = self.backend.path_type(path)?;
         match path_type {
-            crate::path::PathType::File => {
-                Ok((QuickAccess::RecentFiles, QuickAccessLockTarget::RecentFiles))
-            }
-            crate::path::PathType::Directory => Ok((
-                QuickAccess::FrequentFolders,
-                QuickAccessLockTarget::FrequentFolders,
-            )),
+            crate::path::PathType::File => Ok(QuickAccess::RecentFiles),
+            crate::path::PathType::Directory => Ok(QuickAccess::FrequentFolders),
         }
     }
 

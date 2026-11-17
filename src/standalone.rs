@@ -33,7 +33,7 @@ use crate::backend::{self, QuickAccessBackend, SystemQuickAccessBackend};
 use crate::destlist::FrequentFolderPinStatus;
 use crate::empty;
 use crate::error::WincentError;
-use crate::lock::{MutationPermit, QuickAccessLock, QuickAccessLockTarget, UnlockReport};
+use crate::lock::{QuickAccessLock, QuickAccessLockTarget, UnlockReport};
 use crate::path::{paths_equal, PathType};
 use crate::{QuickAccess, WincentResult};
 use std::fmt;
@@ -354,22 +354,11 @@ fn mutate(
 ) -> WincentResult<()> {
     validate_timeout(timeout)?;
     let path = path_string(path)?;
-    let (expected, category, target) = match operation {
-        Mutation::AddRecent => (
-            PathType::File,
-            QuickAccess::RecentFiles,
-            QuickAccessLockTarget::All,
-        ),
-        Mutation::RemoveRecent => (
-            PathType::File,
-            QuickAccess::RecentFiles,
-            QuickAccessLockTarget::RecentFiles,
-        ),
-        Mutation::PinFolder | Mutation::RemoveFolder => (
-            PathType::Directory,
-            QuickAccess::FrequentFolders,
-            QuickAccessLockTarget::FrequentFolders,
-        ),
+    let (expected, category) = match operation {
+        Mutation::AddRecent | Mutation::RemoveRecent => (PathType::File, QuickAccess::RecentFiles),
+        Mutation::PinFolder | Mutation::RemoveFolder => {
+            (PathType::Directory, QuickAccess::FrequentFolders)
+        }
     };
     if backend.path_type(&path)? != expected {
         return Err(WincentError::invalid_path(
@@ -377,13 +366,6 @@ fn mutate(
             format!("Expected a {expected:?} path"),
         ));
     }
-    // Hold admission through preflight too. Native workers retain their own
-    // admission handles if the caller times out, as in the manager workflow.
-    let _admission = backend
-        .uses_system_mutation_gate()
-        .then(|| MutationPermit::acquire(target))
-        .transpose()?;
-
     if matches!(operation, Mutation::PinFolder) {
         if matches!(pin_status(backend, &path)?, FrequentFolderPinStatus::Pinned) {
             return Err(WincentError::already_exists(&path, category));
@@ -422,15 +404,6 @@ fn empty_category(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     validate_timeout(timeout)?;
-    let target = match category {
-        QuickAccess::RecentFiles => QuickAccessLockTarget::RecentFiles,
-        QuickAccess::FrequentFolders => QuickAccessLockTarget::FrequentFolders,
-        QuickAccess::All => QuickAccessLockTarget::All,
-    };
-    let _admission = backend
-        .uses_system_mutation_gate()
-        .then(|| MutationPermit::acquire(target))
-        .transpose()?;
     empty::empty_items_with_backend(category, timeout, backend)
 }
 

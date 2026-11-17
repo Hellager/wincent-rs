@@ -17,11 +17,11 @@ use crate::{
 };
 use std::time::Duration;
 
+/// Owns system mutation admission for every backend mutation operation.
+///
+/// Facade layers may perform validation and membership preflights, but must not
+/// acquire [`MutationPermit`] handles before calling these mutation methods.
 pub(crate) trait QuickAccessBackend: Send + Sync {
-    fn uses_system_mutation_gate(&self) -> bool {
-        false
-    }
-
     fn path_type(&self, path: &str) -> WincentResult<PathType> {
         crate::path::detect_path_type(path)
     }
@@ -41,6 +41,16 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
     fn remove_unpinned_frequent_folder(&self, path: &str, timeout: Duration) -> WincentResult<()>;
     fn clear_recent_files(&self, timeout: Duration) -> WincentResult<()>;
     fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()>;
+    fn clear_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
+        match qa_type {
+            QuickAccess::RecentFiles => self.clear_recent_files(timeout),
+            QuickAccess::FrequentFolders => self.clear_frequent_folders_jumplist(timeout),
+            QuickAccess::All => clear_all_items(
+                || self.clear_recent_files(timeout),
+                || self.clear_frequent_folders_jumplist(timeout),
+            ),
+        }
+    }
     fn notify_shell_change(&self);
     fn refresh_shell_views(&self, timeout: Duration) -> WincentResult<()>;
 
@@ -48,6 +58,44 @@ pub(crate) trait QuickAccessBackend: Send + Sync {
         self.notify_shell_change();
         self.refresh_shell_views(timeout)
     }
+}
+
+fn clear_all_items<FRecent, FFrequent>(
+    clear_recent_files: FRecent,
+    clear_frequent_folders: FFrequent,
+) -> WincentResult<()>
+where
+    FRecent: FnOnce() -> WincentResult<()>,
+    FFrequent: FnOnce() -> WincentResult<()>,
+{
+    let mut recent_files_cleared = false;
+    let frequent_folders_cleared;
+    let mut first_error = None;
+
+    match clear_recent_files() {
+        Ok(()) => recent_files_cleared = true,
+        Err(source) => first_error = Some(source),
+    }
+
+    match clear_frequent_folders() {
+        Ok(()) => frequent_folders_cleared = true,
+        Err(source) => {
+            frequent_folders_cleared = false;
+            if first_error.is_none() {
+                first_error = Some(source);
+            }
+        }
+    }
+
+    if let Some(source) = first_error {
+        return Err(crate::WincentError::PartialEmpty {
+            recent_files_cleared,
+            frequent_folders_cleared,
+            source: Box::new(source),
+        });
+    }
+
+    Ok(())
 }
 
 /// Parses the CFB DestList and applies Explorer's Quick Access UI rules.
@@ -110,10 +158,6 @@ fn ui_item_paths(
 pub(crate) struct SystemQuickAccessBackend;
 
 impl QuickAccessBackend for SystemQuickAccessBackend {
-    fn uses_system_mutation_gate(&self) -> bool {
-        true
-    }
-
     /// Reads Quick Access items directly from Explorer's on-disk DestList and
     /// applies the recovered Quick Access UI visibility rules.
     fn get_items(&self, qa_type: QuickAccess, _timeout: Duration) -> WincentResult<Vec<String>> {
@@ -160,6 +204,34 @@ impl QuickAccessBackend for SystemQuickAccessBackend {
     fn clear_frequent_folders_jumplist(&self, timeout: Duration) -> WincentResult<()> {
         let _permit = MutationPermit::acquire_one(QuickAccessLockTarget::FrequentFolders)?;
         clear::clear_frequent_folders(timeout)
+    }
+
+    fn clear_items(&self, qa_type: QuickAccess, timeout: Duration) -> WincentResult<()> {
+        match qa_type {
+            QuickAccess::RecentFiles => self.clear_recent_files(timeout),
+            QuickAccess::FrequentFolders => self.clear_frequent_folders_jumplist(timeout),
+            QuickAccess::All => {
+                let mut permits = MutationPermit::acquire(QuickAccessLockTarget::All)?.into_iter();
+                let recent_permit = permits.next().ok_or_else(|| {
+                    crate::WincentError::InvalidArgument(
+                        "Quick Access All gate is missing the Recent Files permit".into(),
+                    )
+                })?;
+                let frequent_permit = permits.next().ok_or_else(|| {
+                    crate::WincentError::InvalidArgument(
+                        "Quick Access All gate is missing the Frequent Folders permit".into(),
+                    )
+                })?;
+
+                clear_all_items(
+                    || clear::clear_recent_files(timeout, recent_permit),
+                    || {
+                        let _permit = frequent_permit;
+                        clear::clear_frequent_folders(timeout)
+                    },
+                )
+            }
+        }
     }
 
     fn notify_shell_change(&self) {

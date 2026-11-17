@@ -37,42 +37,6 @@ use std::time::Duration;
 ///     Ok(())
 /// # }
 /// ```
-fn empty_all_items_with_backend(
-    timeout: Duration,
-    backend: &dyn QuickAccessBackend,
-) -> WincentResult<()> {
-    let mut recent_files_cleared = false;
-    let frequent_folders_cleared;
-    let mut first_error = None;
-
-    match backend.clear_recent_files(timeout) {
-        Ok(()) => recent_files_cleared = true,
-        Err(source) => first_error = Some(source),
-    }
-
-    match backend.clear_frequent_folders_jumplist(timeout) {
-        Ok(()) => {
-            frequent_folders_cleared = true;
-        }
-        Err(source) => {
-            frequent_folders_cleared = false;
-            if first_error.is_none() {
-                first_error = Some(source);
-            }
-        }
-    }
-
-    if let Some(source) = first_error {
-        return Err(WincentError::PartialEmpty {
-            recent_files_cleared,
-            frequent_folders_cleared,
-            source: Box::new(source),
-        });
-    }
-
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefreshPolicy {
     PropagateFailure,
@@ -92,11 +56,7 @@ pub(crate) fn empty_items_with_backend(
     timeout: Duration,
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
-    let result = match qa_type {
-        QuickAccess::RecentFiles => backend.clear_recent_files(timeout),
-        QuickAccess::FrequentFolders => backend.clear_frequent_folders_jumplist(timeout),
-        QuickAccess::All => empty_all_items_with_backend(timeout, backend),
-    };
+    let result = backend.clear_items(qa_type, timeout);
 
     match refresh_policy_for_result(&result) {
         Some(RefreshPolicy::PropagateFailure) => backend.refresh(timeout)?,
