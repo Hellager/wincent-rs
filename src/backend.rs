@@ -70,32 +70,39 @@ where
 {
     let mut recent_files_cleared = false;
     let frequent_folders_cleared;
-    let mut first_error = None;
-
-    match clear_recent_files() {
-        Ok(()) => recent_files_cleared = true,
-        Err(source) => first_error = Some(source),
-    }
-
-    match clear_frequent_folders() {
-        Ok(()) => frequent_folders_cleared = true,
-        Err(source) => {
-            frequent_folders_cleared = false;
-            if first_error.is_none() {
-                first_error = Some(source);
-            }
+    let recent_error = match clear_recent_files() {
+        Ok(()) => {
+            recent_files_cleared = true;
+            None
         }
-    }
+        Err(error) => Some(error),
+    };
 
-    if let Some(source) = first_error {
-        return Err(crate::WincentError::PartialEmpty {
-            recent_files_cleared,
-            frequent_folders_cleared,
-            source: Box::new(source),
-        });
-    }
+    let frequent_error = match clear_frequent_folders() {
+        Ok(()) => {
+            frequent_folders_cleared = true;
+            None
+        }
+        Err(error) => {
+            frequent_folders_cleared = false;
+            Some(error)
+        }
+    };
 
-    Ok(())
+    let source = match (recent_error, frequent_error) {
+        (Some(recent), Some(frequent)) => crate::WincentError::MultipleErrors {
+            first: Box::new(recent),
+            second: Box::new(frequent),
+        },
+        (Some(error), None) | (None, Some(error)) => error,
+        (None, None) => return Ok(()),
+    };
+
+    Err(crate::WincentError::PartialEmpty {
+        recent_files_cleared,
+        frequent_folders_cleared,
+        source: Box::new(source),
+    })
 }
 
 /// Parses the CFB DestList and applies Explorer's Quick Access UI rules.

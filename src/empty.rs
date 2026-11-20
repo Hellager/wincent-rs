@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_all_preserves_recent_error_when_both_categories_fail_before_frequent_progress() {
+    fn empty_all_preserves_both_errors_when_both_categories_fail() {
         let backend = FakeEmptyBackend::new(Vec::new())
             .with_clear_recent_files_error("recent failed")
             .with_clear_frequent_folders_jumplist_error("frequent failed");
@@ -266,7 +266,29 @@ mod tests {
         let error = empty_items_with_backend(QuickAccess::All, Duration::from_secs(3), &backend)
             .unwrap_err();
 
-        assert_partial_empty(error, false, false, "recent failed");
+        match &error {
+            WincentError::PartialEmpty {
+                recent_files_cleared: false,
+                frequent_folders_cleared: false,
+                source,
+            } => match source.as_ref() {
+                WincentError::MultipleErrors { first, second } => {
+                    assert!(matches!(
+                        first.as_ref(),
+                        WincentError::SystemError(message) if message == "recent failed"
+                    ));
+                    assert!(matches!(
+                        second.as_ref(),
+                        WincentError::SystemError(message) if message == "frequent failed"
+                    ));
+                }
+                other => panic!("Expected MultipleErrors, got: {other:?}"),
+            },
+            other => panic!("Expected PartialEmpty with both categories failed, got: {other:?}"),
+        }
+        let rendered = error.to_string();
+        assert!(rendered.contains("recent failed"));
+        assert!(rendered.contains("frequent failed"));
         assert_eq!(
             backend.calls(),
             vec![

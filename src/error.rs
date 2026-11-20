@@ -122,6 +122,15 @@ pub enum WincentError {
     #[error("Quick Access manager has no lock to release")]
     ManagerNotLocked,
 
+    /// Multiple independent cleanup steps failed.
+    #[error("multiple errors: {first}; {second}")]
+    MultipleErrors {
+        /// Error from the first failed cleanup step.
+        first: Box<WincentError>,
+        /// Error from the second failed cleanup step.
+        second: Box<WincentError>,
+    },
+
     /// A clear operation completed some categories before a later category failed.
     #[error(
         "Quick Access clear partially succeeded (recent_files_cleared: {recent_files_cleared}, frequent_folders_cleared: {frequent_folders_cleared}): {source}"
