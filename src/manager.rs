@@ -117,7 +117,7 @@ impl QuickAccessManagerBuilder {
         QuickAccessManager {
             timeout: self.timeout,
             backend: self.backend,
-            lock_state: Arc::new(Mutex::new(None)),
+            lock_state: Arc::new(Mutex::new(ManagerLockState::Unlocked)),
         }
     }
 }
@@ -149,7 +149,46 @@ impl QuickAccessManagerBuilder {
 pub struct QuickAccessManager {
     timeout: Duration,
     backend: Arc<dyn QuickAccessBackend>,
-    lock_state: Arc<Mutex<Option<QuickAccessLock>>>,
+    lock_state: Arc<Mutex<ManagerLockState>>,
+}
+
+enum ManagerLockState {
+    Unlocked,
+    Acquiring,
+    Locked(QuickAccessLock),
+}
+
+struct LockAcquisitionReservation {
+    lock_state: Arc<Mutex<ManagerLockState>>,
+    active: bool,
+}
+
+impl LockAcquisitionReservation {
+    fn publish(mut self, lock: QuickAccessLock) {
+        let mut state = self
+            .lock_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        debug_assert!(matches!(*state, ManagerLockState::Acquiring));
+        *state = ManagerLockState::Locked(lock);
+        self.active = false;
+    }
+}
+
+impl Drop for LockAcquisitionReservation {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+
+        let mut state = self
+            .lock_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if matches!(*state, ManagerLockState::Acquiring) {
+            *state = ManagerLockState::Unlocked;
+        }
+    }
 }
 
 impl fmt::Debug for QuickAccessManager {
@@ -193,7 +232,7 @@ impl QuickAccessManager {
         Self {
             timeout,
             backend,
-            lock_state: Arc::new(Mutex::new(None)),
+            lock_state: Arc::new(Mutex::new(ManagerLockState::Unlocked)),
         }
     }
 
@@ -520,19 +559,35 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn lock(&self, qa_type: QuickAccess) -> WincentResult<()> {
-        let mut state = self
-            .lock_state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if state.is_some() {
-            return Err(WincentError::ManagerAlreadyLocked);
-        }
         let target = match qa_type {
             QuickAccess::RecentFiles => QuickAccessLockTarget::RecentFiles,
             QuickAccess::FrequentFolders => QuickAccessLockTarget::FrequentFolders,
             QuickAccess::All => QuickAccessLockTarget::All,
         };
-        *state = Some(QuickAccessLock::lock_target(target)?);
+        self.lock_with_target(target, QuickAccessLock::lock_target)
+    }
+
+    fn lock_with_target<F>(&self, target: QuickAccessLockTarget, acquire: F) -> WincentResult<()>
+    where
+        F: FnOnce(QuickAccessLockTarget) -> WincentResult<QuickAccessLock>,
+    {
+        let reservation = {
+            let mut state = self
+                .lock_state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if !matches!(*state, ManagerLockState::Unlocked) {
+                return Err(WincentError::ManagerAlreadyLocked);
+            }
+            *state = ManagerLockState::Acquiring;
+            LockAcquisitionReservation {
+                lock_state: Arc::clone(&self.lock_state),
+                active: true,
+            }
+        };
+
+        let lock = acquire(target)?;
+        reservation.publish(lock);
         Ok(())
     }
 
@@ -572,7 +627,14 @@ impl QuickAccessManager {
             .lock_state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        state.take().ok_or(WincentError::ManagerNotLocked)
+        match std::mem::replace(&mut *state, ManagerLockState::Unlocked) {
+            ManagerLockState::Locked(lock) => Ok(lock),
+            ManagerLockState::Acquiring => {
+                *state = ManagerLockState::Acquiring;
+                Err(WincentError::ManagerNotLocked)
+            }
+            ManagerLockState::Unlocked => Err(WincentError::ManagerNotLocked),
+        }
     }
 
     /// Notifies the Shell about Quick Access changes and refreshes matching
@@ -726,6 +788,90 @@ impl QuickAccessManager {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn manager_lock_state_stays_available_during_backing_file_io() {
+        let manager = QuickAccessManager::new();
+        let target = QuickAccessLockTarget::RecentFiles;
+        let error = manager
+            .lock_with_target(target, |_| {
+                Err(WincentError::SystemError(
+                    "expected acquisition failure".into(),
+                ))
+            })
+            .unwrap_err();
+        assert!(matches!(error, WincentError::SystemError(_)));
+
+        let recent_folder = std::env::temp_dir().join(format!(
+            "wincent-manager-lock-{}-{}",
+            std::process::id(),
+            LOCK_TEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let automatic_destinations = recent_folder.join("AutomaticDestinations");
+        std::fs::create_dir_all(&automatic_destinations).unwrap();
+        std::fs::write(
+            automatic_destinations.join(crate::lock::RECENT_FILES_AUTOMATIC_DESTINATION),
+            [],
+        )
+        .unwrap();
+
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let acquiring_manager = manager.clone();
+        let acquire_folder = recent_folder.clone();
+        let acquisition = std::thread::spawn(move || {
+            acquiring_manager.lock_with_target(target, move |target| {
+                let _ = started_tx.send(());
+                continue_rx
+                    .recv()
+                    .map_err(|error| WincentError::SystemError(error.to_string()))?;
+                QuickAccessLock::lock_target_in_recent_folder(target, acquire_folder)
+            })
+        });
+        let started = started_rx.recv_timeout(Duration::from_secs(2));
+
+        let (lock_tx, lock_rx) = std::sync::mpsc::channel();
+        let lock_manager = manager.clone();
+        let lock_probe = std::thread::spawn(move || {
+            let _ = lock_tx.send(lock_manager.lock(QuickAccess::RecentFiles));
+        });
+        let (unlock_tx, unlock_rx) = std::sync::mpsc::channel();
+        let unlock_manager = manager.clone();
+        let unlock_probe = std::thread::spawn(move || {
+            let _ = unlock_tx.send(unlock_manager.unlock());
+        });
+        let (cleanup_tx, cleanup_rx) = std::sync::mpsc::channel();
+        let cleanup_manager = manager.clone();
+        let cleanup_probe = std::thread::spawn(move || {
+            let _ = cleanup_tx.send(cleanup_manager.unlock_and_cleanup());
+        });
+        let lock_result = lock_rx.recv_timeout(Duration::from_secs(2));
+        let unlock_result = unlock_rx.recv_timeout(Duration::from_secs(2));
+        let cleanup_result = cleanup_rx.recv_timeout(Duration::from_secs(2));
+        let _ = continue_tx.send(());
+
+        assert!(started.is_ok(), "acquisition did not reach the I/O pause");
+        assert!(matches!(
+            lock_result,
+            Ok(Err(WincentError::ManagerAlreadyLocked))
+        ));
+        assert!(matches!(
+            unlock_result,
+            Ok(Err(WincentError::ManagerNotLocked))
+        ));
+        assert!(matches!(
+            cleanup_result,
+            Ok(Err(WincentError::ManagerNotLocked))
+        ));
+        assert!(acquisition.join().unwrap().is_ok());
+        lock_probe.join().unwrap();
+        unlock_probe.join().unwrap();
+        cleanup_probe.join().unwrap();
+        manager.unlock().unwrap();
+        std::fs::remove_dir_all(recent_folder).unwrap();
+    }
+
+    static LOCK_TEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     #[derive(Default)]
     struct FakeBackend {

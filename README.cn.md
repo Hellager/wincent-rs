@@ -105,7 +105,7 @@ fn main() -> WincentResult<()> {
 - **查询语义**：查询 API 返回根据持久化 DestList 数据计算出的 rule-based 结果。相关规则来自对 Shell 查询行为的逆向，匹配已观察到的过滤、排序、去重和结果数量限制，无需调用实时 Shell 查询。
 - **UI 一致性**：已打开的 Explorer 视图可能在 UI 缓存刷新前与持久化的 rule-based 结果短暂不同。Explorer 也可能在不同 Windows 版本上异步重建状态。
 - **修改成功语义**：`add_item` 或 `remove_item` 返回 `Ok(())`，表示选定的 Shell 修改调用成功返回；不保证 DestList 持久化、后续查询与已打开的 Explorer 视图已经立即同步。
-- **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。超时后的最终状态未知，底层操作仍可能稍后完成。库不会自动重试修改操作；再次修改前应先检查状态。
+- **超时语义**：超时限制的是调用方等待结果的时间，而不是底层 Shell 或 COM 调用的实际运行时间。超时后的最终状态未知，底层操作仍可能稍后完成。库不会自动重试修改操作；再次修改前应先检查状态。若 STA worker 已达并发上限，操作会在启动前以 `WincentError::WorkerSaturated` 拒绝，不属于超时或状态未知。
 - **自动删除分流**：`remove_item(path)` 自动识别文件和目录。Recent file 使用原生 `remove` Shell verb，未固定 Frequent Folder 使用 `removefromhome`，已固定 Frequent Folder 使用 `unpinfromhome`。
 - **清空行为**：`empty_items(...)` 成功清空后会刷新 Explorer。清空 Frequent Folders 会移除用户创建的项目（包括用户固定项）；Windows 可能重建系统默认固定项。
 - **开始菜单推荐项目可见性**：`VisibilityTarget::StartRecommended` 通过当前用户的 `Explorer\Advanced\Start_TrackDocs` 值控制 Windows 11 开始菜单中的最近使用文件。Windows 10 上不会阻止该设置，但它可能没有可见的开始菜单效果。在部分 Windows 11 版本上，隐藏开始菜单推荐项目也可能让文件资源管理器中的最近文件不可见；如果单独设置 `ShowRecent` 无法恢复可见性，请先显示开始菜单推荐项目。

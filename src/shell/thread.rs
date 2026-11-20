@@ -48,9 +48,7 @@ fn acquire_active_sta_worker() -> WincentResult<ActiveStaWorkerGuard> {
     loop {
         let current = ACTIVE_STA_WORKERS.load(Ordering::Acquire);
         if current >= MAX_ACTIVE_STA_WORKERS {
-            return Err(WincentError::Timeout(
-                "Too many Shell COM operations are still running; previous timed-out operations may not have finished yet.".to_string(),
-            ));
+            return Err(WincentError::WorkerSaturated);
         }
 
         if ACTIVE_STA_WORKERS
@@ -436,13 +434,11 @@ mod tests {
         );
 
         match extra {
-            Err(WincentError::Timeout(message)) => {
-                assert!(
-                    message.contains("Too many Shell COM operations"),
-                    "limit timeout should explain active worker cap, got: {message}"
-                );
-            }
-            other => panic!("Expected active worker limit Timeout, got: {:?}", other),
+            Err(WincentError::WorkerSaturated) => {}
+            other => panic!(
+                "Expected WorkerSaturated at active worker limit, got: {:?}",
+                other
+            ),
         }
         assert!(
             !extra_ran.load(Ordering::SeqCst),

@@ -100,6 +100,12 @@ pub enum WincentError {
     #[error("Operation timed out: {0}")]
     Timeout(String),
 
+    /// The active Shell COM worker limit prevented a new operation from starting.
+    ///
+    /// Unlike [`WincentError::Timeout`], the rejected operation was not started.
+    #[error("Shell COM worker capacity is exhausted")]
+    WorkerSaturated,
+
     /// A cooperating Quick Access lock denies mutation of this category.
     #[error("Quick Access category is locked: {qa_type:?}")]
     #[non_exhaustive]

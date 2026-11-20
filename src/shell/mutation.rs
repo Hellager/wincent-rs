@@ -187,7 +187,7 @@ fn remove_frequent_folder_with_verb(
             move || contains_frequent_folder_current_sta(&candidate),
             remaining,
         ) {
-            Err(error) if is_sta_worker_capacity_timeout(&error) => Ok(true),
+            Err(error) if is_sta_worker_capacity_error(&error) => Ok(true),
             result => result,
         }
     };
@@ -354,11 +354,8 @@ fn next_frequent_folder_verification_poll_interval(current: Duration) -> Duratio
         .min(FREQUENT_FOLDER_VERIFICATION_MAX_POLL_INTERVAL)
 }
 
-fn is_sta_worker_capacity_timeout(error: &WincentError) -> bool {
-    matches!(
-        error,
-        WincentError::Timeout(message) if message.starts_with("Too many Shell COM operations")
-    )
+fn is_sta_worker_capacity_error(error: &WincentError) -> bool {
+    matches!(error, WincentError::WorkerSaturated)
 }
 
 /// Inner: runs on the current STA thread. Only call from within `run_on_sta_thread`.
@@ -744,10 +741,8 @@ mod tests {
 
     #[test]
     fn removal_verification_retries_when_sta_workers_are_temporarily_full() {
-        assert!(is_sta_worker_capacity_timeout(&WincentError::Timeout(
-            "Too many Shell COM operations are still running".to_string()
-        )));
-        assert!(!is_sta_worker_capacity_timeout(&WincentError::Timeout(
+        assert!(is_sta_worker_capacity_error(&WincentError::WorkerSaturated));
+        assert!(!is_sta_worker_capacity_error(&WincentError::Timeout(
             "COM STA thread timed out after 1s".to_string()
         )));
     }
