@@ -33,6 +33,7 @@ use windows::Win32::UI::Shell::{Folder3, SHAddToRecentDocs};
 
 const FREQUENT_FOLDER_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(1);
 const FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const FREQUENT_FOLDER_VERIFICATION_MAX_POLL_INTERVAL: Duration = Duration::from_millis(400);
 const REMOVE_FROM_HOME_VERB: &str = "removefromhome";
 const UNPIN_FROM_HOME_VERB: &str = "unpinfromhome";
 /// SHARD_PATHW registers a wide-string path in the recent documents list.
@@ -140,22 +141,60 @@ fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> Win
     Ok(false)
 }
 
-fn remove_frequent_folder_with_verb_current_sta(path: &str, verb: &str) -> WincentResult<()> {
-    // The scan that locates the target also invokes the verb. A separate
-    // contains scan would enumerate the same COM collection twice.
-    if !try_invoke_verb_on_frequent_folder_current_sta(path, verb)? {
+fn remove_frequent_folder_with_verb(
+    path: &str,
+    verb: &str,
+    timeout: Duration,
+    permit: MutationPermit,
+) -> WincentResult<()> {
+    let started = Instant::now();
+    let worker_path = path.to_owned();
+    let worker_verb = verb.to_owned();
+    let (found, removed, permit) = crate::shell::thread::run_on_sta_thread(
+        move || {
+            let found = try_invoke_verb_on_frequent_folder_current_sta(&worker_path, &worker_verb)?;
+            let removed = found && !contains_frequent_folder_current_sta(&worker_path)?;
+            Ok((found, removed, permit))
+        },
+        timeout,
+    )?;
+
+    if !found {
         return Err(WincentError::not_in_quick_access(
             path,
             QuickAccess::FrequentFolders,
         ));
     }
+    if removed {
+        return Ok(());
+    }
 
-    // Keep polling: InvokeVerb can return before the shell view reflects removal.
-    let mut contains = contains_frequent_folder_current_sta;
+    // Retain the mutation gate across verification, but leave the STA worker
+    // free between queries and during backoff sleeps.
+    let _permit = permit;
+    let verification_timeout =
+        FREQUENT_FOLDER_VERIFICATION_TIMEOUT.min(timeout.saturating_sub(started.elapsed()));
+    let mut contains = |candidate: &str| {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(WincentError::Timeout(format!(
+                "Frequent Folder removal verification timed out after {}s",
+                timeout.as_secs_f64()
+            )));
+        }
+        let candidate = candidate.to_owned();
+        match crate::shell::thread::run_on_sta_thread(
+            move || contains_frequent_folder_current_sta(&candidate),
+            remaining,
+        ) {
+            Err(error) if is_sta_worker_capacity_timeout(&error) => Ok(true),
+            result => result,
+        }
+    };
     let mut sleep = std::thread::sleep;
     if wait_for_frequent_folder_removed(
         path,
-        FREQUENT_FOLDER_VERIFICATION_TIMEOUT,
+        verification_timeout,
         FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL,
         &mut contains,
         &mut sleep,
@@ -166,14 +205,6 @@ fn remove_frequent_folder_with_verb_current_sta(path: &str, verb: &str) -> Wince
     Err(WincentError::SystemError(format!(
         "{verb} completed but Frequent Folders still contains {path}"
     )))
-}
-
-fn remove_unpinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
-    remove_frequent_folder_with_verb_current_sta(path, REMOVE_FROM_HOME_VERB)
-}
-
-fn remove_pinned_frequent_folder_current_sta(path: &str) -> WincentResult<()> {
-    remove_frequent_folder_with_verb_current_sta(path, UNPIN_FROM_HOME_VERB)
 }
 
 /// Invokes a Shell verb directly on a folder using Folder.Self pattern
@@ -284,36 +315,6 @@ fn pin_frequent_folder_native(
     )
 }
 
-fn wait_for_frequent_folder_presence_with<C, S>(
-    path: &str,
-    expected: bool,
-    verification_timeout: Duration,
-    poll_interval: Duration,
-    contains: &mut C,
-    sleep: &mut S,
-) -> WincentResult<bool>
-where
-    C: FnMut(&str) -> WincentResult<bool>,
-    S: FnMut(Duration),
-{
-    let start = Instant::now();
-
-    while start.elapsed() < verification_timeout {
-        if contains(path)? == expected {
-            return Ok(true);
-        }
-
-        let remaining = verification_timeout.saturating_sub(start.elapsed());
-        if remaining.is_zero() {
-            break;
-        }
-
-        sleep(std::cmp::min(poll_interval, remaining));
-    }
-
-    Ok(contains(path)? == expected)
-}
-
 fn wait_for_frequent_folder_removed<C, S>(
     path: &str,
     verification_timeout: Duration,
@@ -325,13 +326,38 @@ where
     C: FnMut(&str) -> WincentResult<bool>,
     S: FnMut(Duration),
 {
-    wait_for_frequent_folder_presence_with(
-        path,
-        false,
-        verification_timeout,
-        poll_interval,
-        contains,
-        sleep,
+    let start = Instant::now();
+    let mut poll_interval = poll_interval;
+
+    while start.elapsed() < verification_timeout {
+        let remaining = verification_timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+
+        sleep(std::cmp::min(poll_interval, remaining));
+        if start.elapsed() >= verification_timeout {
+            break;
+        }
+        poll_interval = next_frequent_folder_verification_poll_interval(poll_interval);
+        if !contains(path)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(!contains(path)?)
+}
+
+fn next_frequent_folder_verification_poll_interval(current: Duration) -> Duration {
+    current
+        .saturating_mul(2)
+        .min(FREQUENT_FOLDER_VERIFICATION_MAX_POLL_INTERVAL)
+}
+
+fn is_sta_worker_capacity_timeout(error: &WincentError) -> bool {
+    matches!(
+        error,
+        WincentError::Timeout(message) if message.starts_with("Too many Shell COM operations")
     )
 }
 
@@ -597,12 +623,7 @@ pub(crate) fn remove_unpinned_frequent_folder_with_timeout(
 ) -> WincentResult<()> {
     crate::shell::thread::validate_timeout(timeout)?;
     validate_path(path, PathType::Directory)?;
-    let path = path.to_owned();
-    crate::shell::thread::run_on_sta_thread_with_permit(
-        move || remove_unpinned_frequent_folder_current_sta(&path),
-        timeout,
-        permit,
-    )
+    remove_frequent_folder_with_verb(path, REMOVE_FROM_HOME_VERB, timeout, permit)
 }
 
 /// Removes a visible pinned Frequent Folders entry with the native
@@ -614,12 +635,7 @@ pub(crate) fn remove_pinned_frequent_folder_with_timeout(
 ) -> WincentResult<()> {
     crate::shell::thread::validate_timeout(timeout)?;
     validate_path(path, PathType::Directory)?;
-    let path = path.to_owned();
-    crate::shell::thread::run_on_sta_thread_with_permit(
-        move || remove_pinned_frequent_folder_current_sta(&path),
-        timeout,
-        permit,
-    )
+    remove_frequent_folder_with_verb(path, UNPIN_FROM_HOME_VERB, timeout, permit)
 }
 
 #[cfg(test)]
@@ -695,13 +711,44 @@ mod tests {
             &mut |_| {
                 let current = checks.get();
                 checks.set(current + 1);
-                Ok(current == 0)
+                Ok(current > 0)
             },
-            &mut |_| {},
+            &mut std::thread::sleep,
         )?;
 
         assert!(removed);
-        assert!(checks.get() >= 2);
+        assert_eq!(checks.get(), 1);
         Ok(())
+    }
+
+    #[test]
+    fn removal_verification_poll_interval_backs_off_and_caps() {
+        let intervals = std::iter::successors(
+            Some(FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL),
+            |interval| Some(next_frequent_folder_verification_poll_interval(*interval)),
+        )
+        .take(5)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            intervals,
+            [
+                Duration::from_millis(100),
+                Duration::from_millis(200),
+                Duration::from_millis(400),
+                Duration::from_millis(400),
+                Duration::from_millis(400),
+            ]
+        );
+    }
+
+    #[test]
+    fn removal_verification_retries_when_sta_workers_are_temporarily_full() {
+        assert!(is_sta_worker_capacity_timeout(&WincentError::Timeout(
+            "Too many Shell COM operations are still running".to_string()
+        )));
+        assert!(!is_sta_worker_capacity_timeout(&WincentError::Timeout(
+            "COM STA thread timed out after 1s".to_string()
+        )));
     }
 }
