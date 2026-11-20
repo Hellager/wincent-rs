@@ -141,19 +141,16 @@ fn try_invoke_verb_on_frequent_folder_current_sta(path: &str, verb: &str) -> Win
 }
 
 fn remove_frequent_folder_with_verb_current_sta(path: &str, verb: &str) -> WincentResult<()> {
-    if !contains_frequent_folder_current_sta(path)? {
+    // The scan that locates the target also invokes the verb. A separate
+    // contains scan would enumerate the same COM collection twice.
+    if !try_invoke_verb_on_frequent_folder_current_sta(path, verb)? {
         return Err(WincentError::not_in_quick_access(
             path,
             QuickAccess::FrequentFolders,
         ));
     }
 
-    if !try_invoke_verb_on_frequent_folder_current_sta(path, verb)? {
-        return Err(WincentError::SystemError(format!(
-            "Frequent Folders item disappeared before {verb}: {path}"
-        )));
-    }
-
+    // Keep polling: InvokeVerb can return before the shell view reflects removal.
     let mut contains = contains_frequent_folder_current_sta;
     let mut sleep = std::thread::sleep;
     if wait_for_frequent_folder_removed(

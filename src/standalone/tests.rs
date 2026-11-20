@@ -13,6 +13,7 @@ struct Backend {
     pin_error: Option<ErrorKind>,
     fail_mutation: bool,
     calls: Mutex<Vec<(&'static str, Duration)>>,
+    pin_status_queries: Mutex<usize>,
 }
 
 impl Backend {
@@ -25,6 +26,7 @@ impl Backend {
             pin_error: None,
             fail_mutation: false,
             calls: Mutex::new(Vec::new()),
+            pin_status_queries: Mutex::new(0),
         }
     }
 
@@ -65,6 +67,7 @@ impl QuickAccessBackend for Backend {
     }
 
     fn frequent_folder_pin_status(&self, _path: &str) -> WincentResult<FrequentFolderPinStatus> {
+        *self.pin_status_queries.lock().expect("pin query counter") += 1;
         if let Some(kind) = self.pin_error {
             return Err(std::io::Error::from(kind).into());
         }
@@ -212,6 +215,24 @@ fn pin_uses_only_pin_state_and_allows_existing_unpinned_entries() -> WincentResu
         })
     ));
     assert_eq!(backend.calls(), vec![("pin", TIMEOUT); 2]);
+    Ok(())
+}
+
+#[test]
+fn folder_removal_uses_one_pin_status_query_without_listing_items() -> WincentResult<()> {
+    let mut backend = Backend::new(PathType::Directory);
+    backend.pin = FrequentFolderPinStatus::Unpinned;
+
+    mutate(Path::new(PATH), TIMEOUT, Mutation::RemoveFolder, &backend)?;
+
+    assert_eq!(backend.calls(), vec![("remove_unpinned", TIMEOUT)]);
+    assert_eq!(
+        *backend
+            .pin_status_queries
+            .lock()
+            .expect("pin query counter"),
+        1
+    );
     Ok(())
 }
 

@@ -375,6 +375,20 @@ fn mutate(
         return backend.add_frequent_folder(&path, timeout);
     }
 
+    if matches!(operation, Mutation::RemoveFolder) {
+        return match pin_status(backend, &path)? {
+            FrequentFolderPinStatus::Pinned => {
+                backend.remove_pinned_frequent_folder(&path, timeout)
+            }
+            FrequentFolderPinStatus::Unpinned => {
+                backend.remove_unpinned_frequent_folder(&path, timeout)
+            }
+            FrequentFolderPinStatus::NotFound => {
+                Err(WincentError::not_in_quick_access(&path, category))
+            }
+        };
+    }
+
     let items = backend.get_items(category, timeout)?;
     let present = items.iter().any(|item| paths_equal(item, &path));
     if matches!(operation, Mutation::AddRecent) {
@@ -389,15 +403,7 @@ fn mutate(
     if matches!(operation, Mutation::RemoveRecent) {
         return backend.remove_recent_file(&path, timeout);
     }
-    match backend.frequent_folder_pin_status(&path)? {
-        FrequentFolderPinStatus::Pinned => backend.remove_pinned_frequent_folder(&path, timeout),
-        FrequentFolderPinStatus::Unpinned => {
-            backend.remove_unpinned_frequent_folder(&path, timeout)
-        }
-        FrequentFolderPinStatus::NotFound => {
-            Err(WincentError::not_in_quick_access(&path, category))
-        }
-    }
+    unreachable!("folder removal is handled before the Recent membership query")
 }
 
 fn empty_category(

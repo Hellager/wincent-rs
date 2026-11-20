@@ -447,7 +447,7 @@ impl QuickAccessManager {
     ///
     /// Returns [`WincentError::InvalidPath`] when `path` is empty, missing, or
     /// is neither a file nor directory;
-    /// [`WincentError::NotInQuickAccess`] if the preflight query does not find
+    /// [`WincentError::NotInQuickAccess`] if Frequent Folders metadata does not contain
     /// the item; [`WincentError::QuickAccessLocked`] when a cooperating lock
     /// denies the mutation; or an underlying Shell/COM error.
     ///
@@ -472,7 +472,6 @@ impl QuickAccessManager {
                 self.backend.remove_recent_file(&path, self.timeout)
             }
             QuickAccess::FrequentFolders => {
-                self.ensure_present(&path, qa_type)?;
                 let pin_status = self.backend.frequent_folder_pin_status(&path)?;
                 match pin_status {
                     crate::destlist::FrequentFolderPinStatus::Pinned => {
@@ -1225,6 +1224,7 @@ mod tests {
             backend.calls(),
             vec!["remove_unpinned_frequent_folder:C:\\Projects:10".to_string()]
         );
+        assert!(backend.get_item_timeouts().is_empty());
         Ok(())
     }
 
