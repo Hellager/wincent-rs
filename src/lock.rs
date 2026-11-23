@@ -10,7 +10,7 @@ use crate::error::WincentError;
 use crate::path::paths_equal;
 use crate::recent_links::recent_lnk_paths;
 use crate::windows::{get_windows_recent_folder, os_str_to_wide_null};
-use crate::WincentResult;
+use crate::{QuickAccess, WincentResult};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -47,6 +47,16 @@ pub enum QuickAccessLockTarget {
     ///
     /// Mutations through wincent are rejected for both categories while held.
     All,
+}
+
+impl From<QuickAccess> for QuickAccessLockTarget {
+    fn from(value: QuickAccess) -> Self {
+        match value {
+            QuickAccess::RecentFiles => Self::RecentFiles,
+            QuickAccess::FrequentFolders => Self::FrequentFolders,
+            QuickAccess::All => Self::All,
+        }
+    }
 }
 
 /// Results from cleaning up shortcuts while releasing a Quick Access lock.
@@ -374,6 +384,22 @@ mod tests {
         );
         assert_ne!(
             QuickAccessLockTarget::FrequentFolders,
+            QuickAccessLockTarget::All
+        );
+    }
+
+    #[test]
+    fn quick_access_maps_to_lock_target() {
+        assert_eq!(
+            QuickAccessLockTarget::from(QuickAccess::RecentFiles),
+            QuickAccessLockTarget::RecentFiles
+        );
+        assert_eq!(
+            QuickAccessLockTarget::from(QuickAccess::FrequentFolders),
+            QuickAccessLockTarget::FrequentFolders
+        );
+        assert_eq!(
+            QuickAccessLockTarget::from(QuickAccess::All),
             QuickAccessLockTarget::All
         );
     }

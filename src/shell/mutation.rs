@@ -16,6 +16,7 @@
 //! 2. Path validation before execution
 //! 3. Clean error propagation
 
+use super::SHARD_PATHW;
 use crate::{
     destlist::FrequentFolderPinStatus,
     error::WincentError,
@@ -36,9 +37,6 @@ const FREQUENT_FOLDER_VERIFICATION_POLL_INTERVAL: Duration = Duration::from_mill
 const FREQUENT_FOLDER_VERIFICATION_MAX_POLL_INTERVAL: Duration = Duration::from_millis(400);
 const REMOVE_FROM_HOME_VERB: &str = "removefromhome";
 const UNPIN_FROM_HOME_VERB: &str = "unpinfromhome";
-/// SHARD_PATHW registers a wide-string path in the recent documents list.
-const SHARD_PATHW: u32 = 0x0000_0003;
-
 /// Invokes a Shell verb directly on a folder using the `Folder.Self` pattern.
 ///
 /// This function invokes the verb through the Shell `Namespace(path).Self`

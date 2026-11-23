@@ -4,6 +4,14 @@ use crate::{error::WincentError, WincentResult};
 use std::io;
 use std::path::Path;
 
+/// Converts a path to the string representation used by Shell APIs.
+pub(crate) fn path_to_shell_string(path: &Path) -> WincentResult<String> {
+    if path.as_os_str().is_empty() {
+        return Err(WincentError::invalid_path_reason("Empty path provided"));
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Lightweight path normalization without I/O operations.
 pub(crate) fn normalize_path_lightweight(path: &str) -> String {
     let mut result = path.to_lowercase().replace('/', "\\");

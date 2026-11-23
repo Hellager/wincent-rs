@@ -1,5 +1,6 @@
 //! Native Quick Access clearing primitives.
 
+use super::SHARD_PATHW;
 use crate::{
     destlist::{frequent_folders_dest_path, parse_file},
     error::WincentError,
@@ -9,9 +10,6 @@ use crate::{
 };
 use std::{io::ErrorKind, path::Path, time::Duration};
 use windows::Win32::UI::Shell::SHAddToRecentDocs;
-
-/// SHARD_PATHW with a null data pointer clears all recent documents.
-const SHARD_PATHW: u32 = 0x0000_0003;
 
 /// Clears the Windows Recent Files list via a dedicated STA thread.
 pub(crate) fn clear_recent_files(timeout: Duration, permit: MutationPermit) -> WincentResult<()> {

@@ -6,7 +6,7 @@ use crate::{
     empty,
     error::WincentError,
     lock::{QuickAccessLock, QuickAccessLockTarget, UnlockReport},
-    path::paths_equal,
+    path::{path_to_shell_string, paths_equal},
     status::QuickAccessStatus,
     QuickAccess, VisibilityTarget, WincentResult,
 };
@@ -14,14 +14,6 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
-
-fn path_to_shell_string(path: &Path) -> WincentResult<String> {
-    if path.as_os_str().is_empty() {
-        return Err(WincentError::invalid_path_reason("Empty path provided"));
-    }
-
-    Ok(path.to_string_lossy().into_owned())
-}
 
 /// Builder for configuring [`QuickAccessManager`].
 ///
@@ -559,11 +551,7 @@ impl QuickAccessManager {
     /// # }
     /// ```
     pub fn lock(&self, qa_type: QuickAccess) -> WincentResult<()> {
-        let target = match qa_type {
-            QuickAccess::RecentFiles => QuickAccessLockTarget::RecentFiles,
-            QuickAccess::FrequentFolders => QuickAccessLockTarget::FrequentFolders,
-            QuickAccess::All => QuickAccessLockTarget::All,
-        };
+        let target = qa_type.into();
         self.lock_with_target(target, QuickAccessLock::lock_target)
     }
 

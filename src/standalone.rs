@@ -33,8 +33,9 @@ use crate::backend::{self, QuickAccessBackend, SystemQuickAccessBackend};
 use crate::destlist::FrequentFolderPinStatus;
 use crate::empty;
 use crate::error::WincentError;
-use crate::lock::{QuickAccessLock, QuickAccessLockTarget, UnlockReport};
-use crate::path::{paths_equal, PathType};
+use crate::lock::{QuickAccessLock, UnlockReport};
+use crate::path::{path_to_shell_string, paths_equal, PathType};
+use crate::shell::thread::validate_timeout;
 use crate::{QuickAccess, WincentResult};
 use std::fmt;
 use std::path::Path;
@@ -77,7 +78,7 @@ pub fn get_frequent_folders() -> WincentResult<Vec<String>> {
 /// I/O or parsing error. Errors other than a missing backing file are not
 /// converted to `false`.
 pub fn is_folder_pinned<P: AsRef<Path>>(path: P) -> WincentResult<bool> {
-    let path = path_string(path.as_ref())?;
+    let path = path_to_shell_string(path.as_ref())?;
     Ok(matches!(
         pin_status(&SystemQuickAccessBackend, &path)?,
         FrequentFolderPinStatus::Pinned
@@ -251,7 +252,7 @@ impl fmt::Debug for FrequentFoldersLock {
 /// overlapping locks or in-flight cooperating mutations.
 pub fn lock_recent_files() -> WincentResult<RecentFilesLock> {
     Ok(RecentFilesLock {
-        inner: QuickAccessLock::lock_target(QuickAccessLockTarget::RecentFiles)?,
+        inner: QuickAccessLock::lock_target(QuickAccess::RecentFiles.into())?,
     })
 }
 
@@ -266,7 +267,7 @@ pub fn lock_recent_files() -> WincentResult<RecentFilesLock> {
 /// overlapping locks or in-flight cooperating mutations.
 pub fn lock_frequent_folders() -> WincentResult<FrequentFoldersLock> {
     Ok(FrequentFoldersLock {
-        inner: QuickAccessLock::lock_target(QuickAccessLockTarget::FrequentFolders)?,
+        inner: QuickAccessLock::lock_target(QuickAccess::FrequentFolders.into())?,
     })
 }
 
@@ -317,22 +318,6 @@ pub fn empty_frequent_folders(timeout: Duration) -> WincentResult<()> {
     )
 }
 
-fn validate_timeout(timeout: Duration) -> WincentResult<()> {
-    if timeout.is_zero() {
-        return Err(WincentError::InvalidArgument(
-            "timeout must be greater than zero".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn path_string(path: &Path) -> WincentResult<String> {
-    if path.as_os_str().is_empty() {
-        return Err(WincentError::invalid_path_reason("Empty path provided"));
-    }
-    Ok(path.to_string_lossy().into_owned())
-}
-
 fn pin_status(
     backend: &dyn QuickAccessBackend,
     path: &str,
@@ -355,7 +340,7 @@ fn mutate(
     backend: &dyn QuickAccessBackend,
 ) -> WincentResult<()> {
     validate_timeout(timeout)?;
-    let path = path_string(path)?;
+    let path = path_to_shell_string(path)?;
     let (expected, category) = match operation {
         Mutation::AddRecent | Mutation::RemoveRecent => (PathType::File, QuickAccess::RecentFiles),
         Mutation::PinFolder | Mutation::RemoveFolder => {
