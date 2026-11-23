@@ -84,7 +84,6 @@ pub mod destlist;
 
 pub mod status;
 
-#[allow(unused)]
 /// Convenient re-exports for common Quick Access operations.
 pub mod prelude {
     pub use crate::error::WincentError;
