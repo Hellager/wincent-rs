@@ -211,6 +211,30 @@ mod tests {
     }
 
     #[test]
+    fn resolve_shell_link_relative_path_against_link_directory() -> WincentResult<()> {
+        let recent_folder = tempfile::tempdir()?;
+        let lnk_path = recent_folder.path().join("target.lnk");
+        let mut lnk = vec![0u8; SHELL_LINK_HEADER_SIZE as usize];
+        write_u32(&mut lnk, 0, SHELL_LINK_HEADER_SIZE);
+        lnk[4..20].copy_from_slice(&LINK_CLSID);
+        write_u32(&mut lnk, 0x14, HAS_RELATIVE_PATH | IS_UNICODE);
+        write_lnk_string(&mut lnk, "target.txt");
+        fs::write(&lnk_path, lnk)?;
+
+        assert_eq!(
+            resolve_lnk_target(&lnk_path)?,
+            Some(
+                recent_folder
+                    .path()
+                    .join("target.txt")
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
     fn recent_lnk_path_filter_is_pure_and_sorted() {
         let a = PathBuf::from("a.lnk");
         let b = PathBuf::from("b.LNK");

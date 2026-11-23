@@ -46,7 +46,23 @@ pub(crate) fn resolve_lnk_target(lnk_path: &Path) -> WincentResult<Option<String
         return Ok(None);
     };
 
-    Ok(summary.target_path.or(summary.relative_path))
+    if let Some(target_path) = summary.target_path {
+        return Ok(Some(target_path));
+    }
+
+    let Some(relative_path) = summary.relative_path else {
+        return Ok(None);
+    };
+    let Some(parent) = lnk_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(
+        parent.join(relative_path).to_string_lossy().into_owned(),
+    ))
 }
 
 fn read_shell_link_summary(lnk_path: &Path) -> WincentResult<Option<ShellLinkSummary>> {
