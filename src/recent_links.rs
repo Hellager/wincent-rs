@@ -12,7 +12,8 @@ pub(crate) use shell_link::{is_lnk_file, resolve_lnk_target};
 #[cfg(test)]
 use shell_link::{
     parse_shell_link_summary, COMMON_NETWORK_RELATIVE_LINK_AND_PATH_SUFFIX, HAS_LINK_INFO,
-    IS_UNICODE, LINK_CLSID, SHELL_LINK_HEADER_SIZE, VOLUME_ID_AND_LOCAL_BASE_PATH,
+    HAS_LINK_TARGET_ID_LIST, HAS_NAME, HAS_RELATIVE_PATH, IS_UNICODE, LINK_CLSID,
+    SHELL_LINK_HEADER_SIZE, VOLUME_ID_AND_LOCAL_BASE_PATH,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -172,6 +173,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_shell_link_recovers_link_info_after_invalid_id_list() {
+        let mut lnk = lnk_with_link_info(
+            Some("C:\\Users\\Alice"),
+            Some("Documents\\report.docx"),
+            None,
+            FILE_ATTRIBUTE_ARCHIVE_FOR_TEST,
+        );
+        write_u32(
+            &mut lnk,
+            0x14,
+            HAS_LINK_TARGET_ID_LIST | HAS_LINK_INFO | IS_UNICODE,
+        );
+
+        let summary = parse_shell_link_summary(&lnk).expect("lnk should parse");
+
+        assert_eq!(
+            summary.target_path.as_deref(),
+            Some("C:\\Users\\Alice\\Documents\\report.docx")
+        );
+    }
+
+    #[test]
+    fn parse_shell_link_recovers_relative_path_after_invalid_string_length() {
+        let mut lnk = lnk_with_link_info(None, None, None, 0);
+        write_u32(
+            &mut lnk,
+            0x14,
+            HAS_LINK_INFO | HAS_NAME | HAS_RELATIVE_PATH | IS_UNICODE,
+        );
+        lnk.extend_from_slice(&u16::MAX.to_le_bytes());
+        write_lnk_string(&mut lnk, "relative\\target");
+
+        let summary = parse_shell_link_summary(&lnk).expect("lnk should parse");
+
+        assert_eq!(summary.relative_path.as_deref(), Some("relative\\target"));
+    }
+
+    #[test]
     fn recent_lnk_path_filter_is_pure_and_sorted() {
         let a = PathBuf::from("a.lnk");
         let b = PathBuf::from("b.LNK");
@@ -282,6 +321,14 @@ mod tests {
             data.extend_from_slice(&word.to_le_bytes());
         }
         data.extend_from_slice(&0u16.to_le_bytes());
+    }
+
+    fn write_lnk_string(data: &mut Vec<u8>, value: &str) {
+        let words: Vec<u16> = value.encode_utf16().collect();
+        data.extend_from_slice(&(words.len() as u16).to_le_bytes());
+        for word in words {
+            data.extend_from_slice(&word.to_le_bytes());
+        }
     }
 
     fn write_u32(data: &mut [u8], offset: usize, value: u32) {

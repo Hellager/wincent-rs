@@ -7,11 +7,11 @@ pub(super) const SHELL_LINK_HEADER_SIZE: u32 = 0x4c;
 pub(super) const LINK_CLSID: [u8; 16] = [
     0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
 ];
-const HAS_LINK_TARGET_ID_LIST: u32 = 0x0000_0001;
+pub(super) const HAS_LINK_TARGET_ID_LIST: u32 = 0x0000_0001;
 pub(super) const HAS_LINK_INFO: u32 = 0x0000_0002;
 const FORCE_NO_LINK_INFO: u32 = 0x0000_0200;
-const HAS_NAME: u32 = 0x0000_0004;
-const HAS_RELATIVE_PATH: u32 = 0x0000_0008;
+pub(super) const HAS_NAME: u32 = 0x0000_0004;
+pub(super) const HAS_RELATIVE_PATH: u32 = 0x0000_0008;
 const HAS_WORKING_DIR: u32 = 0x0000_0010;
 const HAS_ARGUMENTS: u32 = 0x0000_0020;
 const HAS_ICON_LOCATION: u32 = 0x0000_0040;
@@ -23,7 +23,7 @@ pub(super) const COMMON_NETWORK_RELATIVE_LINK_AND_PATH_SUFFIX: u32 = 0x0000_0002
 pub(super) struct ShellLinkSummary {
     pub(super) target_path: Option<String>,
     pub(super) file_attributes: u32,
-    relative_path: Option<String>,
+    pub(super) relative_path: Option<String>,
     target_is_network: bool,
 }
 
@@ -69,10 +69,14 @@ pub(super) fn parse_shell_link_summary(data: &[u8]) -> Option<ShellLinkSummary> 
     let mut offset = SHELL_LINK_HEADER_SIZE as usize;
 
     if flags & HAS_LINK_TARGET_ID_LIST != 0 {
-        let id_list_size = read_u16(data, offset).ok()? as usize;
-        offset = offset.checked_add(2)?.checked_add(id_list_size)?;
-        if offset > data.len() {
-            return None;
+        if let Some(next) = read_u16(data, offset).ok().and_then(|id_list_size| {
+            offset
+                .checked_add(2)
+                .and_then(|value| value.checked_add(id_list_size as usize))
+        }) {
+            if next <= data.len() {
+                offset = next;
+            }
         }
     }
 
@@ -275,25 +279,34 @@ fn read_utf16_z_string_in_link_info(
 }
 
 fn read_lnk_string(data: &[u8], offset: usize, flags: u32) -> (Option<String>, usize) {
-    if offset + 2 > data.len() {
-        return (None, data.len());
-    }
-    let chars =
-        u16::from_le_bytes(data[offset..offset + 2].try_into().expect("2-byte chunk")) as usize;
-    let string_start = offset + 2;
+    let Some(length_end) = offset.checked_add(2) else {
+        return (None, offset);
+    };
+    let Some(length_bytes) = data.get(offset..length_end) else {
+        return (None, offset);
+    };
+    let chars = u16::from_le_bytes(length_bytes.try_into().expect("2-byte chunk")) as usize;
+    let string_start = length_end;
     if flags & IS_UNICODE != 0 {
-        let string_end = string_start.saturating_add(chars.saturating_mul(2));
+        let Some(string_end) = chars
+            .checked_mul(2)
+            .and_then(|length| string_start.checked_add(length))
+        else {
+            return (None, string_start);
+        };
         if string_end > data.len() {
-            return (None, data.len());
+            return (None, string_start);
         }
         (
             Some(decode_utf16_lossy(&data[string_start..string_end])),
             string_end,
         )
     } else {
-        let string_end = string_start.saturating_add(chars);
+        let Some(string_end) = string_start.checked_add(chars) else {
+            return (None, string_start);
+        };
         if string_end > data.len() {
-            return (None, data.len());
+            return (None, string_start);
         }
         (
             Some(String::from_utf8_lossy(&data[string_start..string_end]).to_string()),
