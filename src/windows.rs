@@ -135,8 +135,11 @@ pub(crate) fn get_windows_recent_folder() -> WincentResult<String> {
     unsafe {
         let path = OsString::from_wide(result.as_wide());
         CoTaskMemFree(Some(result.as_ptr().cast()));
-        path.into_string()
-            .map_err(|_| WincentError::SystemError("Invalid UTF-16".to_string()))
+        path.into_string().map_err(|_| {
+            WincentError::SystemError(
+                "Recent folder path is not representable as UTF-8".to_string(),
+            )
+        })
     }
 }
 
