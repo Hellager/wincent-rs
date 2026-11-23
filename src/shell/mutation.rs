@@ -39,6 +39,39 @@ const UNPIN_FROM_HOME_VERB: &str = "unpinfromhome";
 /// SHARD_PATHW registers a wide-string path in the recent documents list.
 const SHARD_PATHW: u32 = 0x0000_0003;
 
+/// Invokes a Shell verb directly on a folder using the `Folder.Self` pattern.
+///
+/// This function invokes the verb through the Shell `Namespace(path).Self`
+/// pattern. It is more efficient than enumerating parent folder items to find
+/// the target.
+///
+/// # Threading Model
+///
+/// Runs on a dedicated STA thread to avoid the Windows 11 deadlock where
+/// `pintohome`/`unpinfromhome` verbs require cross-process calls to explorer.exe
+/// that need a message pump the calling thread does not have.
+///
+/// # Arguments
+///
+/// * `path` - The folder path to invoke the verb on
+/// * `verb` - The Shell verb to invoke (e.g., "pintohome", "unpinfromhome")
+///
+/// # Returns
+///
+/// `Ok(())` if the verb was successfully invoked, or an error if:
+/// - The folder namespace cannot be opened
+/// - The Folder3 interface cast fails
+/// - The verb invocation fails
+///
+/// # Windows 11 Compatibility
+///
+/// This function is specifically designed to work around Windows 11 deadlock issues
+/// by using a dedicated STA thread with a message pump.
+///
+/// # Safety
+///
+/// This function performs unsafe COM operations. The dedicated STA thread ensures
+/// proper COM initialization and message pump availability.
 fn invoke_verb_on_self_current_sta(path: &str, verb: &str) -> WincentResult<()> {
     let folder = shell_folder(path)?;
 
@@ -207,39 +240,21 @@ fn remove_frequent_folder_with_verb(
     )))
 }
 
-/// Invokes a Shell verb directly on a folder using Folder.Self pattern
+/// Checks whether a folder is already pinned and invokes `pintohome` when it is not.
 ///
-/// This function invokes the verb through the Shell `Namespace(path).Self`
-/// pattern. It is more efficient than enumerating parent folder items to find
-/// the target.
-///
-/// # Threading Model
-///
-/// Runs on a dedicated STA thread to avoid the Windows 11 deadlock where
-/// `pintohome`/`unpinfromhome` verbs require cross-process calls to explorer.exe
-/// that need a message pump the calling thread does not have.
+/// The callbacks are kept generic so this logic can be tested independently of
+/// the Shell COM implementation.
 ///
 /// # Arguments
 ///
-/// * `path` - The folder path to invoke the verb on
-/// * `verb` - The Shell verb to invoke (e.g., "pintohome", "unpinfromhome")
+/// * `path` - The folder path to check and pin
+/// * `contains` - Checks whether the folder is already in Frequent Folders
+/// * `invoke_on_self` - Invokes a Shell verb on the folder
 ///
 /// # Returns
 ///
-/// `Ok(())` if the verb was successfully invoked, or an error if:
-/// - The folder namespace cannot be opened
-/// - The Folder3 interface cast fails
-/// - The verb invocation fails
-///
-/// # Windows 11 Compatibility
-///
-/// This function is specifically designed to work around Windows 11 deadlock issues
-/// by using a dedicated STA thread with a message pump.
-///
-/// # Safety
-///
-/// This function performs unsafe COM operations. The dedicated STA thread ensures
-/// proper COM initialization and message pump availability.
+/// `Ok(())` if the folder was not already pinned and `pintohome` was invoked.
+/// Returns an error if the folder is already pinned or either callback fails.
 fn run_pin_frequent_folder_checked<C, I>(
     path: &str,
     mut contains: C,
