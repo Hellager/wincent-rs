@@ -6,7 +6,7 @@ use crate::{
     empty,
     error::WincentError,
     lock::{QuickAccessLock, QuickAccessLockTarget, UnlockReport},
-    path::{path_to_shell_string, paths_equal},
+    path::{path_to_shell_string, PathComparisonCache},
     status::QuickAccessStatus,
     QuickAccess, VisibilityTarget, WincentResult,
 };
@@ -318,7 +318,10 @@ impl QuickAccessManager {
     ) -> WincentResult<bool> {
         let path = path_to_shell_string(path.as_ref())?;
         let items = self.get_items(qa_type)?;
-        Ok(items.iter().any(|item| paths_equal(item, &path)))
+        let mut path_comparisons = PathComparisonCache::default();
+        Ok(items
+            .iter()
+            .any(|item| path_comparisons.paths_equal(item, &path)))
     }
 
     /// Returns a path's Quick Access status, primarily to check whether a

@@ -1,8 +1,9 @@
 //! Windows path validation and comparison helpers.
 
 use crate::{error::WincentError, WincentResult};
+use std::collections::HashMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Converts a path to the string representation used by Shell APIs.
 pub(crate) fn path_to_shell_string(path: &Path) -> WincentResult<String> {
@@ -21,14 +22,9 @@ pub(crate) fn normalize_path_lightweight(path: &str) -> String {
     result
 }
 
-/// Normalizes a Windows path for comparison, using canonicalization when available.
-pub(crate) fn normalize_path_for_comparison(path: &str) -> String {
-    normalize_path_for_comparison_with(path, |value| value.canonicalize())
-}
-
 fn normalize_path_for_comparison_with<F>(path: &str, canonicalize: F) -> String
 where
-    F: FnOnce(&Path) -> io::Result<std::path::PathBuf>,
+    F: Fn(&Path) -> io::Result<PathBuf>,
 {
     let normalized = canonicalize(Path::new(path)).map_or_else(
         |_| path.to_string(),
@@ -37,12 +33,46 @@ where
     normalize_path_lightweight(&normalized)
 }
 
+#[derive(Default)]
+pub(crate) struct PathComparisonCache {
+    normalized_paths: HashMap<String, String>,
+}
+
+impl PathComparisonCache {
+    /// Compares paths while reusing canonicalization results within a batch.
+    pub(crate) fn paths_equal(&mut self, left: &str, right: &str) -> bool {
+        self.paths_equal_with(left, right, |value| value.canonicalize())
+    }
+
+    fn paths_equal_with<F>(&mut self, left: &str, right: &str, canonicalize: F) -> bool
+    where
+        F: Fn(&Path) -> io::Result<PathBuf>,
+    {
+        let normalized_left = normalize_path_lightweight(left);
+        let normalized_right = normalize_path_lightweight(right);
+        if normalized_left == normalized_right {
+            return true;
+        }
+
+        let canonicalized_left = self.normalized_path_with(left, &canonicalize);
+        let canonicalized_right = self.normalized_path_with(right, &canonicalize);
+        canonicalized_left == canonicalized_right
+    }
+
+    fn normalized_path_with<F>(&mut self, path: &str, canonicalize: &F) -> String
+    where
+        F: Fn(&Path) -> io::Result<PathBuf>,
+    {
+        self.normalized_paths
+            .entry(path.to_owned())
+            .or_insert_with(|| normalize_path_for_comparison_with(path, canonicalize))
+            .clone()
+    }
+}
+
 /// Checks whether two Windows paths refer to the same location.
 pub(crate) fn paths_equal(left: &str, right: &str) -> bool {
-    let normalized_left = normalize_path_lightweight(left);
-    let normalized_right = normalize_path_lightweight(right);
-    normalized_left == normalized_right
-        || normalize_path_for_comparison(left) == normalize_path_for_comparison(right)
+    PathComparisonCache::default().paths_equal(left, right)
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -108,6 +138,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn detects_file_and_directory_paths_without_file_system_access() -> WincentResult<()> {
@@ -166,6 +197,29 @@ mod tests {
             Ok(std::path::PathBuf::from("C:\\fixture\\item.txt"))
         });
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn comparison_cache_reuses_failed_canonicalization() {
+        let mut cache = PathComparisonCache::default();
+        let canonicalize_calls = Cell::new(0);
+        let canonicalize = |_: &Path| {
+            canonicalize_calls.set(canonicalize_calls.get() + 1);
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        };
+
+        assert!(!cache.paths_equal_with(
+            "Z:/NonExistent/Path/one",
+            "z:\\nonexistent\\path\\two",
+            canonicalize,
+        ));
+        assert_eq!(canonicalize_calls.get(), 2);
+        assert!(!cache.paths_equal_with(
+            "Z:/NonExistent/Path/one",
+            "z:\\nonexistent\\path\\two",
+            canonicalize,
+        ));
+        assert_eq!(canonicalize_calls.get(), 2);
     }
 
     #[test]

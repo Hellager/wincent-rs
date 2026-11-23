@@ -34,7 +34,7 @@ use crate::destlist::FrequentFolderPinStatus;
 use crate::empty;
 use crate::error::WincentError;
 use crate::lock::{QuickAccessLock, UnlockReport};
-use crate::path::{path_to_shell_string, paths_equal, PathType};
+use crate::path::{path_to_shell_string, PathComparisonCache, PathType};
 use crate::shell::thread::validate_timeout;
 use crate::{QuickAccess, WincentResult};
 use std::fmt;
@@ -375,7 +375,10 @@ fn mutate(
     }
 
     let items = backend.get_items(category, timeout)?;
-    let present = items.iter().any(|item| paths_equal(item, &path));
+    let mut path_comparisons = PathComparisonCache::default();
+    let present = items
+        .iter()
+        .any(|item| path_comparisons.paths_equal(item, &path));
     if matches!(operation, Mutation::AddRecent) {
         if present {
             return Err(WincentError::already_exists(&path, category));

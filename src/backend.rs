@@ -4,7 +4,7 @@ use crate::{
         AutomaticDestinations, DEFAULT_RECENT_FILES_RESULT_LIMIT,
     },
     lock::{MutationPermit, QuickAccessLockTarget},
-    path::PathType,
+    path::{PathComparisonCache, PathType},
     shell::{
         clear,
         mutation::{
@@ -121,10 +121,11 @@ pub(crate) fn ui_visible_items(qa_type: QuickAccess) -> WincentResult<Vec<String
             let recent = ui_visible_items(QuickAccess::RecentFiles)?;
             let frequent = ui_visible_items(QuickAccess::FrequentFolders)?;
             let mut merged = recent;
+            let mut path_comparisons = PathComparisonCache::default();
             for path in frequent {
                 if !merged
                     .iter()
-                    .any(|existing| crate::path::paths_equal(existing, &path))
+                    .any(|existing| path_comparisons.paths_equal(existing, &path))
                 {
                     merged.push(path);
                 }

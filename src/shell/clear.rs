@@ -5,7 +5,7 @@ use crate::{
     destlist::{frequent_folders_dest_path, parse_file},
     error::WincentError,
     lock::MutationPermit,
-    path::paths_equal,
+    path::PathComparisonCache,
     recent_links, WincentResult,
 };
 use std::{io::ErrorKind, path::Path, time::Duration};
@@ -52,9 +52,14 @@ pub(crate) fn clear_frequent_folders_filesystem() -> WincentResult<()> {
 
 fn unique_paths<'path>(paths: impl IntoIterator<Item = &'path str>) -> Vec<String> {
     let mut unique: Vec<String> = Vec::new();
+    let mut path_comparisons = PathComparisonCache::default();
 
     for path in paths {
-        if path.is_empty() || unique.iter().any(|existing| paths_equal(existing, path)) {
+        if path.is_empty()
+            || unique
+                .iter()
+                .any(|existing| path_comparisons.paths_equal(existing, path))
+        {
             continue;
         }
         unique.push(path.to_owned());
