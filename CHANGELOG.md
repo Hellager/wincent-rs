@@ -1,10 +1,35 @@
-## Unreleased
+## [0.3.4-alpha.4] - 2026-11-24
 
 ### Changed
-- Reorganized internal Windows integration into focused Shell, path, platform,
-  and Shell Link modules without changing the public API.
-- Separated native clearing primitives from empty-operation orchestration so
-  backend dependencies remain one-directional.
+- Upgraded the crate to Rust 2024 edition while retaining the Rust 1.85 minimum.
+- Centralized mutation-permit acquisition in the backend and removed duplicated
+  Quick Access helpers.
+- Reorganized Windows integration into focused Shell, path, platform, and Shell
+  Link modules without changing the public API.
+- Refocused the CLI example on `QuickAccessManager` and removed the obsolete
+  standalone CFB corruption example.
+- Hardened VM test isolation: filesystem, registry, and interactive Shell
+  mutations now run in guarded VM suites, with identity and controlled-root
+  checks plus updated benchmark guidance.
+
+### Fixed
+- Resolved relative Shell Link targets against the link's containing directory
+  and recovered link data when optional fields are malformed.
+- Distinguished Shell STA worker saturation from operation timeouts, avoided
+  redundant Frequent Folder removal checks, and released workers during
+  verification.
+- Narrowed Explorer refresh location matching, skipped unreadable Recent links
+  during cleanup, and clarified UTF-8 conversion errors.
+- Preserved both underlying errors when clearing Recent Files and Frequent
+  Folders fails, and rejected `QuickAccess::All` when acquiring a single
+  mutation permit.
+- Removed a misleading timeout from synchronous filesystem cleanup.
+
+### Documentation
+- Updated VM acceptance and benchmark guides to reflect guarded execution and
+  current validation limits.
+
+## Unreleased
 
 ## [0.3.3-alpha.2] - 2026-11-11
 
