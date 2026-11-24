@@ -1,18 +1,10 @@
 use std::env;
 use std::io::{self, Write};
 use std::path::Path;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use wincent::error::{InvalidPathError, WincentError};
+use wincent::error::WincentError;
 use wincent::prelude::*;
-
-use wincent::destlist::{
-    entries as dest_entries, filetime_to_system_time, frequent_folders_dest_path,
-    parse_bytes as parse_dest_bytes, parse_file as parse_dest_file,
-    parse_file_with_kind as parse_dest_file_with_kind, recent_files_dest_path,
-    AutomaticDestinations, DestListKind,
-};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -80,14 +72,9 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         print_help();
         return Ok(());
     }
-    if args[0] == "clear" {
-        return cmd_clear();
-    }
-
     let manager = QuickAccessManager::builder().try_timeout(timeout)?.build();
 
     match args[0].as_str() {
-        "features" => cmd_features(),
         "list" => cmd_list(&manager, &args[1..]),
         "list-paths" => cmd_list_paths(&manager, &args[1..]),
         "contains-path" => cmd_contains_path(&manager, &args[1..]),
@@ -100,19 +87,11 @@ fn run(args: Vec<String>) -> WincentResult<()> {
         "refresh" => cmd_refresh(&manager, &args[1..]),
         "lock" => cmd_lock(&manager, &args[1..]),
         "empty" => cmd_empty(&manager, &args[1..]),
-        "invalid-path" => cmd_invalid_path(&args[1..]),
         "visible" => cmd_visible(&manager, &args[1..]),
-        "dest" => cmd_dest(&manager, &args[1..]),
-        "bench" => cmd_bench(&manager, &args[1..]),
         other => Err(WincentError::InvalidArgument(format!(
             "unknown command: {other}"
         ))),
     }
-}
-
-fn cmd_clear() -> WincentResult<()> {
-    print!("\x1B[2J\x1B[H");
-    io::stdout().flush().map_err(WincentError::Io)
 }
 
 fn parse_global_options(args: Vec<String>) -> WincentResult<(Duration, Vec<String>)> {
@@ -146,23 +125,20 @@ fn print_help() {
         r#"wincent example CLI
 
 Usage:
-  cargo run --example main
-  cargo run --example main -- [--timeout-ms N] <command> [args]
+  cargo run --example cli
+  cargo run --example cli -- [--timeout-ms N] <command> [args]
 
 Interactive:
   help
-  clear
   exit
   quit
 
-Core:
-  features
+QuickAccessManager:
   list <recent|frequent|all> [--paths]
   list-paths <recent|frequent|all>
   contains-path <recent|frequent|all> <path>
   status <path>
-    prints where the DestList rules place the path in a default Shell query:
-    recent position, frequent position and pin state, or none.
+    prints recent position, frequent position and pin state, or none.
   contains-keyword <recent|frequent|all> <keyword>
   find <recent|frequent|all> <keyword>
   add <path>
@@ -175,25 +151,10 @@ Core:
   lock [recent|frequent|all] [--cleanup-new-links]
     Locked targets block Explorer from adding or removing matching Quick Access items.
   empty <recent|frequent|all>
-Utility APIs:
-  invalid-path <reason> [path]
-
-Visibility APIs:
   visible get <recent|frequent|start|all>
   visible set <recent|frequent|start|all> <true|false>
   The start target controls recent files in Windows Recommended items.
   Successful writes do not guarantee the UI changes immediately.
-
-DestList APIs:
-  dest path <recent|frequent>
-  dest reveal <recent|frequent>
-  dest parse <recent|frequent|file> [path] [--limit N]
-  dest cfb <recent|frequent|file> [path] [recent|frequent]
-  dest rules <recent|frequent|file> [path] [recent|frequent]
-  dest parse-bytes <path> [--limit N]
-  dest manager <recent|frequent> [--limit N]
-  dest filetime <value>
-  bench <recent|frequent> [--limit N]
 "#
     );
 }
@@ -229,12 +190,6 @@ fn split_command_line(line: &str) -> WincentResult<Vec<String>> {
     }
 
     Ok(args)
-}
-
-fn cmd_features() -> WincentResult<()> {
-    println!("visible: built-in");
-    println!("destlist: built-in");
-    Ok(())
 }
 
 fn cmd_list(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
@@ -412,23 +367,6 @@ fn cmd_empty(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()>
     Ok(())
 }
 
-fn cmd_invalid_path(args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "invalid-path <reason> [path]")?;
-    let error = if let Some(path) = args.get(1) {
-        InvalidPathError::new(path, &args[0])
-    } else {
-        InvalidPathError::reason(&args[0])
-    };
-
-    println!("display: {error}");
-    println!("reason: {}", error.reason_text());
-    match error.path() {
-        Some(path) => println!("path: {}", path.display()),
-        None => println!("path: <none>"),
-    }
-    Ok(())
-}
-
 fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
     require_len(args, 1, "visible <command>")?;
     match args[0].as_str() {
@@ -450,225 +388,10 @@ fn cmd_visible(manager: &QuickAccessManager, args: &[String]) -> WincentResult<(
         other => {
             return Err(WincentError::InvalidArgument(format!(
                 "unknown visible command: {other}"
-            )))
+            )));
         }
     }
     Ok(())
-}
-
-fn cmd_dest(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "dest <command>")?;
-    match args[0].as_str() {
-        "path" => {
-            require_len(&args[1..], 1, "dest path <recent|frequent>")?;
-            println!("{}", dest_path(parse_dest_kind(&args[1])?)?.display());
-            Ok(())
-        }
-        "reveal" => {
-            require_len(&args[1..], 1, "dest reveal <recent|frequent>")?;
-            cmd_dest_reveal(parse_dest_kind(&args[1])?)
-        }
-        "parse" => cmd_dest_parse(&args[1..]),
-        "cfb" => cmd_dest_cfb(&args[1..]),
-        "rules" => cmd_dest_rules(&args[1..]),
-        "parse-bytes" => cmd_dest_parse_bytes(&args[1..]),
-        "manager" => cmd_dest_manager(manager, &args[1..]),
-        "filetime" => {
-            require_len(&args[1..], 1, "dest filetime <value>")?;
-            let value = parse_u64(&args[1], "filetime")?;
-            match filetime_to_system_time(value) {
-                Some(time) => println!("{time:?}"),
-                None => println!("<before unix epoch or out of range>"),
-            }
-            Ok(())
-        }
-        other => Err(WincentError::InvalidArgument(format!(
-            "unknown dest command: {other}"
-        ))),
-    }
-}
-
-fn cmd_dest_reveal(kind: DestKind) -> WincentResult<()> {
-    let path = dest_path(kind)?;
-    println!("revealing {}", path.display());
-    reveal_in_explorer(&path)
-}
-
-fn reveal_in_explorer(path: &Path) -> WincentResult<()> {
-    if !path.exists() {
-        return Err(WincentError::InvalidPath(InvalidPathError::new(
-            path,
-            "Path does not exist",
-        )));
-    }
-
-    let select = format!("/select,{}", path.display());
-    let mut child = std::process::Command::new("explorer.exe")
-        .arg(select)
-        .spawn()
-        .map_err(|error| {
-            WincentError::SystemError(format!("failed to launch explorer: {error}"))
-        })?;
-
-    // explorer.exe exits with status 1 even when /select succeeds, so exit
-    // status is unreliable; only a spawn failure counts as an error.
-    let _ = child.wait();
-    println!("opened Explorer at the dest path's folder with the file selected");
-    Ok(())
-}
-
-fn cmd_dest_parse(args: &[String]) -> WincentResult<()> {
-    require_len(
-        args,
-        1,
-        "dest parse <recent|frequent|file> [path] [--limit N]",
-    )?;
-    let (parsed, limit) = match args[0].as_str() {
-        "recent" => (
-            parse_dest_file(recent_files_dest_path()?)?,
-            parse_limit(&args[1..], 20)?,
-        ),
-        "frequent" => (
-            parse_dest_file(frequent_folders_dest_path()?)?,
-            parse_limit(&args[1..], 20)?,
-        ),
-        "file" => {
-            let path = args.get(1).ok_or_else(|| {
-                WincentError::InvalidArgument("dest parse file requires a path".to_string())
-            })?;
-            let trailing = if args.len() > 2 { &args[2..] } else { &[] };
-            (parse_dest_file(path)?, parse_limit(trailing, 20)?)
-        }
-        other => {
-            return Err(WincentError::InvalidArgument(format!(
-                "unknown parse target: {other}"
-            )))
-        }
-    };
-    print_dest(&parsed, limit);
-    Ok(())
-}
-
-fn cmd_dest_cfb(args: &[String]) -> WincentResult<()> {
-    let parsed = parse_dest_target(args, "cfb")?;
-    let entries = parsed.cfb_entries();
-    println!("cfb_entries: {}", entries.len());
-    for entry in entries {
-        println!("{}", entry.path());
-    }
-    Ok(())
-}
-
-fn cmd_dest_rules(args: &[String]) -> WincentResult<()> {
-    let parsed = parse_dest_target(args, "rules")?;
-    let entries = parsed.rule_entries();
-    println!("rule_entries: {}", entries.len());
-    for entry in entries {
-        println!("{}", entry.path());
-    }
-    Ok(())
-}
-
-fn parse_dest_target(args: &[String], command: &str) -> WincentResult<AutomaticDestinations> {
-    require_len(
-        args,
-        1,
-        &format!("dest {command} <recent|frequent|file> [path] [recent|frequent]"),
-    )?;
-    let parsed = match args[0].as_str() {
-        "recent" => parse_dest_file(recent_files_dest_path()?)?,
-        "frequent" => parse_dest_file(frequent_folders_dest_path()?)?,
-        "file" => {
-            let path = args.get(1).ok_or_else(|| {
-                WincentError::InvalidArgument(format!("dest {command} file requires a path"))
-            })?;
-            match args.get(2).map(String::as_str) {
-                Some("recent") => parse_dest_file_with_kind(path, DestListKind::RecentFiles)?,
-                Some("frequent") => parse_dest_file_with_kind(path, DestListKind::FrequentFolders)?,
-                Some(other) => {
-                    return Err(WincentError::InvalidArgument(format!(
-                        "unknown DestList kind for {command} file: {other}"
-                    )))
-                }
-                None => parse_dest_file(path)?,
-            }
-        }
-        other => {
-            return Err(WincentError::InvalidArgument(format!(
-                "unknown {command} target: {other}"
-            )))
-        }
-    };
-    Ok(parsed)
-}
-
-fn cmd_dest_parse_bytes(args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "dest parse-bytes <path> [--limit N]")?;
-    let limit = parse_limit(&args[1..], 20)?;
-    let data = std::fs::read(&args[0]).map_err(WincentError::Io)?;
-    let parsed = parse_dest_bytes(data)?;
-    print_dest(&parsed, limit);
-    Ok(())
-}
-
-fn cmd_dest_manager(_manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "dest manager <recent|frequent> [--limit N]")?;
-    let limit = parse_limit(&args[1..], 20)?;
-    let entries = match args[0].as_str() {
-        "recent" => read_metadata(QuickAccess::RecentFiles)?,
-        "frequent" => read_metadata(QuickAccess::FrequentFolders)?,
-        other => {
-            return Err(WincentError::InvalidArgument(format!(
-                "unknown metadata target: {other}"
-            )))
-        }
-    };
-    print_dest_entries(&entries, limit);
-    Ok(())
-}
-
-fn cmd_bench(manager: &QuickAccessManager, args: &[String]) -> WincentResult<()> {
-    require_len(args, 1, "bench <recent|frequent> [--limit N]")?;
-    let category = parse_category(&args[0], false)?;
-    let iterations = parse_limit(&args[1..], 100)?;
-    if iterations == 0 {
-        return Err(WincentError::InvalidArgument(
-            "bench limit must be greater than zero".to_string(),
-        ));
-    }
-
-    // Warm-up pass keeps one-time costs (COM init, file cache) out of the loop.
-    let _ = manager.get_items(category)?;
-    let _ = read_metadata(category)?;
-
-    let mut shell_ms = Vec::with_capacity(iterations);
-    let mut rules_ms = Vec::with_capacity(iterations);
-    for _ in 0..iterations {
-        let start = Instant::now();
-        let _ = manager.get_items(category)?;
-        shell_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-
-        let start = Instant::now();
-        let _ = read_metadata(category)?;
-        rules_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-    }
-
-    print_bench_result("native shell query", &shell_ms);
-    print_bench_result("cfb rule parsing", &rules_ms);
-    println!("iterations: {iterations}");
-    Ok(())
-}
-
-fn print_bench_result(label: &str, samples_ms: &[f64]) {
-    let mut sorted = samples_ms.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let median = sorted[sorted.len() / 2];
-    let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
-    println!(
-        "{label}: median {median:.3} ms, mean {mean:.3} ms, min {:.3} ms, max {:.3} ms",
-        sorted[0],
-        sorted[sorted.len() - 1]
-    );
 }
 
 fn parse_category(value: &str, allow_all: bool) -> WincentResult<QuickAccess> {
@@ -697,144 +420,12 @@ fn parse_visibility_target(value: &str) -> WincentResult<VisibilityTarget> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DestKind {
-    RecentFiles,
-    FrequentFolders,
-}
-
-fn parse_dest_kind(value: &str) -> WincentResult<DestKind> {
-    match value {
-        "recent" | "recent-files" | "files" => Ok(DestKind::RecentFiles),
-        "frequent" | "frequent-folders" | "folders" => Ok(DestKind::FrequentFolders),
-        other => Err(WincentError::InvalidArgument(format!(
-            "unknown AutomaticDestinations kind: {other}"
-        ))),
-    }
-}
-
-fn dest_path(kind: DestKind) -> WincentResult<PathBuf> {
-    match kind {
-        DestKind::RecentFiles => recent_files_dest_path(),
-        DestKind::FrequentFolders => frequent_folders_dest_path(),
-    }
-}
-
-fn read_metadata(qa_type: QuickAccess) -> WincentResult<Vec<wincent::destlist::DestListEntry>> {
-    let path = match qa_type {
-        QuickAccess::RecentFiles => recent_files_dest_path()?,
-        QuickAccess::FrequentFolders => frequent_folders_dest_path()?,
-        _ => {
-            return Err(WincentError::UnsupportedOperation(
-                "metadata requires Recent Files or Frequent Folders".to_string(),
-            ));
-        }
-    };
-    let parsed = parse_dest_file(path)?;
-    Ok(dest_entries(parsed.dest_list()))
-}
-
 fn category_name(qa_type: QuickAccess) -> &'static str {
     match qa_type {
         QuickAccess::RecentFiles => "Recent Files",
         QuickAccess::FrequentFolders => "Frequent Folders",
         QuickAccess::All => "All",
         _ => "Unknown",
-    }
-}
-
-fn print_dest(parsed: &AutomaticDestinations, limit: usize) {
-    let cfb = parsed.cfb_info();
-    let dest = parsed.dest_list();
-
-    println!("cfb.major_version: {}", cfb.major_version());
-    println!("cfb.sector_size: {}", cfb.sector_size());
-    println!("cfb.mini_sector_size: {}", cfb.mini_sector_size());
-    println!("cfb.mini_cutoff_size: {}", cfb.mini_cutoff_size());
-    println!("cfb.directory_entries: {}", cfb.directory_entries().len());
-    for entry in cfb.directory_entries().iter().take(limit) {
-        println!(
-            "cfb.entry name={} path={} type={} start_sector={:?} stream_size={}",
-            entry.name(),
-            entry.path().display(),
-            entry.object_type(),
-            entry.start_sector(),
-            entry.stream_size()
-        );
-    }
-    println!("cfb.streams: {}", cfb.streams().len());
-    for stream in cfb.streams().iter().take(limit) {
-        println!(
-            "cfb.stream name={} path={} size={}",
-            stream.name(),
-            stream.path().display(),
-            stream.len()
-        );
-    }
-
-    println!("dest.version: {}", dest.version());
-    println!("dest.declared_entry_count: {}", dest.declared_entry_count());
-    println!("dest.pinned_entry_count: {}", dest.pinned_entry_count());
-    println!("dest.header_counter_raw: {}", dest.header_counter_raw());
-    println!("dest.header_counter_f32: {}", dest.header_counter_f32());
-    println!("dest.last_entry_id: {}", dest.last_entry_id());
-    println!("dest.last_entry_number: {}", dest.last_entry_number());
-    println!(
-        "dest.add_delete_action_count: {}",
-        dest.add_delete_action_count()
-    );
-    println!("dest.header_reserved_1c: {}", dest.header_reserved_1c());
-    match parsed.dest_list_property_store() {
-        Some(stream) => println!(
-            "dest.property_store: size={} value={:?}",
-            stream.len(),
-            parsed.dest_list_property_store_value()
-        ),
-        None => println!("dest.property_store: <absent>"),
-    }
-    println!("dest.diagnostics: {}", dest.diagnostics().len());
-    print_dest_entries(&dest_entries(dest), limit);
-}
-
-fn print_dest_entries(entries: &[wincent::destlist::DestListEntry], limit: usize) {
-    println!("entries: {}", entries.len());
-    for entry in entries.iter().take(limit) {
-        println!(
-            concat!(
-                "entry offset={} len={} mru={} checksum={} id={} number={} number_unknown={} ",
-                "host={} stream={} pinned={} pin_status={} pin_order={:?} rank={} recent_rank={} ",
-                "count={} access_count={} score={} last_access={:?} ",
-                "last_interaction={:?} sps_size={:?} reserved_78={:?} reserved_7c={:?} ",
-                "droid={} mac={} warnings={} raw_path={} path={}"
-            ),
-            entry.entry_offset(),
-            entry.entry_len(),
-            entry.mru_position(),
-            entry.checksum(),
-            entry.entry_id(),
-            entry.entry_number(),
-            entry.entry_number_unknown(),
-            entry.hostname(),
-            entry.stream_name(),
-            entry.is_pinned(),
-            entry.pin_status(),
-            entry.pin_order(),
-            entry.rank(),
-            entry.recent_rank(),
-            entry.count(),
-            entry.access_count(),
-            entry.score(),
-            entry.last_access_filetime(),
-            entry.last_interaction_filetime(),
-            entry.sps_size(),
-            entry.reserved_78(),
-            entry.reserved_7c(),
-            entry.file_droid(),
-            entry.file_droid_mac(),
-            entry.warnings().len(),
-            entry.raw_path(),
-            entry.path()
-        );
     }
 }
 
@@ -874,29 +465,6 @@ fn print_error(error: &WincentError) {
     }
 }
 
-fn parse_limit(args: &[String], default: usize) -> WincentResult<usize> {
-    let mut limit = default;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--limit" => {
-                index += 1;
-                let value = required_arg(args.get(index), "limit")?;
-                limit = value
-                    .parse::<usize>()
-                    .map_err(|_| WincentError::InvalidArgument("invalid limit".to_string()))?;
-            }
-            other => {
-                return Err(WincentError::InvalidArgument(format!(
-                    "unknown limit option: {other}"
-                )))
-            }
-        }
-        index += 1;
-    }
-    Ok(limit)
-}
-
 fn parse_bool(value: &str) -> WincentResult<bool> {
     match value {
         "true" | "1" | "yes" | "on" | "show" => Ok(true),
@@ -911,12 +479,6 @@ fn parse_u64(value: &str, name: &str) -> WincentResult<u64> {
     value
         .parse::<u64>()
         .map_err(|_| WincentError::InvalidArgument(format!("invalid {name}")))
-}
-
-fn required_arg<'a>(value: Option<&'a String>, name: &str) -> WincentResult<&'a str> {
-    value
-        .map(String::as_str)
-        .ok_or_else(|| WincentError::InvalidArgument(format!("{name} requires a value")))
 }
 
 fn require_len(args: &[String], min: usize, usage: &str) -> WincentResult<()> {
@@ -974,22 +536,6 @@ mod tests {
         assert!(
             matches!(error, WincentError::InvalidArgument(message) if message == "unterminated quote: \"")
         );
-    }
-
-    #[test]
-    fn parse_limit_rejects_unknown_options() {
-        let error = parse_limit(&["--limti".to_string(), "3".to_string()], 20).unwrap_err();
-
-        assert!(
-            matches!(error, WincentError::InvalidArgument(message) if message == "unknown limit option: --limti")
-        );
-    }
-
-    #[test]
-    fn parse_limit_accepts_limit_after_file_path_is_removed_by_caller() {
-        let limit = parse_limit(&["--limit".to_string(), "3".to_string()], 20).unwrap();
-
-        assert_eq!(limit, 3);
     }
 
     #[test]
